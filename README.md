@@ -1,1 +1,1 @@
-# MUCA-Server
+# Multi-User Conversational Agent Server
