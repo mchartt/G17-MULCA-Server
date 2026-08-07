@@ -1,130 +1,154 @@
-import asyncio
-import base64
+from __future__ import annotations
+
 import json
-import time
+import asyncio
+from contextlib import suppress
+from uuid import UUID
 
-from fastapi import WebSocket # type: ignore
-from dataclasses import dataclass
+from fastapi import WebSocket, WebSocketDisconnect
 
-AUDIO_SAMPLE_RATE = 24000
-AUDIO_CHANNELS = 1
-QUEUE_MAX_SIZE = 128
+from events import EventDispatcher, DispatchResult
+from protocol import (
+    parse_incoming_message,
+    OutgoingProtocolMessage,
+    serialize_outgoing_message,
+)
+from sessions import SessionState
 
-@dataclass(frozen=True, slots=True)
-class AudioFrame:
-    pcm: bytes
-    speaker: int
-    received_at: float
-    is_notifying: bool
-    playback_time_ms: int
-    source: str
-
-@dataclass(frozen=True, slots=True)
-class TextMessage:
-    role: str
-    text: str
-    target_agent: str
-
-@dataclass(frozen=True, slots=True)
-class ManageAgentsMessage:
-    agentType: str
+CLIENT_AUTHENTICATION_TIMEOUT = 5
 
 class SessionRuntime:
-    def __init__(self, ws: WebSocket):
-        self.websocket = ws
+    def __init__(
+        self,
+        *,
+        session_id: UUID,
+        websocket: WebSocket,
+        state: SessionState,
+        dispatcher: EventDispatcher,
+        outbound_queue: asyncio.Queue[
+            OutgoingProtocolMessage
+        ],
+        workers: list, #List of coroutines, each one exposes a start and close method
+    ) -> None:
+        self.session_id = session_id
+        self.websocket = websocket
+        self.state = state
+        self.dispatcher = dispatcher
+        self.outbound_queue = outbound_queue
+        self.workers = workers
 
-        self.main_agent_queue: asyncio.Queue[AudioFrame] = asyncio.Queue(maxsize=QUEUE_MAX_SIZE) # audio queue for main agent
-        self.auxiliary_agent_queue: asyncio.Queue[AudioFrame] = None # audio queue for auxiliary agent
-        self.outbound_queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=QUEUE_MAX_SIZE) # queue for outgoing messages
+        self._tasks: list[asyncio.Task[None]] = []
+        self._closed = False
 
-        self.tasks: list[asyncio.Task] = []
-
-    async def start(self):
-        self.tasks = [
-            asyncio.create_task(self.main_agent_worker()), 
-            asyncio.create_task(self.outbound_worker()),
-        ]
-
-    async def close(self):
-        for task in self.tasks:
-            task.cancel()
-
-        await asyncio.gather(*self.tasks, return_exceptions=True)
-
-    async def handle_message(self, message: dict):
-        event = message.get("event")
-
-        # TODO: ordina gli eventi in ordine di "più probabile"
-        if event == "audio_stream":
-            await self.handle_user_audio(message)
-
-        elif event == "playback_frame":
-            await self.handle_playback_audio(message)
-
-        elif event == "text_message":
-            pass
-
-        elif event == "trigger_response":
-            pass
-
-        elif event == "interrupt_response":
-            pass
-
-        elif event == "create_auxiliary_agent":
-            pass
-
-        elif event == "remove_auxiliary_agent":
-            pass
-
-        elif event == "connect_main_assistant":
-            pass
-
-        elif event == "disconnect":
-            pass
-
-        else:
-            pass
-
-    async def handle_user_audio(self, message: dict):
-        pcm = base64.b64decode(message["audio"], validate=True)
-
-        frame = AudioFrame(
-            pcm=pcm,
-            speaker=message.get("speaker", -1),
-            received_at=time.monotonic(),
-            is_notifying=message.get("isNotifying", False),
-            playback_time_ms=message.get("playbackTimeMs", 0),
-            source="user",
-        )
-
-        await self.main_agent_queue.put(frame)
-
-    async def handle_playback_audio(self, message: dict):
-        pcm = base64.b64decode(message["audio"], validate=True)
-
-        frame = AudioFrame(
-            pcm=pcm,
-            speaker=message.get("speaker", -1),
-            received_at=time.monotonic(),
-            is_notifying=message.get("isNotifying", False),
-            playback_time_ms=message.get("playbackTimeMs", 0),
-            source="assistant_playback",
-        )
-
-        if self.auxiliary_agent_queue is not None:
-            self.auxiliary_agent_queue.put(frame)
+    async def run(self) -> None:
+        try:
+            await self.websocket.accept()
         
-    async def main_agent_worker(self):
-        pass
+            # Client should identify in 5 seconds
+            raw_message = await asyncio.wait_for(
+                self.websocket.receive_text(),
+                timeout=CLIENT_AUTHENTICATION_TIMEOUT,
+            )
+        
+            message = json.loads(raw_message)
+            
+            print(message)
+        
+            if (message.get("event") != "connect_main_assistant"): #TODO: nel client va sostituito con connect_main_agent
+                print("Identification failed: Closing websocket")
+                await self.websocket.close(
+                    code = 1008,
+                    reason="Bad request"
+                )
+                return
+            else:
+                await self.start()
+                await self.receive_loop()
+            
+        except asyncio.TimeoutError:
+            await self.websocket.close(
+                code=1008,
+                reason="Cannot establish connection"
+            )
+        except WebSocketDisconnect:
+            print("Client disconnected")
+            self.state.is_connected = False
+        finally:
+            await self.close()
 
-    async def auxiliary_agent_worker(self):
-        pass
+    async def start(self) -> None:
+        self.state.is_connected = True
 
-    async def websocket_writer(self):
-        while True:
+        for worker in self.workers:
+            await worker.start()
+
+        await self.dispatcher.start()
+
+        self._tasks.append(
+            asyncio.create_task(
+                self.send_loop(),
+                name=f"session-{self.session_id}-send-loop",
+            )
+        )
+
+    async def receive_loop(self) -> None:
+        while not self._closed:
+            raw_message = await self.websocket.receive_text()
+
+            try:
+                message = parse_incoming_message(raw_message)
+                print(message)
+            except Exception as exc:
+                await self.handle_protocol_error(exc)
+                continue
+
+            result = await self.dispatcher.dispatch(message)
+            if result == DispatchResult.CLOSE_SESSION:
+                break
+
+    async def send_loop(self) -> None:
+        while not self._closed:
             message = await self.outbound_queue.get()
 
             try:
-                await self.websocket.send_json(message)
+                payload = serialize_outgoing_message(
+                    message
+                )
+
+                await self.websocket.send_text(payload)
             finally:
                 self.outbound_queue.task_done()
+
+    async def handle_protocol_error(
+        self,
+        error: Exception,
+    ) -> None:
+        print(
+            f"Protocol error in session "
+            f"{self.session_id}: {type(error).__name__}\n"
+            f"{error}"
+        )
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+
+        self._closed = True
+        self.state.is_connected = False
+
+        for worker in reversed(self.workers):
+            with suppress(Exception):
+                await worker.close()
+
+        for task in self._tasks:
+            task.cancel()
+
+        await asyncio.gather(
+            *self._tasks,
+            return_exceptions=True,
+        )
+
+        self._tasks.clear()
+
+        with suppress(RuntimeError):
+            await self.websocket.close()

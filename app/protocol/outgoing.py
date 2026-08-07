@@ -9,24 +9,21 @@ class OutgoingMessage(BaseModel):
         extra="forbid",
     )
 
-    event: str
-
     def to_json(self) -> str:
         return self.model_dump_json(by_alias=True)
 
 
 class StateUpdateMessage(OutgoingMessage):
     event: Literal["state_update"] = "state_update"
-
-    is_connected: bool = Field(alias="isConnected")
-    current_speaker: int = Field(alias="currentSpeaker")
-    last_speaker: int = Field(alias="lastSpeaker")
-    is_answering: bool = Field(alias="isAnswering")
+    is_connected: bool = Field(serialization_alias="isConnected")
+    current_speaker: int = Field(serialization_alias="currentSpeaker")
+    last_speaker: int = Field(serialization_alias="lastSpeaker")
+    is_answering: bool = Field(serialization_alias="isAnswering")
     assistant_spoke_last: bool = Field(
-        alias="assistantSpokeLast"
+        serialization_alias="assistantSpokeLast"
     )
     clear_audio_queue: bool = Field(
-        alias="clearAudioQueue"
+        serialization_alias="clearAudioQueue"
     )
     audio: str = ""
 
@@ -85,13 +82,13 @@ class StateUpdateMessage(OutgoingMessage):
 class AgentMessage(OutgoingMessage):
     event: Literal["agent_message"] = "agent_message"
 
-    agent_guid: str = Field(alias="agentGuid")
+    agent_guid: str = Field(serialization_alias="agentGuid")
     message: str
     
 class AgentGuidMessage(OutgoingMessage):
     event: Literal["agent_guid"] = "agent_guid"
 
-    agent_guid: str = Field(alias="agentGuid")
+    agent_guid: str = Field(serialization_alias="agentGuid")
     
 
 OutgoingProtocolMessage = (

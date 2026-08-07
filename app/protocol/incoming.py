@@ -3,9 +3,10 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 
 class IncomingMessage(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    event: str
+    model_config = ConfigDict(
+        extra="ignore",
+        populate_by_name=True,
+    )
 
 
 class AudioStreamMessage(IncomingMessage):
@@ -64,11 +65,6 @@ class RemoveAuxiliaryAgentMessage(IncomingMessage):
     agent_guid: str = Field(alias="agentGuid")
 
 
-class CampaignSetupMessage(IncomingMessage):
-    event: Literal["campaign_setup"]
-    payload: dict[str, Any]
-
-
 IncomingProtocolMessage = Annotated[
     AudioStreamMessage
     | PlaybackFrameMessage
@@ -78,8 +74,7 @@ IncomingProtocolMessage = Annotated[
     | ConnectMainAssistantMessage
     | DisconnectMessage
     | CreateAuxiliaryAgentMessage
-    | RemoveAuxiliaryAgentMessage
-    | CampaignSetupMessage,
+    | RemoveAuxiliaryAgentMessage,
     Field(discriminator="event"),
 ]
 
