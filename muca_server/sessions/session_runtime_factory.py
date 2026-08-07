@@ -5,9 +5,10 @@ from uuid import uuid4
 
 from fastapi import WebSocket
 
-from audio import AudioRouter
-from events import EventDispatcher
-from sessions import SessionRuntime, SessionState
+from ..audio import AudioRouter
+from ..events import EventDispatcher
+from .session_runtime import SessionRuntime
+from .session_state import SessionState
 
 
 class SessionRuntimeFactory:

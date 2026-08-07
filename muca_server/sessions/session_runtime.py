@@ -7,13 +7,13 @@ from uuid import UUID
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from events import EventDispatcher, DispatchResult
-from protocol import (
+from ..events import EventDispatcher, DispatchResult
+from ..protocol import (
     parse_incoming_message,
     OutgoingProtocolMessage,
     serialize_outgoing_message,
 )
-from sessions import SessionState
+from .session_state import SessionState
 
 CLIENT_AUTHENTICATION_TIMEOUT = 5
 

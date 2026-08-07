@@ -1,7 +1,7 @@
 # Multi-User Conversational Agent Server
 
 ```text
-app/
+muca_server/
 ├───audio/
 │   └───router.py
 ├───events/

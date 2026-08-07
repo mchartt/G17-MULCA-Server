@@ -1,4 +1,4 @@
-from protocol import AudioStreamMessage, PlaybackFrameMessage
+from ..protocol import AudioStreamMessage, PlaybackFrameMessage
 
 
 class AudioRouter:

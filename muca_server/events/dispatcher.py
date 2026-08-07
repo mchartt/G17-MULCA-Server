@@ -4,7 +4,7 @@ import logging
 from typing import Protocol
 from enum import StrEnum
 
-from protocol import (
+from ..protocol import (
     AudioStreamMessage,
     ConnectMainAssistantMessage,
     CreateAuxiliaryAgentMessage,
