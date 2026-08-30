@@ -38,6 +38,19 @@ class AudioRouterProtocol(Protocol):
     ) -> None:
         """Forwards the already played audio to main and (if present) auxiliary agent"""
         ...
+        
+class TextRouterProtocol(Protocol):
+    """
+    Interface which defines methods to forward text messages to specialized components.
+    """
+    
+    async def route(
+        self,
+        text_message: TextMessage,
+    ) -> None:
+        """Forward text message to main and/or (if present) auxiliary agent."""
+        ...
+    
 
 class DispatchResult(StrEnum):
     CONTINUE = "continue"
@@ -58,9 +71,11 @@ class EventDispatcher:
     def __init__(
         self,
         *,
-        audio_router: AudioRouterProtocol
+        audio_router: AudioRouterProtocol,
+        text_router: TextRouterProtocol,
     ) -> None:
         self.audio_router = audio_router
+        self.text_router = text_router
         self._started = False
         self._closed = False
 
@@ -150,7 +165,7 @@ class EventDispatcher:
         self,
         message: AudioStreamMessage,
     ) -> None:
-        pass
+        await self.audio_router.publish_user_audio(message)
 
     async def _handle_playback_frame(
         self,
@@ -162,7 +177,7 @@ class EventDispatcher:
         self,
         message: TextMessage,
     ) -> None:
-        pass
+        await self.text_router.route(message)
 
     async def _handle_trigger_response(
         self,

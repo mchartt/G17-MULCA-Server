@@ -25,4 +25,5 @@ packages = [
     "muca_server.events",
     "muca_server.protocol",
     "muca_server.sessions",
+    "muca_server.text",
 ]
