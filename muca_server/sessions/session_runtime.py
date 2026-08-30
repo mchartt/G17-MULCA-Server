@@ -51,8 +51,6 @@ class SessionRuntime:
             )
         
             message = json.loads(raw_message)
-            
-            print(message)
         
             if (message.get("event") != "connect_main_assistant"): #TODO: nel client va sostituito con connect_main_agent
                 print("Identification failed: Closing websocket")
@@ -97,7 +95,6 @@ class SessionRuntime:
 
             try:
                 message = parse_incoming_message(raw_message)
-                print(message)
             except Exception as exc:
                 await self.handle_protocol_error(exc)
                 continue

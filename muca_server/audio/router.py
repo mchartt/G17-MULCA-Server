@@ -11,6 +11,8 @@ class AudioRouter:
     siano peculiari per ogni sessione.
     Inoltre, questa classe eredita direttamente da AudioRouterProtocol (in app/events/dispatcher.py).
     """
+    async def start(self) -> None:
+        pass
     
     async def publish_user_audio(
         self,
@@ -24,4 +26,7 @@ class AudioRouter:
         message: PlaybackFrameMessage,
     ) -> None:
         """Forwards the already played audio to main and (if present) auxiliary agent"""
+        pass
+    
+    async def close(self) -> None:
         pass

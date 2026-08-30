@@ -58,7 +58,7 @@ class EventDispatcher:
     def __init__(
         self,
         *,
-        audio_router
+        audio_router: AudioRouterProtocol
     ) -> None:
         self.audio_router = audio_router
         self._started = False

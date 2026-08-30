@@ -9,9 +9,19 @@ from ..audio import AudioRouter
 from ..events import EventDispatcher
 from .session_runtime import SessionRuntime
 from .session_state import SessionState
-
+from .session_components import SessionContext
+from .session_components_factory import DefaultSessionComponentsFactory
 
 class SessionRuntimeFactory:
+    
+    def __init__(
+        self,
+        components_factory=None
+    ) -> None:
+        self.components_factory = (
+            components_factory
+            or DefaultSessionComponentsFactory()
+        )
     
     async def create(
         self,
@@ -23,19 +33,24 @@ class SessionRuntimeFactory:
             session_id=session_id,
         )
 
-        audio_router = AudioRouter()
-
         outbound_queue = asyncio.Queue(maxsize=128)
 
-        dispatcher = EventDispatcher(
-            audio_router=audio_router
+        context = SessionContext(
+            session_id=session_id,
+            websocket=websocket,
+            state=state,
+            outbound_queue=outbound_queue,
+        )
+        
+        components = await self.components_factory.create(
+            context=context
         )
 
         return SessionRuntime(
             session_id=session_id,
             websocket=websocket,
             state=state,
-            dispatcher=dispatcher,
+            dispatcher=components.dispatcher,
             outbound_queue=outbound_queue,
-            workers=[], #TODO: definire worker dei vari componenti (es. Main agent)
+            workers=components.workers,
         )

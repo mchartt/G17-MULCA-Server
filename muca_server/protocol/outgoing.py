@@ -83,7 +83,7 @@ class AgentMessage(OutgoingMessage):
     event: Literal["agent_message"] = "agent_message"
 
     agent_guid: str = Field(serialization_alias="agentGuid")
-    message: str
+    text: str
     
 class AgentGuidMessage(OutgoingMessage):
     event: Literal["agent_guid"] = "agent_guid"
