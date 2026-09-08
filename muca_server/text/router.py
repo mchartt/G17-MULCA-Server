@@ -2,7 +2,7 @@ import json
 from typing import Any
 from uuid import uuid4
 
-from ..sessions import SessionState
+from ..sessions.session_state import SessionState
 from ..protocol import TextMessage
 
 class TextRouter:
