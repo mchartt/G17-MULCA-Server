@@ -1,4 +1,4 @@
-from router import TextRouter
+from .router import TextRouter
 
 __all__ = [
     "TextRouter"
