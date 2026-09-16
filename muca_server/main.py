@@ -1,18 +1,35 @@
 from fastapi import FastAPI, WebSocket
 
-from .sessions import SessionRuntimeFactory
+from .sessions import SessionComponentsFactory, SessionRuntimeFactory
 
-app = FastAPI()
 
-CLIENT_AUTHENTICATION_TIMEOUT = 5
+def create_app(
+    components_factory: SessionComponentsFactory | None = None,
+) -> FastAPI:
+    """
+    Build the server.
 
-@app.get("/")
-async def root():
-    #TODO: HTML landing page?
-    return {"status": "server running"}
+    Passing a components factory is how a deployment chooses its agents and
+    cognition, and how a test runs the real server against agents that reach
+    no provider.
+    """
 
-@app.websocket("/")
-async def websocket_endpoint(ws: WebSocket) -> None:
-    runtime = await SessionRuntimeFactory().create(websocket=ws)
-    
-    await runtime.run()
+    app = FastAPI()
+    runtime_factory = SessionRuntimeFactory(
+        components_factory=components_factory,
+    )
+
+    @app.get("/")
+    async def root():
+        return {"status": "server running"}
+
+    @app.websocket("/")
+    async def websocket_endpoint(ws: WebSocket) -> None:
+        runtime = await runtime_factory.create(websocket=ws)
+
+        await runtime.run()
+
+    return app
+
+
+app = create_app()

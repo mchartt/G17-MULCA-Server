@@ -1,69 +1,71 @@
+from collections.abc import Callable
+
 from .session_components import SessionComponents, SessionContext, SessionWorker
-from ..audio import AudioRouter
-from ..events import EventDispatcher
-from ..text import TextRouter
+from ..agents import AgentFactory, Conversation, MainAgentOptions
+from ..cognition import CognitionPolicy
+
+PolicyFactory = Callable[[SessionContext], CognitionPolicy]
+
 
 class DefaultSessionComponentsFactory:
+    """
+    Builds one session's components.
+
+    Everything a deployment chooses — which agents, which cognition, how the
+    main agent is configured — arrives here, so nothing below has to know.
+    """
+
+    def __init__(
+        self,
+        *,
+        agent_factory: AgentFactory | None = None,
+        policy_factory: PolicyFactory | None = None,
+        main_agent_options: MainAgentOptions | None = None,
+    ) -> None:
+        self.agent_factory = agent_factory
+        self.policy_factory = policy_factory
+        self.main_agent_options = (
+            main_agent_options or MainAgentOptions()
+        )
+
     async def create(
         self,
         context: SessionContext,
     ) -> SessionComponents:
-        audio_router = await self.create_audio_router(
-            context,
-        )
-        
-        text_router = await self.create_text_router(
-            context,
-        )
+        conversation = await self.create_conversation(context)
 
-        dispatcher = await self.create_dispatcher(
-            context=context,
-            audio_router=audio_router,
-            text_router=text_router,
-        )
-        
         workers = await self.create_workers(
             context=context,
-            audio_router=audio_router,
-            dispatcher=dispatcher,
-        )
-        
-        return SessionComponents(
-            dispatcher=dispatcher,
-            workers=workers,
-        )
-        
-    async def create_audio_router(
-        self,
-        context: SessionContext,
-    ) -> AudioRouter:
-        return AudioRouter()
-    
-    async def create_text_router(
-        self,
-        context: SessionContext,
-    ) -> TextRouter:
-        return TextRouter(
-            session_state=context.state,
+            conversation=conversation,
         )
 
-    async def create_dispatcher(
-        self,
-        *,
-        context: SessionContext,
-        audio_router: AudioRouter,
-        text_router: TextRouter,
-    ) -> EventDispatcher:
-        return EventDispatcher(
-            audio_router=audio_router,
-            text_router=text_router,
+        return SessionComponents(
+            agent_router=conversation,
+            workers=workers,
         )
-        
+
+    async def create_conversation(
+        self,
+        context: SessionContext,
+    ) -> Conversation:
+        policy = (
+            self.policy_factory(context)
+            if self.policy_factory is not None
+            else None
+        )
+
+        return Conversation(
+            state=context.state,
+            outbound_queue=context.outbound_queue,
+            main_agent_options=self.main_agent_options,
+            agent_factory=self.agent_factory,
+            policy=policy,
+        )
+
     async def create_workers(
         self,
         *,
         context: SessionContext,
-        audio_router: AudioRouter,
-        dispatcher: EventDispatcher,
+        conversation: Conversation,
     ) -> list[SessionWorker]:
-        return []
+        return [conversation]

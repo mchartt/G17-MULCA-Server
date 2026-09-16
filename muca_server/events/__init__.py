@@ -1,13 +1,11 @@
 from .dispatcher import (
-    AudioRouterProtocol,
-    TextRouterProtocol,
+    AgentRouterProtocol,
     DispatchResult,
-    EventDispatcher,
+    dispatch,
 )
 
 __all__ = [
-    "AudioRouterProtocol",
-    "TextRouterProtocol",
+    "AgentRouterProtocol",
     "DispatchResult",
-    "EventDispatcher",
+    "dispatch",
 ]

@@ -9,6 +9,19 @@ class IncomingMessage(BaseModel):
     )
 
 
+class TargetedMessage(IncomingMessage):
+    """
+    Base for messages addressed to one agent.
+
+    An empty or missing targetAgentGuid means the main agent.
+    """
+
+    target_agent_guid: str | None = Field(
+        default=None,
+        alias="targetAgentGuid",
+    )
+
+
 class AudioStreamMessage(IncomingMessage):
     event: Literal["audio_stream"]
     speaker: int
@@ -22,61 +35,110 @@ class PlaybackFrameMessage(IncomingMessage):
     audio: str
 
 
-class TextMessage(IncomingMessage):
+class TextMessage(TargetedMessage):
+    """Inject text into one agent's context. Not a user utterance."""
+
     event: Literal["text_message"]
     text: str
-    target_agent_guid: str | None = Field(
-        default=None,
-        alias="targetAgentGuid",
+    role: str = "system"
+
+
+class UserTextMessage(IncomingMessage):
+    """
+    One user's utterance, in text.
+
+    The text-modality sibling of AudioStreamMessage: it carries who spoke,
+    so it drives turn taking the same way audio does.
+    """
+
+    event: Literal["user_text"]
+    speaker: int
+    speaker_name: str = Field(default="", alias="speakerName")
+    text: str
+
+
+class Participant(BaseModel):
+    model_config = ConfigDict(
+        extra="ignore",
+        populate_by_name=True,
+    )
+
+    id: int
+    name: str
+
+
+class ParticipantsMessage(IncomingMessage):
+    """
+    Who is present, including anyone who has not spoken yet.
+
+    Pushed by the client rather than asked for, so the server never has to
+    make a request back down the socket mid-turn.
+    """
+
+    event: Literal["participants"]
+    participants: list[Participant] = Field(
+        default_factory=list,
     )
 
 
-class TriggerResponseMessage(IncomingMessage):
+class TriggerResponseMessage(TargetedMessage):
     event: Literal["trigger_response"]
-    target_agent_guid: str | None = Field(
+    max_tokens: int | None = Field(
         default=None,
-        alias="targetAgentGuid",
+        alias="maxTokens",
+    )
+    interrupt: bool = True
+    instructions: str = ""
+
+
+class InterruptMessage(TargetedMessage):
+    event: Literal["interrupt", "interrupt_response"]
+
+
+class ConnectAgentMessage(TargetedMessage):
+    event: Literal["connect_main_assistant", "connect"]
+
+    # Which conversation this session continues, for memory that outlives it.
+    conversation_id: str | None = Field(
+        default=None,
+        alias="conversationId",
     )
 
-
-class InterruptMessage(IncomingMessage):
-    event: Literal["interrupt"]
-    target_agent_guid: str | None = Field(
-        default=None,
-        alias="targetAgentGuid",
-    )
+    # A private conversation is never written to long-term memory.
+    is_dm: bool = Field(default=False, alias="isDm")
 
 
-class ConnectMainAssistantMessage(IncomingMessage):
-    event: Literal["connect_main_assistant"]
-
-
-class DisconnectMessage(IncomingMessage):
+class DisconnectMessage(TargetedMessage):
     event: Literal["disconnect"]
 
 
 class CreateAuxiliaryAgentMessage(IncomingMessage):
     event: Literal["create_auxiliary_agent"]
-    configuration: dict[str, Any] = Field(default_factory=dict)
+    auxiliary_agent_type: str = Field(alias="auxiliaryAgentType")
 
 
-class RemoveAuxiliaryAgentMessage(IncomingMessage):
+class RemoveAuxiliaryAgentMessage(TargetedMessage):
     event: Literal["remove_auxiliary_agent"]
-    agent_guid: str = Field(alias="agentGuid")
 
 
 IncomingProtocolMessage = Annotated[
     AudioStreamMessage
     | PlaybackFrameMessage
     | TextMessage
+    | UserTextMessage
+    | ParticipantsMessage
     | TriggerResponseMessage
     | InterruptMessage
-    | ConnectMainAssistantMessage
+    | ConnectAgentMessage
     | DisconnectMessage
     | CreateAuxiliaryAgentMessage
     | RemoveAuxiliaryAgentMessage,
     Field(discriminator="event"),
 ]
+
+CONNECT_EVENTS = frozenset(
+    {"connect_main_assistant", "connect"}
+)
 
 incoming_message_adapter = TypeAdapter(IncomingProtocolMessage)
 

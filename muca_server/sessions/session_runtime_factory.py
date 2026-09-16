@@ -1,22 +1,18 @@
-# app/sessions/factory.py
-
 import asyncio
 from uuid import uuid4
 
 from fastapi import WebSocket
 
-from ..audio import AudioRouter
-from ..events import EventDispatcher
 from .session_runtime import SessionRuntime
 from .session_state import SessionState
-from .session_components import SessionContext
+from .session_components import SessionComponentsFactory, SessionContext
 from .session_components_factory import DefaultSessionComponentsFactory
 
 class SessionRuntimeFactory:
-    
+
     def __init__(
         self,
-        components_factory=None
+        components_factory: SessionComponentsFactory | None = None,
     ) -> None:
         self.components_factory = (
             components_factory
@@ -50,7 +46,7 @@ class SessionRuntimeFactory:
             session_id=session_id,
             websocket=websocket,
             state=state,
-            dispatcher=components.dispatcher,
+            agent_router=components.agent_router,
             outbound_queue=outbound_queue,
             workers=components.workers,
         )

@@ -2,18 +2,23 @@ from __future__ import annotations
 
 import json
 import asyncio
+import logging
 from contextlib import suppress
 from uuid import UUID
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from ..events import EventDispatcher, DispatchResult
+from ..events import AgentRouterProtocol, DispatchResult, dispatch
 from ..protocol import (
+    CONNECT_EVENTS,
     parse_incoming_message,
     OutgoingProtocolMessage,
     serialize_outgoing_message,
 )
+from .session_components import SessionWorker
 from .session_state import SessionState
+
+logger = logging.getLogger(__name__)
 
 CLIENT_AUTHENTICATION_TIMEOUT = 5
 
@@ -24,16 +29,16 @@ class SessionRuntime:
         session_id: UUID,
         websocket: WebSocket,
         state: SessionState,
-        dispatcher: EventDispatcher,
+        agent_router: AgentRouterProtocol,
         outbound_queue: asyncio.Queue[
             OutgoingProtocolMessage
         ],
-        workers: list, #List of coroutines, each one exposes a start and close method
+        workers: list[SessionWorker],
     ) -> None:
         self.session_id = session_id
         self.websocket = websocket
         self.state = state
-        self.dispatcher = dispatcher
+        self.agent_router = agent_router
         self.outbound_queue = outbound_queue
         self.workers = workers
 
@@ -52,8 +57,11 @@ class SessionRuntime:
         
             message = json.loads(raw_message)
         
-            if (message.get("event") != "connect_main_assistant"): #TODO: nel client va sostituito con connect_main_agent
-                print("Identification failed: Closing websocket")
+            if message.get("event") not in CONNECT_EVENTS:
+                logger.warning(
+                    "Session %s failed identification, closing websocket",
+                    self.session_id,
+                )
                 await self.websocket.close(
                     code = 1008,
                     reason="Bad request"
@@ -62,14 +70,17 @@ class SessionRuntime:
             else:
                 await self.start()
                 await self.receive_loop()
-            
+
         except asyncio.TimeoutError:
             await self.websocket.close(
                 code=1008,
                 reason="Cannot establish connection"
             )
         except WebSocketDisconnect:
-            print("Client disconnected")
+            logger.info(
+                "Client disconnected from session %s",
+                self.session_id,
+            )
             self.state.is_connected = False
         finally:
             await self.close()
@@ -79,8 +90,6 @@ class SessionRuntime:
 
         for worker in self.workers:
             await worker.start()
-
-        await self.dispatcher.start()
 
         self._tasks.append(
             asyncio.create_task(
@@ -99,7 +108,7 @@ class SessionRuntime:
                 await self.handle_protocol_error(exc)
                 continue
 
-            result = await self.dispatcher.dispatch(message)
+            result = await dispatch(message, self.agent_router)
             if result == DispatchResult.CLOSE_SESSION:
                 break
 
@@ -120,10 +129,11 @@ class SessionRuntime:
         self,
         error: Exception,
     ) -> None:
-        print(
-            f"Protocol error in session "
-            f"{self.session_id}: {type(error).__name__}\n"
-            f"{error}"
+        logger.warning(
+            "Protocol error in session %s: %s\n%s",
+            self.session_id,
+            type(error).__name__,
+            error,
         )
 
     async def close(self) -> None:

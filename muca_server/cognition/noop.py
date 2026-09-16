@@ -1,0 +1,38 @@
+from __future__ import annotations
+
+from uuid import UUID
+
+from .ports import ConversationPort, InterventionSignal, Utterance
+
+
+class NoCognition:
+    """
+    Decides nothing.
+
+    The default, so a conversation with no cognition configured still routes
+    audio, tracks turns and asks its observers to judge.
+    """
+
+    async def start(self, port: ConversationPort) -> None:
+        pass
+
+    async def close(self) -> None:
+        pass
+
+    async def on_utterance(self, utterance: Utterance) -> bool:
+        return True
+
+    async def on_intervention_signal(
+        self,
+        agent_guid: UUID,
+        signal: InterventionSignal | None,
+    ) -> None:
+        pass
+
+    async def on_assistant_output(
+        self,
+        text: str,
+        *,
+        interrupted: bool,
+    ) -> None:
+        pass

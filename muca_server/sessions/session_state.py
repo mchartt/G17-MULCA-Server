@@ -14,6 +14,8 @@ class SessionState:
     is_answering: bool = False
     assistant_spoke_last: bool = False
 
+    playback_time_ms: int = 0
+
     active_response_id: str | None = None
     active_agent: str | None = None
 

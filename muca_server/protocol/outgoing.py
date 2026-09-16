@@ -82,19 +82,50 @@ class StateUpdateMessage(OutgoingMessage):
 class AgentMessage(OutgoingMessage):
     event: Literal["agent_message"] = "agent_message"
 
-    agent_guid: str = Field(serialization_alias="agentGuid")
+    # The client reads this field as "guid"; absent means the main agent.
+    agent_guid: str | None = Field(
+        default=None,
+        serialization_alias="guid",
+    )
     text: str
-    
+
+
 class AgentGuidMessage(OutgoingMessage):
     event: Literal["agent_guid"] = "agent_guid"
 
-    agent_guid: str = Field(serialization_alias="agentGuid")
-    
+    agent_guid: str = Field(serialization_alias="guid")
+
+
+class AssistantTextMessage(OutgoingMessage):
+    """
+    What the main agent is saying, in text.
+
+    Deltas arrive as the agent produces them; one final frame closes the
+    turn so a client knows it can stop editing.
+    """
+
+    event: Literal["assistant_text"] = "assistant_text"
+
+    text: str
+    is_final: bool = Field(
+        default=False,
+        serialization_alias="isFinal",
+    )
+
+    @classmethod
+    def delta(cls, text: str) -> "AssistantTextMessage":
+        return cls(text=text, is_final=False)
+
+    @classmethod
+    def final(cls) -> "AssistantTextMessage":
+        return cls(text="", is_final=True)
+
 
 OutgoingProtocolMessage = (
     StateUpdateMessage
     | AgentMessage
     | AgentGuidMessage
+    | AssistantTextMessage
 )
 
 def serialize_outgoing_message(

@@ -1,0 +1,172 @@
+"""
+The OpenAI-specific parsing logic in InterventionAgentOpenAI._interpret.
+
+Built from real SDK event models (via model_construct, to avoid supplying
+every unrelated required field) rather than plain dicts, so a schema change
+in the SDK would break these tests the same way it would break the real
+code.
+"""
+
+import json
+
+from openai.types.realtime.realtime_error_event import RealtimeErrorEvent
+from openai.types.realtime.response_done_event import ResponseDoneEvent
+from openai.types.realtime.response_function_call_arguments_done_event import (
+    ResponseFunctionCallArgumentsDoneEvent,
+)
+
+from muca_server.agents.openai.intervention_agent import (
+    TOOL_NAME,
+    InterventionAgentOpenAI,
+)
+from muca_server.agents.options import AuxiliaryAgentOptions
+from muca_server.cognition import InterventionSignal
+from muca_server.cognition.strategies import Strategy, StrategyStore
+
+
+def make_agent() -> InterventionAgentOpenAI:
+    strategies = StrategyStore(
+        {
+            "respond_when_addressed": Strategy(
+                id="respond_when_addressed",
+                trigger_description="",
+                prompt_template="{prompt_fragment}",
+            ),
+        }
+    )
+
+    return InterventionAgentOpenAI(
+        options=AuxiliaryAgentOptions(),
+        client=object(),  # never called directly by _interpret
+        strategies=strategies,
+        persona="p",
+        task_knowledge="t",
+    )
+
+
+def tool_call_event(
+    *,
+    arguments: dict,
+    call_id: str = "call_1",
+    name: str = TOOL_NAME,
+) -> ResponseFunctionCallArgumentsDoneEvent:
+    return ResponseFunctionCallArgumentsDoneEvent.model_construct(
+        type="response.function_call_arguments.done",
+        call_id=call_id,
+        name=name,
+        arguments=json.dumps(arguments),
+        event_id="e1",
+        item_id="i1",
+        output_index=0,
+        response_id="r1",
+    )
+
+
+def response_done_event() -> ResponseDoneEvent:
+    return ResponseDoneEvent.model_construct(
+        type="response.done",
+        event_id="e2",
+        response=None,
+    )
+
+
+def error_event() -> RealtimeErrorEvent:
+    return RealtimeErrorEvent.model_construct(
+        type="error",
+        event_id="e3",
+        error={"message": "boom", "type": "server_error"},
+    )
+
+
+async def record_decisions(agent: InterventionAgentOpenAI) -> list:
+    decisions = []
+
+    async def record(guid, signal) -> None:
+        decisions.append(signal)
+
+    agent.on_decision = record
+    return decisions
+
+
+async def test_a_tool_call_then_response_done_yields_a_signal():
+    agent = make_agent()
+    decisions = await record_decisions(agent)
+
+    await agent._interpret(
+        tool_call_event(
+            arguments={
+                "strategy_id": "respond_when_addressed",
+                "prompt_fragment": "they asked directly",
+                "needs_history": False,
+                "needs_web_search": False,
+            }
+        )
+    )
+    await agent._interpret(response_done_event())
+
+    assert decisions == [
+        InterventionSignal(
+            strategy_id="respond_when_addressed",
+            prompt_fragment="they asked directly",
+        )
+    ]
+
+
+async def test_response_done_with_no_tool_call_means_no_intervention():
+    agent = make_agent()
+    decisions = await record_decisions(agent)
+
+    await agent._interpret(response_done_event())
+
+    assert decisions == [None]
+
+
+async def test_an_unrelated_tool_call_is_ignored():
+    agent = make_agent()
+    decisions = await record_decisions(agent)
+
+    await agent._interpret(
+        tool_call_event(
+            name="some_other_tool",
+            arguments={"strategy_id": "respond_when_addressed"},
+        )
+    )
+    await agent._interpret(response_done_event())
+
+    assert decisions == [None]
+
+
+async def test_a_provider_error_does_not_hang_and_reports_no_signal():
+    """
+    MULCA's decide() had no error handling at all: a provider error meant
+    the `async for` loop waited forever for a response.done that would
+    never arrive. This is the fix.
+    """
+
+    agent = make_agent()
+    decisions = await record_decisions(agent)
+
+    await agent._interpret(error_event())
+
+    assert decisions == [None]
+
+
+async def test_malformed_tool_arguments_are_dropped_not_raised():
+    agent = make_agent()
+    decisions = await record_decisions(agent)
+
+    await agent._interpret(
+        ResponseFunctionCallArgumentsDoneEvent.model_construct(
+            type="response.function_call_arguments.done",
+            call_id="call_1",
+            name=TOOL_NAME,
+            arguments="not json",
+            event_id="e1",
+            item_id="i1",
+            output_index=0,
+            response_id="r1",
+        )
+    )
+    await agent._interpret(response_done_event())
+
+    assert decisions == [None]

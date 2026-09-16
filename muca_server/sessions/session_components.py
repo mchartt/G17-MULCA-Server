@@ -1,12 +1,11 @@
 import asyncio
-from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Protocol
 from uuid import UUID
 
 from fastapi import WebSocket
 
-from ..events import EventDispatcher
+from ..events import AgentRouterProtocol
 from ..protocol import OutgoingProtocolMessage
 from .session_state import SessionState
 
@@ -30,7 +29,7 @@ class SessionContext:
 
 @dataclass(slots=True)
 class SessionComponents:
-    dispatcher: EventDispatcher
+    agent_router: AgentRouterProtocol
     workers: list[SessionWorker] = field(
         default_factory=list,
     )

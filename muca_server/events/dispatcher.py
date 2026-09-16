@@ -6,207 +6,162 @@ from enum import StrEnum
 
 from ..protocol import (
     AudioStreamMessage,
-    ConnectMainAssistantMessage,
+    ConnectAgentMessage,
     CreateAuxiliaryAgentMessage,
     DisconnectMessage,
     IncomingProtocolMessage,
     InterruptMessage,
+    ParticipantsMessage,
     PlaybackFrameMessage,
     RemoveAuxiliaryAgentMessage,
     TextMessage,
     TriggerResponseMessage,
+    UserTextMessage,
 )
 
 logger = logging.getLogger(__name__)
 
 
-class AudioRouterProtocol(Protocol):
+class AgentRouterProtocol(Protocol):
     """
-    Interface which defines methods to forward audio to audio specialized components
+    Interface which defines how validated messages reach a session's agents.
+
+    Every client message ends up at one or more agents, so this is the only
+    component the dispatcher talks to. A target guid of None or "" addresses
+    the main agent.
     """
-    
-    async def publish_user_audio(
+
+    async def route_user_audio(
         self,
         message: AudioStreamMessage,
     ) -> None:
-        """Forwards user audio to main and (if present) auxiliary agent"""
+        """Forward user audio to the main agent and its subscribers."""
         ...
 
-    async def publish_playback(
+    async def route_playback_frame(
         self,
         message: PlaybackFrameMessage,
     ) -> None:
-        """Forwards the already played audio to main and (if present) auxiliary agent"""
+        """Forward already played agent audio to its subscribers."""
         ...
-        
-class TextRouterProtocol(Protocol):
-    """
-    Interface which defines methods to forward text messages to specialized components.
-    """
-    
-    async def route(
+
+    async def route_text(self, message: TextMessage) -> None:
+        ...
+
+    async def route_user_text(
         self,
-        text_message: TextMessage,
+        message: UserTextMessage,
     ) -> None:
-        """Forward text message to main and/or (if present) auxiliary agent."""
+        """Forward one user's text utterance, and take the turn from it."""
         ...
-    
+
+    async def route_participants(
+        self,
+        message: ParticipantsMessage,
+    ) -> None:
+        """Record who is present, including those who have not spoken."""
+        ...
+
+    async def connect_agent(
+        self,
+        message: ConnectAgentMessage,
+    ) -> None:
+        ...
+
+    async def disconnect_agent(
+        self,
+        message: DisconnectMessage,
+    ) -> None:
+        """Disconnect one agent, or every agent when no target is given."""
+        ...
+
+    async def create_auxiliary_agent(
+        self,
+        message: CreateAuxiliaryAgentMessage,
+    ) -> None:
+        """Create an auxiliary agent and announce its guid to the client."""
+        ...
+
+    async def remove_auxiliary_agent(
+        self,
+        message: RemoveAuxiliaryAgentMessage,
+    ) -> None:
+        ...
+
+    async def trigger_response(
+        self,
+        message: TriggerResponseMessage,
+    ) -> None:
+        ...
+
+    async def interrupt_response(
+        self,
+        message: InterruptMessage,
+    ) -> None:
+        ...
+
 
 class DispatchResult(StrEnum):
     CONTINUE = "continue"
     CLOSE_SESSION = "close_session"
 
-class EventDispatcher:
+
+async def dispatch(
+    message: IncomingProtocolMessage,
+    agent_router: AgentRouterProtocol,
+) -> DispatchResult:
     """
-    Forward the validated protocol messages to the application components.
+    Forward one validated message to the agents, and say whether the
+    session should carry on.
 
-    The dispatcher does not:
-    - parse JSON;
-    - decode audio directly;
-    - write to the WebSocket;
-    - modify the server's state directly.
-
-    Every message received has already been validated by IncomingProtocolMessage.
+    Dispatching does not parse JSON, decode audio, write to the WebSocket
+    or touch the session state.
     """
-    def __init__(
-        self,
-        *,
-        audio_router: AudioRouterProtocol,
-        text_router: TextRouterProtocol,
-    ) -> None:
-        self.audio_router = audio_router
-        self.text_router = text_router
-        self._started = False
-        self._closed = False
 
-    async def start(self) -> None:
-        """
-        Activates dispatcher.
-        """
-        if self._closed:
-            raise RuntimeError(
-                "Cannot start a closed EventDispatcher"
+    match message:
+        case AudioStreamMessage():
+            await agent_router.route_user_audio(message)
+
+        case PlaybackFrameMessage():
+            await agent_router.route_playback_frame(message)
+
+        case TextMessage():
+            await agent_router.route_text(message)
+
+        case UserTextMessage():
+            await agent_router.route_user_text(message)
+
+        case ParticipantsMessage():
+            await agent_router.route_participants(message)
+
+        case TriggerResponseMessage():
+            await agent_router.trigger_response(message)
+
+        case InterruptMessage():
+            await agent_router.interrupt_response(message)
+
+        case ConnectAgentMessage():
+            await agent_router.connect_agent(message)
+
+        case CreateAuxiliaryAgentMessage():
+            await agent_router.create_auxiliary_agent(message)
+
+        case RemoveAuxiliaryAgentMessage():
+            await agent_router.remove_auxiliary_agent(message)
+
+        case DisconnectMessage():
+            await agent_router.disconnect_agent(message)
+
+            # Disconnecting one agent leaves the session running.
+            if message.target_agent_guid:
+                return DispatchResult.CONTINUE
+
+            return DispatchResult.CLOSE_SESSION
+
+        case _:
+            raise TypeError(
+                "Unsupported incoming message type: "
+                f"{type(message).__name__}"
             )
 
-        self._started = True
-
-    async def dispatch(
-        self,
-        message: IncomingProtocolMessage,
-    ) -> DispatchResult:
-        """
-        Routes messages to the suitable components.
-
-        Raise RuntimeError if Dispatcher is closed or not active yet.
-        """
-        if not self._started:
-            raise RuntimeError(
-                "EventDispatcher has not been started"
-            )
-
-        if self._closed:
-            raise RuntimeError(
-                "EventDispatcher is already closed"
-            )
-        
-        match message:
-            case AudioStreamMessage():
-                await self._handle_audio_stream(message)
-
-            case PlaybackFrameMessage():
-                await self._handle_playback_frame(message)
-
-            case TextMessage():
-                await self._handle_text_message(message)
-
-            case TriggerResponseMessage():
-                await self._handle_trigger_response(message)
-
-            case InterruptMessage():
-                await self._handle_interrupt(message)
-
-            case ConnectMainAssistantMessage():
-                await self._handle_connect_main_assistant()
-
-            case CreateAuxiliaryAgentMessage():
-                await self._handle_create_auxiliary_agent(
-                    message
-                )
-
-            case RemoveAuxiliaryAgentMessage():
-                await self._handle_remove_auxiliary_agent(
-                    message
-                )
-
-            case DisconnectMessage():
-                await self._handle_disconnect()
-                return DispatchResult.CLOSE_SESSION
-
-            case _:
-                raise TypeError(
-                    "Unsupported incoming message type: "
-                    f"{type(message).__name__}"
-                )
-        
-        return DispatchResult.CONTINUE
-
-    async def close(self) -> None:
-        """
-        Stops the application resources managed by the dispatcher.
-        """
-        if self._closed:
-            return
-
-        self._closed = True
-        self._started = False
-
-
-    async def _handle_audio_stream(
-        self,
-        message: AudioStreamMessage,
-    ) -> None:
-        await self.audio_router.publish_user_audio(message)
-
-    async def _handle_playback_frame(
-        self,
-        message: PlaybackFrameMessage,
-    ) -> None:
-        pass
-
-    async def _handle_text_message(
-        self,
-        message: TextMessage,
-    ) -> None:
-        await self.text_router.route(message)
-
-    async def _handle_trigger_response(
-        self,
-        message: TriggerResponseMessage,
-    ) -> None:
-        pass
-
-    async def _handle_interrupt(
-        self,
-        message: InterruptMessage,
-    ) -> None:
-        pass
-
-    async def _handle_connect_main_assistant(
-        self,
-    ) -> None:
-        pass
-
-    async def _handle_create_auxiliary_agent(
-        self,
-        message: CreateAuxiliaryAgentMessage,
-    ) -> None:
-        pass
-
-    async def _handle_remove_auxiliary_agent(
-        self,
-        message: RemoveAuxiliaryAgentMessage,
-    ) -> None:
-        pass
-
-    async def _handle_disconnect(self) -> None:
-        pass
+    return DispatchResult.CONTINUE

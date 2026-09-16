@@ -1,5 +1,5 @@
-from .router import AudioRouter
+from .chunk import AudioChunk
 
 __all__ = [
-    "AudioRouter",
+    "AudioChunk",
 ]

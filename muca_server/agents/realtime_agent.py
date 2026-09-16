@@ -1,0 +1,129 @@
+from __future__ import annotations
+
+import logging
+from collections.abc import Awaitable, Callable
+
+from ..audio import AudioChunk
+
+logger = logging.getLogger(__name__)
+
+MessageHandler = Callable[[str], Awaitable[None]]
+
+
+class RealtimeAgent:
+    """
+    Talks to one realtime provider on behalf of a conversation.
+
+    The base implementation reaches no provider: every call below is a
+    logged no-op. A provider-specific subclass (an OpenAI or Gemini agent)
+    overrides the hooks at the bottom of this class to actually open a
+    connection and speak that provider's dialect, while the public methods
+    above stay the same for every provider.
+    """
+
+    def __init__(self) -> None:
+        self._connected = False
+
+        # Raw provider messages, exactly as they arrive.
+        self.on_message: MessageHandler | None = None
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected
+
+    async def connect(self) -> None:
+        if self._connected:
+            return
+
+        await self._connect()
+        self._connected = True
+
+    async def disconnect(self) -> None:
+        if not self._connected:
+            return
+
+        self._connected = False
+        await self._disconnect()
+
+    async def send_anything(self, json_payload: str) -> None:
+        await self._send_anything(json_payload)
+
+    async def send_text(
+        self,
+        text: str,
+        *,
+        role: str = "system",
+    ) -> None:
+        await self._send_text(text, role=role)
+
+    async def send_audio_chunk(self, chunk: AudioChunk) -> None:
+        # Audio streams continuously, including while this agent is still
+        # being connected.
+        if not self._connected:
+            return
+
+        await self._send_audio_chunk(chunk)
+
+    async def trigger_response(
+        self,
+        *,
+        max_tokens: int | None = None,
+        interrupt: bool = True,
+        instructions: str = "",
+        add_to_conversation: bool = True,
+    ) -> None:
+        if interrupt:
+            await self.interrupt_response()
+
+        await self._trigger_response(
+            max_tokens=max_tokens,
+            instructions=instructions,
+            add_to_conversation=add_to_conversation,
+        )
+
+    async def interrupt_response(self) -> None:
+        await self._cancel_response()
+
+    async def _handle_provider_message(self, raw: str) -> None:
+        """A provider subclass calls this as messages arrive."""
+
+        if self.on_message is not None:
+            await self.on_message(raw)
+
+    # ------------------------------------------------------------------
+    # Provider hooks — override in a provider-specific subclass.
+    # ------------------------------------------------------------------
+
+    async def _connect(self) -> None:
+        logger.info("No provider configured, connect() is a no-op")
+
+    async def _disconnect(self) -> None:
+        pass
+
+    async def _send_anything(self, json_payload: str) -> None:
+        logger.debug("No provider configured, dropping payload")
+
+    async def _send_text(self, text: str, *, role: str) -> None:
+        logger.debug(
+            "No provider configured, dropping %s text: %s",
+            role,
+            text,
+        )
+
+    async def _send_audio_chunk(self, chunk: AudioChunk) -> None:
+        logger.debug(
+            "No provider configured, dropping %d audio samples",
+            chunk.sample_count,
+        )
+
+    async def _trigger_response(
+        self,
+        *,
+        max_tokens: int | None,
+        instructions: str,
+        add_to_conversation: bool,
+    ) -> None:
+        logger.debug("No provider configured, dropping response trigger")
+
+    async def _cancel_response(self) -> None:
+        logger.debug("No provider configured, dropping response cancel")

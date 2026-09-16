@@ -1,0 +1,13 @@
+id: provide_summary
+trigger_description: >
+  Someone is directly asking for a recap or summary of the conversation (e.g.
+  "can you summarize what we've talked about", "what have we discussed so
+  far", "give me a recap"). This is a direct request, not something to infer
+  from general conversation drift.
+trigger_variables: []
+prompt_template: |
+  Someone asked for a summary. {prompt_fragment}
+  Use the retrieved conversation history below to answer -- write it for a
+  human to read: clear, well-organized, and easy to skim. This is different
+  from the internal summary you may also see in your context, which is
+  written for another LLM, not for a person.

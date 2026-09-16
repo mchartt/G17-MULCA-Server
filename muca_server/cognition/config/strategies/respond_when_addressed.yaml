@@ -1,0 +1,22 @@
+id: respond_when_addressed
+trigger_description: >
+  Someone's message is directed at you (MULCA). This includes: an explicit
+  Discord @-mention of you; the message naming you by name ("MULCA") in
+  plain text; a short follow-up that plausibly responds to your own
+  immediately preceding message (e.g. "could you check that?"), even without
+  naming you explicitly; and a question about a specific detail from earlier
+  in the conversation (e.g. "what did I say about X", "did we already decide
+  Y") -- for that last case, also set needs_history so you can answer
+  accurately rather than guessing from what's currently visible to you. In a
+  private DM, there is no other possible audience, so almost any substantive
+  message qualifies -- the only judgment left there is whether the specific
+  message actually warrants a reply right now, not who it's for.
+# Deliberately no cooldown_messages here, unlike participation_equality/
+# keep_conversation_on_topic -- those are unsolicited interventions that get
+# naggy if repeated too soon, but this fires only in direct response to being
+# addressed, so a back-and-forth exchange needs it to be able to fire on
+# consecutive messages.
+trigger_variables: []
+prompt_template: |
+  You were addressed directly. {prompt_fragment}
+  Answer them directly and concisely.
