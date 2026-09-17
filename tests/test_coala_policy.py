@@ -2,6 +2,7 @@ from muca_server.cognition import CoalaPolicy, InterventionSignal, Utterance
 from muca_server.cognition.memory import (
     EpisodicRecord,
     InMemoryEpisodicStore,
+    InMemorySnapshotStore,
 )
 from muca_server.cognition.strategies import Strategy, StrategyStore
 
@@ -237,3 +238,50 @@ async def test_a_present_but_silent_participant_reaches_trigger_variables():
     variables = policy._wm.trigger_variables
     assert variables["participant_message_counts"] == {"Ada": 1, "Grace": 0}
     assert variables["gini_index"] > 0.0
+
+
+class FakeSummarizer:
+    async def summarize(self, *, transcript, previous_summary, previous_roles):
+        return "a summary", "some roles"
+
+    async def summarize_private(self, *, transcript, previous_summary):
+        return "a private summary"
+
+
+async def test_store_factory_is_called_with_conversation_id_once_start_runs():
+    seen_conversation_ids = []
+
+    def store_factory(conversation_id):
+        seen_conversation_ids.append(conversation_id)
+        return InMemoryEpisodicStore(), InMemorySnapshotStore()
+
+    policy, port = make_policy(
+        episodic_store=None,
+        store_factory=store_factory,
+        port=FakePort(conversation_id="channel-42"),
+    )
+
+    assert seen_conversation_ids == []  # not called yet -- conversation_id unknown
+
+    await policy.start(port)
+
+    assert seen_conversation_ids == ["channel-42"]
+
+
+async def test_a_management_cycle_saves_a_snapshot_not_just_close():
+    snapshot_store = InMemorySnapshotStore()
+    policy, port = make_policy(
+        summarizer=FakeSummarizer(),
+        snapshot_store=snapshot_store,
+        management_cycle_interval=1,
+    )
+    await policy.start(port)
+
+    await policy.on_utterance(make_utterance())
+    await policy.on_intervention_signal(object(), None)
+
+    saved = await snapshot_store.load(port.conversation_id)
+
+    assert saved is not None
+    assert saved.history_summary == "a summary"
+    assert saved.participant_roles_summary == "some roles"

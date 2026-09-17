@@ -22,10 +22,14 @@ openai = [
     "openai[realtime]>=2.0,<3",
     "python-dotenv>=1,<2",
 ]
+storage = [
+    "aiosqlite>=0.19,<1",
+]
 dev = [
     "pytest>=8,<9",
     "pytest-asyncio>=0.24,<1",
     "httpx>=0.27,<1",
+    "aiosqlite>=0.19,<1",
 ]
 
 [tool.setuptools]

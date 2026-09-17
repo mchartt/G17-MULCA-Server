@@ -18,10 +18,14 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
 from .agents import MainAgentOptions
-from .agents.openai import OpenAIAgentFactory
+from .agents.openai import ChatCompletionsSummarizer, OpenAIAgentFactory
 from .cognition import CoalaPolicy
 from .cognition.loader import load_persona, load_strategy_store, load_task
-from .cognition.memory import InMemoryEpisodicStore, InMemorySnapshotStore
+from .cognition.memory.sqlite import (
+    SqliteEpisodicStore,
+    SqliteSnapshotStore,
+    db_path_for,
+)
 from .main import create_app
 from .sessions.session_components_factory import DefaultSessionComponentsFactory
 
@@ -50,15 +54,35 @@ def build_app():
         task_knowledge=task_knowledge,
     )
 
-    # One CoalaPolicy per session, each with its own in-memory stores: state
-    # lives for the process's lifetime, not across restarts.
+    # One SQLite file per conversation_id, not one shared file -- e.g. each
+    # of a deployment's Discord channels (BLUEPRINT.md's "Channel/instance
+    # scoping") gets its own database. The directory is what's fixed; the
+    # filename is deterministically derived from conversation_id, so there's
+    # nothing per-channel to separately configure here (that lives entirely
+    # in the Discord-specific client, e.g. mulca_discord's instances.yaml --
+    # this file never sees a channel id, only whatever conversation_id it's
+    # handed).
+    db_dir = os.environ.get("MUCA_DB_DIR", "data")
+    os.makedirs(db_dir, exist_ok=True)
+
+    def store_factory(conversation_id: str):
+        path = db_path_for(conversation_id, base_dir=db_dir)
+        return SqliteEpisodicStore(path), SqliteSnapshotStore(path)
+
+    # Without this, the management cycle (BLUEPRINT.md §11) never runs at
+    # all -- CoalaPolicy only calls it when a summarizer is configured, and
+    # this was never wired in before, so history_summary/
+    # participant_roles_summary never updated and wm.history never
+    # truncated in a real deployment.
+    summarizer = ChatCompletionsSummarizer(client)
+
     def policy_factory(context) -> CoalaPolicy:
         return CoalaPolicy(
             strategy_store=strategy_store,
             main_persona=main_persona,
             main_task=task_knowledge,
-            episodic_store=InMemoryEpisodicStore(),
-            snapshot_store=InMemorySnapshotStore(),
+            store_factory=store_factory,
+            summarizer=summarizer,
         )
 
     components_factory = DefaultSessionComponentsFactory(

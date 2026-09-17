@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import Callable
 from uuid import UUID
 
 from .forced_intervention import check_forced_intervention
@@ -45,6 +46,10 @@ class CoalaPolicy:
         assistant_name: str = "",
         episodic_store: EpisodicStore | None = None,
         snapshot_store: SnapshotStore | None = None,
+        store_factory: Callable[
+            [str], tuple[EpisodicStore, SnapshotStore]
+        ]
+        | None = None,
         summarizer: Summarizer | None = None,
         management_cycle_interval: int = MANAGEMENT_CYCLE_INTERVAL,
         retrieval_limit: int = RETRIEVAL_LIMIT,
@@ -56,6 +61,12 @@ class CoalaPolicy:
         self._assistant_name = assistant_name
         self._episodic_store = episodic_store
         self._snapshot_store = snapshot_store
+        # Deferred store selection: which DB backs this conversation can
+        # depend on its conversation_id (e.g. one SQLite file per Discord
+        # channel), which isn't known until start() -- policy_factory builds
+        # this object before the connect handshake ever runs. Takes
+        # precedence over episodic_store/snapshot_store above when given.
+        self._store_factory = store_factory
         self._summarizer = summarizer
         self._management_cycle_interval = management_cycle_interval
         self._retrieval_limit = retrieval_limit
@@ -65,6 +76,12 @@ class CoalaPolicy:
 
     async def start(self, port: ConversationPort) -> None:
         self._port = port
+
+        if self._store_factory is not None:
+            self._episodic_store, self._snapshot_store = (
+                self._store_factory(port.conversation_id)
+            )
+
         wm = WorkingMemory(
             conversation_id=port.conversation_id,
             assistant_id=self._assistant_id,
@@ -90,6 +107,16 @@ class CoalaPolicy:
         self._wm = wm
 
     async def close(self) -> None:
+        await self._save_snapshot()
+
+    async def _save_snapshot(self) -> None:
+        """
+        Also called from the management cycle, not just close() -- a clean
+        shutdown is not the only way a process's memory can end. Saving here
+        too means a crash loses at most the messages since the last
+        management cycle, not everything since the last clean shutdown.
+        """
+
         if (
             self._wm is None
             or self._snapshot_store is None
@@ -339,6 +366,8 @@ class CoalaPolicy:
                 transcript=wm.transcript(),
                 previous_summary=wm.history_summary,
             )
+            # No _save_snapshot() here: a DM's memory is never persisted at
+            # all (BLUEPRINT.md §11.2), so it would always no-op anyway.
             wm.apply_management_cycle(
                 summary,
                 wm.participant_roles_summary,
@@ -353,6 +382,7 @@ class CoalaPolicy:
             )
         )
         wm.apply_management_cycle(history_summary, roles_summary)
+        await self._save_snapshot()
 
         if self._episodic_store is not None:
             await self._episodic_store.log(

@@ -61,6 +61,11 @@ local_settings.py
 db.sqlite3
 db.sqlite3-journal
 
+# SqliteEpisodicStore/SqliteSnapshotStore's data (MUCA_DB_PATH, default
+# muca_server.db) -- runtime state, not source.
+*.db
+*.db-journal
+
 # Flask stuff:
 instance/
 .webassets-cache
