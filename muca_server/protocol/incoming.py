@@ -107,6 +107,16 @@ class ConnectAgentMessage(TargetedMessage):
     # A private conversation is never written to long-term memory.
     is_dm: bool = Field(default=False, alias="isDm")
 
+    # For a DM only: the group conversation_id its sender is a recognized
+    # participant of, so that DM gets one-way read access to that group's
+    # memory. None if the sender isn't recognized as belonging to any
+    # instance -- the client (e.g. mulca_discord) decides this, since it's
+    # the one that knows what a "participant" or "instance" is.
+    linked_conversation_id: str | None = Field(
+        default=None,
+        alias="linkedConversationId",
+    )
+
 
 class DisconnectMessage(TargetedMessage):
     event: Literal["disconnect"]

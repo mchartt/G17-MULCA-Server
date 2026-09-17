@@ -3,6 +3,7 @@ from muca_server.cognition.memory import (
     EpisodicRecord,
     InMemoryEpisodicStore,
     InMemorySnapshotStore,
+    MemorySnapshot,
 )
 from muca_server.cognition.strategies import Strategy, StrategyStore
 
@@ -24,9 +25,16 @@ STRATEGIES = StrategyStore(
 
 
 class FakePort:
-    def __init__(self, *, conversation_id="conv-1", is_private=False):
+    def __init__(
+        self,
+        *,
+        conversation_id="conv-1",
+        is_private=False,
+        linked_conversation_id=None,
+    ):
         self._conversation_id = conversation_id
         self._is_private = is_private
+        self._linked_conversation_id = linked_conversation_id
         self._participants: dict[int, str] = {}
         self.instructions: list[str] = []
         self.observer_messages: list[str] = []
@@ -38,6 +46,10 @@ class FakePort:
     @property
     def is_private(self) -> bool:
         return self._is_private
+
+    @property
+    def linked_conversation_id(self) -> str | None:
+        return self._linked_conversation_id
 
     def participants(self) -> dict[int, str]:
         return dict(self._participants)
@@ -244,9 +256,6 @@ class FakeSummarizer:
     async def summarize(self, *, transcript, previous_summary, previous_roles):
         return "a summary", "some roles"
 
-    async def summarize_private(self, *, transcript, previous_summary):
-        return "a private summary"
-
 
 async def test_store_factory_is_called_with_conversation_id_once_start_runs():
     seen_conversation_ids = []
@@ -285,3 +294,146 @@ async def test_a_management_cycle_saves_a_snapshot_not_just_close():
     assert saved is not None
     assert saved.history_summary == "a summary"
     assert saved.participant_roles_summary == "some roles"
+
+
+async def test_the_verbatim_tail_is_bounded_by_management_cycle_interval_not_a_fixed_constant():
+    policy, port = make_policy(
+        summarizer=FakeSummarizer(),
+        management_cycle_interval=3,
+    )
+    await policy.start(port)
+
+    for i in range(5):
+        await policy.on_utterance(make_utterance(content=f"message {i}"))
+        await policy.on_intervention_signal(object(), None)
+
+    # 5 messages, cycle every 3rd -> one cycle ran (at message 3), truncating
+    # to the last 3 -- then 2 more messages appended after that.
+    assert len(policy._wm.history) <= 3 + 2
+
+
+async def test_a_dm_from_a_recognized_participant_mirrors_the_group_summary():
+    stores: dict[str, tuple] = {}
+
+    def store_factory(conversation_id):
+        return stores.setdefault(
+            conversation_id,
+            (InMemoryEpisodicStore(), InMemorySnapshotStore()),
+        )
+
+    _, group_snapshot_store = store_factory("instance:team-alpha")
+    await group_snapshot_store.save(
+        "instance:team-alpha",
+        MemorySnapshot(
+            history_summary="the group discussed the deadline",
+            participant_roles_summary="Ada leads, Grace is quiet",
+        ),
+    )
+
+    policy, port = make_policy(
+        store_factory=store_factory,
+        port=FakePort(
+            conversation_id="dm:42",
+            is_private=True,
+            linked_conversation_id="instance:team-alpha",
+        ),
+    )
+    await policy.start(port)
+    await policy.on_utterance(make_utterance())
+
+    # Not a separate field -- the exact same fields/rendering a group uses
+    # for its own memory (_render_prompt's summary_block).
+    assert policy._wm.history_summary == "the group discussed the deadline"
+    assert policy._wm.participant_roles_summary == "Ada leads, Grace is quiet"
+
+
+async def test_linked_group_summary_refreshes_on_every_message_not_just_once():
+    # The actual point: a DM session can stay open and get reused by the
+    # same student across a whole deployment (weeks/months) -- seeding this
+    # only once at start(), forever, would freeze it on whatever the group
+    # looked like the first time that student ever DMed.
+    stores: dict[str, tuple] = {}
+
+    def store_factory(conversation_id):
+        return stores.setdefault(
+            conversation_id,
+            (InMemoryEpisodicStore(), InMemorySnapshotStore()),
+        )
+
+    _, group_snapshot_store = store_factory("instance:team-alpha")
+    await group_snapshot_store.save(
+        "instance:team-alpha",
+        MemorySnapshot(history_summary="week 1: kickoff"),
+    )
+
+    policy, port = make_policy(
+        store_factory=store_factory,
+        port=FakePort(
+            conversation_id="dm:42",
+            is_private=True,
+            linked_conversation_id="instance:team-alpha",
+        ),
+    )
+    await policy.start(port)
+    await policy.on_utterance(make_utterance())
+    assert policy._wm.history_summary == "week 1: kickoff"
+
+    # The group's memory moves on while this DM session stays open.
+    await group_snapshot_store.save(
+        "instance:team-alpha",
+        MemorySnapshot(history_summary="week 10: launch went well"),
+    )
+
+    await policy.on_utterance(make_utterance())
+    assert policy._wm.history_summary == "week 10: launch went well"
+
+
+async def test_a_dm_from_an_unrecognized_sender_gets_no_linked_summary():
+    policy, port = make_policy(
+        port=FakePort(
+            conversation_id="dm:99",
+            is_private=True,
+            linked_conversation_id=None,
+        ),
+    )
+    await policy.start(port)
+    await policy.on_utterance(make_utterance())
+
+    assert policy._wm.history_summary == ""
+    assert policy._wm.participant_roles_summary == ""
+
+
+async def test_a_group_conversation_is_unaffected_by_linked_conversation_id():
+    # linked_conversation_id is a DM-only concept; even if a port somehow
+    # set one, is_private=False must still suppress it.
+    policy, port = make_policy(
+        port=FakePort(
+            conversation_id="group-1",
+            is_private=False,
+            linked_conversation_id="instance:team-alpha",
+        ),
+    )
+    await policy.start(port)
+    await policy.on_utterance(make_utterance())
+
+    assert policy._wm.history_summary == ""
+    assert policy._wm.participant_roles_summary == ""
+
+
+async def test_a_dm_gets_no_summarization_of_its_own_just_a_history_trim():
+    policy, port = make_policy(
+        summarizer=FakeSummarizer(),
+        port=FakePort(conversation_id="dm:42", is_private=True),
+        management_cycle_interval=2,
+    )
+    await policy.start(port)
+
+    for i in range(4):
+        await policy.on_utterance(make_utterance(content=f"message {i}"))
+        await policy.on_intervention_signal(object(), None)
+
+    # No summarizer call happened for this DM (FakeSummarizer.summarize
+    # would have overwritten history_summary with "a summary" if it had) --
+    # trimming is the only thing that happens, bounding raw history.
+    assert policy._wm.history_summary == ""
+    assert len(policy._wm.history) <= 2 + 1

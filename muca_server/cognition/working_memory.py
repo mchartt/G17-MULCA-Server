@@ -16,8 +16,6 @@ from dataclasses import dataclass, field
 from .ports import Utterance
 from .strategies import Strategy
 
-HISTORY_TAIL = 5
-
 
 @dataclass
 class WorkingMemory:
@@ -63,17 +61,34 @@ class WorkingMemory:
         self,
         history_summary: str,
         participant_roles_summary: str,
+        *,
+        tail_size: int,
     ) -> None:
         """
-        Replace the raw history with a summary plus a short tail.
+        Replace the raw history with a summary plus a verbatim tail.
 
-        This is what keeps the context window fixed-size instead of growing
-        with the length of the conversation.
+        tail_size is the caller's management_cycle_interval, not an
+        independent constant -- since a cycle runs every tail_size messages,
+        keeping exactly that many raw ones means the verbatim tail always
+        covers everything back to the previous cycle, with no gap and no
+        overlap against what the summary already absorbed.
         """
 
         self.history_summary = history_summary
         self.participant_roles_summary = participant_roles_summary
-        self.history = self.history[-HISTORY_TAIL:]
+        self.history = self.history[-tail_size:]
+
+    def trim_history(self, *, tail_size: int) -> None:
+        """
+        Drop old raw history with no summarization -- for a DM, which gets
+        no management-cycle summary of its own (its history_summary instead
+        mirrors a linked group's, when it has one -- CoalaPolicy
+        ._apply_linked_group_context). Without this, a DM session left open
+        for a long-running deployment would grow this list forever, since
+        nothing else ever trims it for a private conversation.
+        """
+
+        self.history = self.history[-tail_size:]
 
     def record_action(
         self,

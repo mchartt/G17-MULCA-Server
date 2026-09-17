@@ -91,6 +91,7 @@ class Conversation:
 
         self._conversation_id = str(state.session_id)
         self._is_private = False
+        self._linked_conversation_id: str | None = None
 
         self._main_agent: MainAgent | None = None
         self._auxiliary_agents: dict[UUID, AuxiliaryAgent] = {}
@@ -128,6 +129,10 @@ class Conversation:
     @property
     def is_private(self) -> bool:
         return self._is_private
+
+    @property
+    def linked_conversation_id(self) -> str | None:
+        return self._linked_conversation_id
 
     def participants(self) -> dict[int, str]:
         return dict(self._participants)
@@ -393,6 +398,7 @@ class Conversation:
                 self._conversation_id = message.conversation_id
 
             self._is_private = message.is_dm
+            self._linked_conversation_id = message.linked_conversation_id
 
             await self._connect_main_agent()
             return

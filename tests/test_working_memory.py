@@ -52,7 +52,7 @@ def test_cooldown_survives_a_history_truncation():
 
     # A management cycle truncates history but total_message_count is
     # untouched -- it must be, since it is the cooldown clock.
-    wm.apply_management_cycle("summary", "roles")
+    wm.apply_management_cycle("summary", "roles", tail_size=8)
     assert len(wm.history) == 0
 
     assert wm.strategy_in_cooldown(strategy)

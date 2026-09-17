@@ -149,6 +149,8 @@ class CoalaPolicy:
         wm.append_history(utterance)
         wm.increment_message_count()
 
+        await self._apply_linked_group_context(wm, port)
+
         participants = port.participants()
         wm.set_trigger_variables(
             compute_trigger_variables(
@@ -198,6 +200,54 @@ class CoalaPolicy:
         await self._finish_turn(path="forced", strategy_id=None)
 
         return False
+
+    async def _apply_linked_group_context(
+        self,
+        wm: WorkingMemory,
+        port: ConversationPort,
+    ) -> None:
+        """
+        Mirrors a linked group's summary directly into this DM's own
+        history_summary/participant_roles_summary -- reusing exactly the
+        fields (and _render_prompt's existing summary_block) a group already
+        uses for its own memory, rather than a separate DM-only concept.
+        This DM's own raw conversation still reaches the main/intervention
+        agents the normal way (Conversation forwards each utterance to their
+        live sessions directly) -- this only supplies what a DM's session
+        cannot otherwise see at all: the group's memory, since it lives in a
+        different session entirely.
+
+        Re-read on every message, not cached: the token cost of including
+        this is the same either way, since the main LLM rebuilds its full
+        prompt fresh every turn regardless (BLUEPRINT.md's "stateless main
+        LLM") -- caching would only reduce DB reads, at the cost of
+        staleness, which matters for "ask individual questions whenever you
+        want" over a long-running deployment. This never writes back to the
+        linked conversation either way.
+
+        A DM from someone not recognized as belonging to any instance simply
+        has no linked_conversation_id, so this does nothing for them --
+        no memory beyond their own live session, same as always.
+        """
+
+        if not (
+            port.is_private
+            and port.linked_conversation_id is not None
+            and self._store_factory is not None
+        ):
+            return
+
+        _, linked_snapshot_store = self._store_factory(
+            port.linked_conversation_id,
+        )
+        linked_snapshot = await linked_snapshot_store.load(
+            port.linked_conversation_id,
+        )
+        if linked_snapshot is not None:
+            wm.history_summary = linked_snapshot.history_summary
+            wm.participant_roles_summary = (
+                linked_snapshot.participant_roles_summary
+            )
 
     async def on_intervention_signal(
         self,
@@ -347,12 +397,15 @@ class CoalaPolicy:
 
         wm.clear_turn_output()
 
-        if (
-            not port.is_private
-            and self._summarizer is not None
-            and message_count % self._management_cycle_interval == 0
-        ):
-            await self._run_management_cycle(wm, port)
+        if message_count % self._management_cycle_interval == 0:
+            if port.is_private:
+                # No summarization for a DM (its history_summary instead
+                # mirrors a linked group's, when it has one --
+                # _apply_linked_group_context) -- just bound how much raw
+                # history this DM's own WM holds, no LLM call involved.
+                wm.trim_history(tail_size=self._management_cycle_interval)
+            elif self._summarizer is not None:
+                await self._run_management_cycle(wm, port)
 
     async def _run_management_cycle(
         self,
@@ -361,19 +414,6 @@ class CoalaPolicy:
     ) -> None:
         assert self._summarizer is not None
 
-        if port.is_private:
-            summary = await self._summarizer.summarize_private(
-                transcript=wm.transcript(),
-                previous_summary=wm.history_summary,
-            )
-            # No _save_snapshot() here: a DM's memory is never persisted at
-            # all (BLUEPRINT.md §11.2), so it would always no-op anyway.
-            wm.apply_management_cycle(
-                summary,
-                wm.participant_roles_summary,
-            )
-            return
-
         history_summary, roles_summary = (
             await self._summarizer.summarize(
                 transcript=wm.transcript(),
@@ -381,7 +421,11 @@ class CoalaPolicy:
                 previous_roles=wm.participant_roles_summary,
             )
         )
-        wm.apply_management_cycle(history_summary, roles_summary)
+        wm.apply_management_cycle(
+            history_summary,
+            roles_summary,
+            tail_size=self._management_cycle_interval,
+        )
         await self._save_snapshot()
 
         if self._episodic_store is not None:

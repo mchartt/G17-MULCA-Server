@@ -44,16 +44,3 @@ async def test_group_summary_uses_a_json_schema_response():
     call = client.chat.completions.calls[0]
     assert call["response_format"]["type"] == "json_schema"
     assert call["model"] == "gpt-4o"
-
-
-async def test_private_summary_is_plain_text():
-    client = FakeClient("  a quiet chat about plans  ")
-    summarizer = ChatCompletionsSummarizer(client)
-
-    summary = await summarizer.summarize_private(
-        transcript="Ada: hi",
-        previous_summary="",
-    )
-
-    assert summary == "a quiet chat about plans"
-    assert "response_format" not in client.chat.completions.calls[0]

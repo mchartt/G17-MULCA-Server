@@ -48,6 +48,15 @@ class ConversationPort(Protocol):
         """A private conversation is never written to long-term memory."""
         ...
 
+    @property
+    def linked_conversation_id(self) -> str | None:
+        """
+        For a DM: the group conversation_id it's allowed one-way read access
+        to (its sender is a recognized participant of that instance), or
+        None if unrecognized. Meaningless when is_private is False.
+        """
+        ...
+
     def participants(self) -> dict[int, str]:
         ...
 
@@ -76,14 +85,6 @@ class Summarizer(Protocol):
         previous_roles: str,
     ) -> tuple[str, str]:
         """Returns (history_summary, participant_roles_summary)."""
-        ...
-
-    async def summarize_private(
-        self,
-        *,
-        transcript: str,
-        previous_summary: str,
-    ) -> str:
         ...
 
 
