@@ -359,8 +359,10 @@ class Conversation:
         # Serializes text turns end to end (judge -> act -> reply), so a
         # second utterance can never be attributed to the wrong decision --
         # found from a real duplicate/missing episodic-log entry, not
-        # hypothetically. Text only: audio's own self-interrupt reflex is a
-        # deliberate, separate exception and does not go through here.
+        # hypothetically. Text only: this call site is only reachable from
+        # route_user_text, since audio never calls on_utterance in the
+        # first place (see _ask_observers_to_consider below) -- audio's own
+        # self-interrupt reflex handles overlap instead.
         await self._policy.wait_for_turn_to_finish()
 
     async def route_participants(
@@ -606,6 +608,10 @@ class Conversation:
         if current_speaker is not None:
             return
 
+        # Goes straight to the observers, bypassing CoalaPolicy.on_utterance
+        # entirely -- spoken turns are not appended to working memory, get
+        # no trigger variables, no forced-intervention check, and no
+        # episodic log entry, unlike text.
         self._ask_observers_to_consider(old_speaker)
 
     def _ask_observers_to_consider(self, speaker: int) -> None:

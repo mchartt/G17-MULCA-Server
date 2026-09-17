@@ -166,6 +166,14 @@ class CoalaPolicy:
         )
 
     async def on_utterance(self, utterance: Utterance) -> bool:
+        """
+        Text-only today: Conversation calls this from route_user_text, but
+        audio's _on_speaker_changed calls _ask_observers_to_consider
+        directly and never reaches here, so spoken turns get none of what
+        this method does (history/trigger-variable/forced-intervention
+        handling, or the turn-serialization state below).
+        """
+
         wm = self._wm
         port = self._port
         assert wm is not None and port is not None
