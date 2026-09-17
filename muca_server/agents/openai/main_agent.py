@@ -44,18 +44,21 @@ class MainAgentOpenAI(MainAgent):
     """
     Speaks on OpenAI's Realtime API, and summarizes on Chat Completions.
 
-    Undocumented until now: this is not the "stateless main LLM" originally
-    specified. The old prototype used Chat Completions (genuinely stateless
-    -- one HTTP call, full history resent as text every time). Realtime
-    requires a persistent connection instead, needed for audio output;
-    once that connection exists, it inherently accumulates every
-    conversation item pushed to it, for as long as it stays open,
-    regardless of anything below. `instructions` (persona/task/summary/
-    directive) really is rebuilt fresh every call, matching the original
-    design -- but that is only half the prompt. The other half, what was actually
-    said, lives in the session, not in anything resent per call. This is
-    why a restart matters here in a way "stateless" would not have implied:
-    a freshly-opened session has no memory of anything, and only
+    Persona and task are sent once, at connect, the same way
+    InterventionAgentOpenAI sends its own -- not "the stateless main LLM"
+    originally specified. The old prototype used Chat Completions (genuinely
+    stateless -- one HTTP call, full history resent as text every time).
+    Realtime requires a persistent connection instead, needed for audio
+    output; once that connection exists, it inherently accumulates every
+    conversation item pushed to it, for as long as it stays open. Per-turn
+    content (summary/recent-tail/directive, built by
+    CoalaPolicy._render_prompt) is pushed as a plain conversation item in
+    `_trigger_response` rather than folded into a rebuilt `instructions`
+    string, since `session.update` replaces `instructions` rather than
+    merging it -- overwriting it every turn would silently drop the
+    persona/task sent at connect from every response after the first. This
+    is why a restart matters here in a way "stateless" would not have
+    implied: a freshly-opened session has no memory of anything, and only
     CoalaPolicy._render_prompt's verbatim-tail blocks (not this class) give
     it back what it lost.
 
@@ -68,16 +71,23 @@ class MainAgentOpenAI(MainAgent):
         *,
         options: MainAgentOptions,
         client: AsyncOpenAI,
+        persona: str = "",
+        task_knowledge: str = "",
         model: str = DEFAULT_REALTIME_MODEL,
     ) -> None:
         super().__init__(options=options)
 
         self._client = client
+        self._persona = persona
+        self._task_knowledge = task_knowledge
         self._model = model
 
         self._connection_manager = None
         self._connection = None
         self._receive_task: asyncio.Task[None] | None = None
+
+    def _build_instructions(self) -> str:
+        return f"{self._persona}\n\nTask context:\n{self._task_knowledge}"
 
     async def _connect(self) -> None:
         self._connection_manager = self._client.realtime.connect(
@@ -91,6 +101,7 @@ class MainAgentOpenAI(MainAgent):
             session={
                 "type": "realtime",
                 "output_modalities": ["audio"],
+                "instructions": self._build_instructions(),
             }
         )
         self.capabilities = self._read_capabilities(session)
@@ -148,14 +159,22 @@ class MainAgentOpenAI(MainAgent):
         if self._connection is None:
             return
 
-        # The cognition layer rebuilds the full prompt every turn, so the
-        # session's instructions are replaced rather than appended to.
-        await self._connection.session.update(
-            session={
-                "type": "realtime",
-                "instructions": instructions,
-            }
-        )
+        # Pushed as an item, not folded into session.instructions -- a
+        # session.update there would replace (not merge with) the
+        # persona/task sent once at connect. This is CoalaPolicy
+        # ._render_prompt's per-turn output (summary/recent-tail/directive
+        # etc); empty when nothing new needs saying this turn.
+        if instructions:
+            await self._connection.conversation.item.create(
+                item={
+                    "type": "message",
+                    "role": "system",
+                    "content": [
+                        {"type": "input_text", "text": instructions},
+                    ],
+                }
+            )
+
         await self._connection.response.create()
         # Marks a response as in flight so a later interrupt=True actually
         # has something to cancel instead of erroring on nothing.
@@ -201,11 +220,20 @@ class MainAgentOpenAI(MainAgent):
                 # this branch assistant_text was always empty downstream.
                 await self._stream_text(event.delta)
 
-            case (
-                "response.output_text.done"
-                | "response.output_audio_transcript.done"
-                | "response.done"
-            ):
+            case "response.done":
+                # response.output_text.done/response.output_audio_transcript
+                # .done also fire, but response.done is the one signal
+                # common to both modalities and guaranteed to fire exactly
+                # once per response -- including both in this branch (as
+                # this used to) double-fires is_final=True for an
+                # audio-modality response (both events fire for the same
+                # response), which raced CoalaPolicy's turn-completion
+                # tracking: a stale second is_final for a finished turn
+                # could resolve a *later* turn's still-pending record
+                # instead, dropping its real reply from the episodic log.
+                # Confirmed live: found via a two-turn scratch test where
+                # the second turn's assistant_output logged as None despite
+                # a real reply streaming to the client.
                 await self._stream_text("", is_final=True)
 
             case "input_audio_buffer.speech_started":

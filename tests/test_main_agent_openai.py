@@ -10,11 +10,40 @@ from muca_server.agents.openai.main_agent import MainAgentOpenAI
 from muca_server.agents.options import MainAgentOptions
 
 
-def make_agent() -> MainAgentOpenAI:
+def make_agent(**kwargs) -> MainAgentOpenAI:
     return MainAgentOpenAI(
         options=MainAgentOptions(),
         client=object(),
+        **kwargs,
     )
+
+
+class FakeItems:
+    def __init__(self, calls: list) -> None:
+        self._calls = calls
+
+    async def create(self, *, item: dict) -> None:
+        self._calls.append(item)
+
+
+class FakeConversation:
+    def __init__(self, calls: list) -> None:
+        self.item = FakeItems(calls)
+
+
+class FakeResponse:
+    def __init__(self) -> None:
+        self.created = 0
+
+    async def create(self) -> None:
+        self.created += 1
+
+
+class FakeConnection:
+    def __init__(self) -> None:
+        self.item_calls: list = []
+        self.conversation = FakeConversation(self.item_calls)
+        self.response = FakeResponse()
 
 
 def audio_delta(data: bytes) -> ResponseAudioDeltaEvent:
@@ -123,3 +152,48 @@ def _speech_event(event_type: str):
         type = event_type
 
     return _Event()
+
+
+def test_persona_and_task_are_combined_for_the_connect_time_instructions():
+    agent = make_agent(persona="You are MULCA.", task_knowledge="Keep the peace.")
+
+    instructions = agent._build_instructions()
+
+    assert "You are MULCA." in instructions
+    assert "Keep the peace." in instructions
+
+
+async def test_trigger_response_pushes_per_turn_content_as_an_item_not_session_instructions():
+    agent = make_agent()
+    agent._connection = FakeConnection()
+
+    await agent._trigger_response(
+        max_tokens=None,
+        instructions="Current directive:\nSay hello.",
+        add_to_conversation=True,
+    )
+
+    assert agent._connection.item_calls == [
+        {
+            "type": "message",
+            "role": "system",
+            "content": [
+                {"type": "input_text", "text": "Current directive:\nSay hello."},
+            ],
+        }
+    ]
+    assert agent._connection.response.created == 1
+
+
+async def test_trigger_response_pushes_nothing_when_there_is_no_new_content():
+    agent = make_agent()
+    agent._connection = FakeConnection()
+
+    await agent._trigger_response(
+        max_tokens=None,
+        instructions="",
+        add_to_conversation=True,
+    )
+
+    assert agent._connection.item_calls == []
+    assert agent._connection.response.created == 1

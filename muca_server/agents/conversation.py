@@ -764,6 +764,17 @@ class Conversation:
         if is_final:
             reply = "".join(self._assistant_reply)
             self._assistant_reply.clear()
+
+            # Observers otherwise only ever hear that MULCA spoke (the
+            # generic "started/stopped speaking" notices below), never what
+            # it actually said -- a blind spot found while auditing history
+            # symmetry between the main and intervention agents.
+            if reply and self._main_agent is not None:
+                spoken = f"{self._main_agent.name}: {reply}"
+                for agent in list(self._auxiliary_agents.values()):
+                    if agent.listen_to_assistant:
+                        await agent.send_text(spoken, role="user")
+
             await self._policy.on_assistant_output(
                 reply,
                 interrupted=False,

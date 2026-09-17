@@ -72,6 +72,17 @@ def record_audio(agent) -> list:
     return received
 
 
+def record_text(agent) -> list:
+    received: list = []
+
+    async def send(text: str, *, role: str = "system") -> None:
+        received.append(text)
+
+    agent._send_text = send
+
+    return received
+
+
 def record_triggers(agent) -> list:
     calls: list = []
 
@@ -260,6 +271,20 @@ async def test_playback_audio_only_reaches_observers_while_answering():
     conversation.main_agent_state = MainAgentState.ANSWERING
     await conversation.route_playback_frame(playback)
     assert len(received) == 1
+
+
+async def test_the_assistants_own_reply_reaches_observers_listening_to_it():
+    _, conversation, _ = make_conversation()
+    await conversation.start()
+    await conversation.create_auxiliary_agent(create_auxiliary())
+
+    auxiliary = next(iter(conversation.auxiliary_agents.values()))
+    assert auxiliary.listen_to_assistant
+    received = record_text(auxiliary)
+
+    await conversation._handle_main_agent_text("Hello there.", True)
+
+    assert received == [f"{conversation.main_agent.name}: Hello there."]
 
 
 async def test_playback_position_is_recorded_for_truncation():

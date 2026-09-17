@@ -27,11 +27,13 @@ class OpenAIAgentFactory:
         *,
         client: AsyncOpenAI,
         strategies: StrategyStore,
+        main_persona: str,
         intervention_persona: str,
         task_knowledge: str,
     ) -> None:
         self._client = client
         self._strategies = strategies
+        self._main_persona = main_persona
         self._intervention_persona = intervention_persona
         self._task_knowledge = task_knowledge
 
@@ -39,7 +41,12 @@ class OpenAIAgentFactory:
         self,
         options: MainAgentOptions,
     ) -> MainAgent:
-        return MainAgentOpenAI(options=options, client=self._client)
+        return MainAgentOpenAI(
+            options=options,
+            client=self._client,
+            persona=self._main_persona,
+            task_knowledge=self._task_knowledge,
+        )
 
     def build_auxiliary(
         self,

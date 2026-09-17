@@ -59,6 +59,7 @@ def build_app():
     agent_factory = OpenAIAgentFactory(
         client=client,
         strategies=strategy_store,
+        main_persona=main_persona,
         intervention_persona=intervention_persona,
         task_knowledge=task_knowledge,
     )
@@ -88,8 +89,6 @@ def build_app():
     def policy_factory(context) -> CoalaPolicy:
         return CoalaPolicy(
             strategy_store=strategy_store,
-            main_persona=main_persona,
-            main_task=task_knowledge,
             store_factory=store_factory,
             summarizer=summarizer,
             assistant_name=ASSISTANT_NAME,

@@ -70,8 +70,6 @@ def make_policy(**kwargs) -> tuple[CoalaPolicy, FakePort]:
 
     policy = CoalaPolicy(
         strategy_store=STRATEGIES,
-        main_persona="You are MULCA.",
-        main_task="Keep the peace.",
         episodic_store=episodic,
         **kwargs,
     )
@@ -188,8 +186,6 @@ async def test_provide_summary_always_retrieves_regardless_of_the_signal():
     )
     policy = CoalaPolicy(
         strategy_store=strategies,
-        main_persona="p",
-        main_task="t",
         episodic_store=episodic,
     )
     port = FakePort()

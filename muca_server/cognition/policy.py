@@ -42,8 +42,6 @@ class CoalaPolicy:
         self,
         *,
         strategy_store: StrategyStore,
-        main_persona: str,
-        main_task: str,
         assistant_id: int = 0,
         assistant_name: str = "",
         episodic_store: EpisodicStore | None = None,
@@ -58,8 +56,6 @@ class CoalaPolicy:
         turn_timeout_seconds: float = TURN_TIMEOUT_SECONDS,
     ) -> None:
         self._strategies = strategy_store
-        self._main_persona = main_persona
-        self._main_task = main_task
         self._assistant_id = assistant_id
         self._assistant_name = assistant_name
         self._episodic_store = episodic_store
@@ -109,8 +105,6 @@ class CoalaPolicy:
         wm = WorkingMemory(
             conversation_id=port.conversation_id,
             assistant_id=self._assistant_id,
-            main_persona=self._main_persona,
-            main_task_knowledge=self._main_task,
         )
 
         if self._snapshot_store is not None and not port.is_private:
@@ -585,10 +579,12 @@ class CoalaPolicy:
         directive: str,
     ) -> str:
         """
-        Assemble the main agent's full instructions for this turn.
-
-        Ported from MULCA's `MainLLM` prompt assembly, moved here because it
-        needs working memory the agent itself does not hold.
+        Assemble this turn's payload for the main agent -- everything
+        *except* persona/task, which MainAgentOpenAI sends once at connect
+        (session.update replaces rather than merges instructions, so
+        resending them here every turn would just be waste, not safety).
+        Pushed as a conversation item, not a session-instructions
+        overwrite -- see MainAgentOpenAI._trigger_response.
         """
 
         summary_block = (
@@ -641,8 +637,6 @@ class CoalaPolicy:
         )
 
         return (
-            f"{wm.main_persona}\n\n"
-            f"Task context:\n{wm.main_task_knowledge}\n\n"
             f"{summary_block}"
             f"{recent_block}"
             f"{linked_tail_block}"

@@ -99,8 +99,6 @@ async def test_an_observers_signal_reaches_the_main_agent():
     factory = FixedAgentFactory()
     policy = CoalaPolicy(
         strategy_store=STRATEGIES,
-        main_persona="You are MULCA.",
-        main_task="Keep the peace.",
     )
 
     conversation = Conversation(
@@ -146,8 +144,6 @@ async def test_the_observer_declining_produces_no_reply():
     factory = FixedAgentFactory()
     policy = CoalaPolicy(
         strategy_store=STRATEGIES,
-        main_persona="You are MULCA.",
-        main_task="Keep the peace.",
     )
 
     conversation = Conversation(

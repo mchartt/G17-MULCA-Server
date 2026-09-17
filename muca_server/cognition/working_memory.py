@@ -23,10 +23,6 @@ class WorkingMemory:
 
     # Set once, from config.
     assistant_id: int = 0
-    main_persona: str = ""
-    main_task_knowledge: str = ""
-    intervention_persona: str = ""
-    intervention_task_knowledge: str = ""
 
     # Per turn.
     history: list[Utterance] = field(default_factory=list)
