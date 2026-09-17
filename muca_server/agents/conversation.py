@@ -301,6 +301,16 @@ class Conversation:
         Unlike audio, which arrives as a stream of frames the server has to
         read a speaker out of, a text message is a whole turn the moment it
         arrives: it opens and closes in one step.
+
+        Ordering invariant: the raw utterance is forwarded to observers here,
+        *before* `self._policy.on_utterance(...)` runs below. That call is
+        what appends this utterance to working memory and computes trigger
+        variables from it, and `CoalaPolicy.on_utterance` then sends those
+        variables to the same observers as a second message. So an observer
+        always sees (this turn's utterance, then this turn's variables) in
+        that order, both before it's ever asked to decide anything -- reorder
+        either side of this and an observer would be asked to judge before
+        seeing one half of this turn's information.
         """
 
         if message.speaker_name:
@@ -421,6 +431,10 @@ class Conversation:
     ) -> None:
         options = AuxiliaryAgentOptions.for_type(
             message.auxiliary_agent_type,
+            # Otherwise the intervention agent always thought it was
+            # watching a group channel, even inside a DM where every message
+            # is unambiguously addressed to it.
+            is_dm=self._is_private,
         )
 
         agent = self._agent_factory.build_auxiliary(options)

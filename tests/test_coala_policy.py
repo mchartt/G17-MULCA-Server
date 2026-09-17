@@ -222,3 +222,18 @@ async def test_an_assistant_reply_is_appended_to_history():
 
     assert policy._wm.history[-1].content == "Hello there."
     assert policy._wm.history[-1].speaker_id == 0
+
+
+async def test_a_present_but_silent_participant_reaches_trigger_variables():
+    # Exercises the real wiring (port.participants() -> on_utterance ->
+    # compute_trigger_variables), not just the pure function in isolation --
+    # this is what the roster message from the Discord/client side feeds.
+    policy, port = make_policy()
+    await policy.start(port)
+    port._participants = {1: "Ada", 2: "Grace"}
+
+    await policy.on_utterance(make_utterance(speaker_id=1, name="Ada"))
+
+    variables = policy._wm.trigger_variables
+    assert variables["participant_message_counts"] == {"Ada": 1, "Grace": 0}
+    assert variables["gini_index"] > 0.0

@@ -29,13 +29,11 @@ class OpenAIAgentFactory:
         strategies: StrategyStore,
         intervention_persona: str,
         task_knowledge: str,
-        is_dm: bool = False,
     ) -> None:
         self._client = client
         self._strategies = strategies
         self._intervention_persona = intervention_persona
         self._task_knowledge = task_knowledge
-        self._is_dm = is_dm
 
     def build_main(
         self,
@@ -54,7 +52,9 @@ class OpenAIAgentFactory:
                 strategies=self._strategies,
                 persona=self._intervention_persona,
                 task_knowledge=self._task_knowledge,
-                is_dm=self._is_dm,
+                # Per-session, not per-deployment: one factory instance is
+                # shared across every conversation, group and DM alike.
+                is_dm=options.is_dm,
             )
 
         return AuxiliaryAgent(options=options)

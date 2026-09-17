@@ -1,3 +1,5 @@
+import pytest
+
 from muca_server.cognition import Utterance, compute_trigger_variables, gini_index
 
 
@@ -27,6 +29,14 @@ def test_gini_index_rises_with_imbalance():
     imbalanced = gini_index([9, 1])
 
     assert imbalanced > balanced
+
+
+def test_gini_index_matches_hand_computed_values():
+    # Pins the formula itself, not just its direction, against values worked
+    # out independently by hand (standard discrete Gini coefficient).
+    assert gini_index([1, 3]) == 0.25
+    # Max inequality for n=3 (one person has everything) is exactly (n-1)/n.
+    assert gini_index([0, 0, 4]) == pytest.approx(2 / 3)
 
 
 def test_the_assistant_is_excluded_from_participation_stats():

@@ -121,6 +121,9 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
             return
 
         await self._connection.response.create()
+        # Marks a response as in flight so a later interrupt=True actually
+        # has something to cancel instead of erroring on nothing.
+        self._response_active = True
 
     async def _cancel_response(self) -> None:
         if self._connection is None:
@@ -147,6 +150,10 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
         """
 
         if event.type == "error":
+            # Terminal for this response, same as response.done below -- keeps
+            # a later interrupt=True from cancelling a response that already
+            # ended (in this case, by erroring) on its own.
+            self._response_active = False
             logger.warning(
                 "Intervention agent %s got a provider error: %s",
                 self.guid,
@@ -177,6 +184,7 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
             return
 
         if event.type == "response.done":
+            self._response_active = False
             signal, self._pending_signal = (
                 self._pending_signal,
                 None,
@@ -274,5 +282,12 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
             "conversational reply yourself; your only job is this "
             "judgment call.\n\n"
             "Available strategies:\n"
-            f"{self._strategies.catalog_for_prompt()}"
+            f"{self._strategies.catalog_for_prompt()}\n\n"
+            "This session keeps growing for as long as the conversation "
+            "lasts, so most of what you see below at any given moment is "
+            "history, not something to react to now. Each time you're "
+            "asked to decide, your judgment is about the most recent "
+            "message and the most recent 'Current trigger variables' "
+            "update specifically -- not something earlier in this "
+            "conversation you may already have reacted to."
         )

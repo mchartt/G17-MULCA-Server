@@ -145,6 +145,9 @@ class MainAgentOpenAI(MainAgent):
             }
         )
         await self._connection.response.create()
+        # Marks a response as in flight so a later interrupt=True actually
+        # has something to cancel instead of erroring on nothing.
+        self._response_active = True
 
     async def _cancel_response(self) -> None:
         if self._connection is None:
@@ -162,6 +165,12 @@ class MainAgentOpenAI(MainAgent):
             await self._interpret(event)
 
     async def _interpret(self, event) -> None:
+        if event.type in ("response.done", "error"):
+            # Both are terminal for this response -- clearing this here,
+            # not just on success, is what keeps a later interrupt=True from
+            # cancelling a response that already ended on its own.
+            self._response_active = False
+
         match event.type:
             case "response.output_audio.delta":
                 await self._stream_audio(
@@ -170,10 +179,21 @@ class MainAgentOpenAI(MainAgent):
                     )
                 )
 
-            case "response.output_text.delta":
+            case (
+                "response.output_text.delta"
+                | "response.output_audio_transcript.delta"
+            ):
+                # The GA Realtime API names the spoken-word transcript event
+                # differently for an audio-modality response than for a
+                # text-modality one; this agent requests audio, so without
+                # this branch assistant_text was always empty downstream.
                 await self._stream_text(event.delta)
 
-            case "response.output_text.done" | "response.done":
+            case (
+                "response.output_text.done"
+                | "response.output_audio_transcript.done"
+                | "response.done"
+            ):
                 await self._stream_text("", is_final=True)
 
             case "input_audio_buffer.speech_started":

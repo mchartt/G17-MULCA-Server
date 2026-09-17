@@ -24,6 +24,13 @@ class RealtimeAgent:
     def __init__(self) -> None:
         self._connected = False
 
+        # Whether the provider currently has an unfinished response; a
+        # provider subclass flips this from its own _trigger_response/
+        # _interpret. Tracked here (not just left to interrupt_response) so
+        # a redundant cancel is never sent -- OpenAI's Realtime API errors on
+        # cancelling when nothing is active, it does not treat it as a no-op.
+        self._response_active = False
+
         # Raw provider messages, exactly as they arrive.
         self.on_message: MessageHandler | None = None
 
@@ -82,6 +89,12 @@ class RealtimeAgent:
         )
 
     async def interrupt_response(self) -> None:
+        if not self._response_active:
+            # Nothing to cancel: skip the call rather than sending it anyway,
+            # since trigger_response's interrupt=True default would otherwise
+            # send a cancel on every ordinary turn, not just a real interrupt.
+            return
+
         await self._cancel_response()
 
     async def _handle_provider_message(self, raw: str) -> None:

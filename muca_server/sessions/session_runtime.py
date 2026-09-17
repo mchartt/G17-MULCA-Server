@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import asyncio
 import logging
 from contextlib import suppress
@@ -55,9 +54,12 @@ class SessionRuntime:
                 timeout=CLIENT_AUTHENTICATION_TIMEOUT,
             )
         
-            message = json.loads(raw_message)
-        
-            if message.get("event") not in CONNECT_EVENTS:
+            try:
+                message = parse_incoming_message(raw_message)
+            except Exception:
+                message = None
+
+            if message is None or message.event not in CONNECT_EVENTS:
                 logger.warning(
                     "Session %s failed identification, closing websocket",
                     self.session_id,
@@ -68,6 +70,11 @@ class SessionRuntime:
                 )
                 return
             else:
+                # Apply the handshake's identity (conversation_id, is_dm)
+                # before the session's components start, so working memory
+                # is created under the right scope/privacy from the first
+                # turn onward -- not after the fact.
+                await dispatch(message, self.agent_router)
                 await self.start()
                 await self.receive_loop()
 

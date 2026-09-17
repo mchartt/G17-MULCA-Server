@@ -55,10 +55,17 @@ class AuxiliaryAgentOptions(AgentOptions):
     # None means every user.
     listened_users: list[int] | None = None
 
+    # Whether *this session's* conversation is a private DM -- read off the
+    # conversation at creation time, not fixed per deployment, since one
+    # server handles both group and DM sessions with the same factory.
+    is_dm: bool = False
+
     @classmethod
     def for_type(
         cls,
         auxiliary_agent_type: str,
+        *,
+        is_dm: bool = False,
     ) -> "AuxiliaryAgentOptions":
         """Build options for one of the agent types the client can ask for."""
 
@@ -67,6 +74,7 @@ class AuxiliaryAgentOptions(AgentOptions):
                 agent_type=INTERVENTION_DETECTION,
                 listen_to_assistant=True,
                 listened_users=None,
+                is_dm=is_dm,
             )
 
-        return cls(agent_type=auxiliary_agent_type)
+        return cls(agent_type=auxiliary_agent_type, is_dm=is_dm)

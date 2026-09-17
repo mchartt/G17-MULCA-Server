@@ -8,6 +8,7 @@ once an observer has judged whether to act.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from uuid import UUID
@@ -121,12 +122,39 @@ class CoalaPolicy:
         wm.append_history(utterance)
         wm.increment_message_count()
 
+        participants = port.participants()
         wm.set_trigger_variables(
             compute_trigger_variables(
                 wm.history,
                 assistant_id=self._assistant_id,
-                participants=port.participants(),
+                participants=participants,
             )
+        )
+        # TODO: remove once live-tested (mirrors the old MULCA prototype's
+        # orchestrator.py debug print of roster + trigger_variables).
+        print(
+            f"[MUCA debug] {wm.conversation_id} participants={participants} "
+            f"gini_index={wm.trigger_variables['gini_index']} "
+            f"participant_message_counts={wm.trigger_variables['participant_message_counts']}"
+        )
+
+        # The observer only ever sees raw utterance text otherwise (routed
+        # straight to its session by Conversation) -- a numeric-threshold
+        # strategy like participation_equality has no way to judge against a
+        # threshold it is never actually told.
+        cooling_down = [
+            strategy.id
+            for strategy in self._strategies.all()
+            if wm.strategy_in_cooldown(strategy)
+        ]
+        cooldown_note = (
+            f" Currently in cooldown, do not select: {cooling_down}."
+            if cooling_down
+            else ""
+        )
+        await port.tell_observers(
+            "Current trigger variables: "
+            f"{json.dumps(wm.trigger_variables)}.{cooldown_note}"
         )
 
         forced = check_forced_intervention(utterance)
@@ -156,14 +184,23 @@ class CoalaPolicy:
         strategy_id = signal.strategy_id if signal else None
         prompt_fragment = signal.prompt_fragment if signal else None
         needs_history = bool(signal and signal.needs_history)
+        needs_web_search = bool(signal and signal.needs_web_search)
+
+        # print(), not logger.debug(): nothing in this project configures a
+        # logging level yet, so debug/info calls are otherwise invisible.
+        print(
+            f"[MUCA debug] {wm.conversation_id} intervention decision: "
+            f"strategy_id={strategy_id!r} prompt_fragment={prompt_fragment!r} "
+            f"needs_history={needs_history} needs_web_search={needs_web_search}"
+        )
 
         # Hard veto: not a request the model might ignore, the guarantee.
         if strategy_id is not None:
             strategy = self._strategies.get(strategy_id)
             if strategy is not None and wm.strategy_in_cooldown(strategy):
-                logger.debug(
-                    "Vetoing %s: still in cooldown",
-                    strategy_id,
+                print(
+                    f"[MUCA debug] {wm.conversation_id} vetoed "
+                    f"{strategy_id!r}: still in cooldown"
                 )
                 strategy_id = None
                 prompt_fragment = None
