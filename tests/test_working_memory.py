@@ -1,4 +1,4 @@
-from muca_server.cognition import WorkingMemory
+from muca_server.cognition import Utterance, WorkingMemory
 from muca_server.cognition.strategies import Strategy
 
 
@@ -85,3 +85,33 @@ def test_clear_turn_output_forgets_everything_from_the_turn():
     assert wm.latest_prompt_fragment is None
     assert wm.forced_context is None
     assert wm.retrieved_context is None
+
+
+def test_transcript_includes_the_assistant_by_default():
+    wm = WorkingMemory(conversation_id="c1", assistant_id=0)
+    wm.append_history(
+        Utterance(speaker_id=1, speaker_name="Ada", content="hi", timestamp_ms=1)
+    )
+    wm.append_history(
+        Utterance(speaker_id=0, speaker_name="MULCA", content="hello", timestamp_ms=2)
+    )
+
+    transcript = wm.transcript()
+
+    assert "Ada: hi" in transcript
+    assert "MULCA: hello" in transcript
+
+
+def test_transcript_can_exclude_the_assistant_for_the_summarizer():
+    wm = WorkingMemory(conversation_id="c1", assistant_id=0)
+    wm.append_history(
+        Utterance(speaker_id=1, speaker_name="Ada", content="hi", timestamp_ms=1)
+    )
+    wm.append_history(
+        Utterance(speaker_id=0, speaker_name="MULCA", content="hello", timestamp_ms=2)
+    )
+
+    transcript = wm.transcript(exclude_assistant=True)
+
+    assert "Ada: hi" in transcript
+    assert "MULCA" not in transcript

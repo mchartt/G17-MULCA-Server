@@ -50,6 +50,12 @@ class WorkingMemory:
     history_summary: str = ""
     participant_roles_summary: str = ""
 
+    # A DM's mirror of its linked group's own raw tail (CoalaPolicy
+    # ._apply_linked_group_context) -- kept separate from `history` above,
+    # which is this conversation's own messages, not the linked group's.
+    # Always empty for a group's own WM; this concept only applies to DMs.
+    linked_history_tail: list[Utterance] = field(default_factory=list)
+
     def append_history(self, utterance: Utterance) -> None:
         self.history.append(utterance)
 
@@ -151,8 +157,25 @@ class WorkingMemory:
         self.forced_context = None
         self.retrieved_context = None
 
-    def transcript(self, limit: int = 20) -> str:
+    def transcript(
+        self,
+        limit: int = 20,
+        *,
+        exclude_assistant: bool = False,
+    ) -> str:
+        """
+        exclude_assistant=True is for the summarizer specifically (mirrors
+        compute_trigger_variables already excluding the assistant from
+        participation stats): MULCA is not a participant to describe roles
+        for, and its own turns are unaffected by anything a summary skips
+        forgetting -- they are never truncated out of the live session the
+        way a human's older messages functionally are. The main LLM's own
+        "recent messages" block still wants exclude_assistant=False, since
+        it should see what it itself just said for continuity.
+        """
+
         return "\n".join(
             f"{utterance.label()}: {utterance.content}"
             for utterance in self.history[-limit:]
+            if not exclude_assistant or utterance.speaker_id != self.assistant_id
         )

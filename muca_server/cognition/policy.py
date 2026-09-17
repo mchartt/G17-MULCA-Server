@@ -207,15 +207,23 @@ class CoalaPolicy:
         port: ConversationPort,
     ) -> None:
         """
-        Mirrors a linked group's summary directly into this DM's own
-        history_summary/participant_roles_summary -- reusing exactly the
-        fields (and _render_prompt's existing summary_block) a group already
-        uses for its own memory, rather than a separate DM-only concept.
-        This DM's own raw conversation still reaches the main/intervention
-        agents the normal way (Conversation forwards each utterance to their
-        live sessions directly) -- this only supplies what a DM's session
-        cannot otherwise see at all: the group's memory, since it lives in a
+        Mirrors a linked group's summary AND raw tail directly into this
+        DM's own WM -- reusing exactly the fields (and _render_prompt's
+        existing rendering) a group already uses for its own memory, rather
+        than a separate DM-only concept. This DM's own raw conversation
+        still reaches the main/intervention agents the normal way
+        (Conversation forwards each utterance to their live sessions
+        directly) -- this only supplies what a DM's session cannot
+        otherwise see at all: the group's memory, since it lives in a
         different session entirely.
+
+        Both the summary and the tail matter here, not just the summary:
+        the group's snapshot only gets saved every management_cycle_interval
+        messages (or on a clean group shutdown), so something said in the
+        group very recently may not be reflected in history_summary yet at
+        all. The tail is what covers that gap -- it is exactly the same raw
+        messages the group's own next management cycle will summarize, just
+        not compressed yet.
 
         Re-read on every message, not cached: the token cost of including
         this is the same either way, since the main LLM rebuilds its full
@@ -248,6 +256,9 @@ class CoalaPolicy:
             wm.participant_roles_summary = (
                 linked_snapshot.participant_roles_summary
             )
+            wm.linked_history_tail = [
+                stored.restore() for stored in linked_snapshot.history_tail
+            ]
 
     async def on_intervention_signal(
         self,
@@ -395,6 +406,12 @@ class CoalaPolicy:
                 )
             )
 
+        # Every turn, not just at a management cycle: otherwise a group's
+        # snapshot (and therefore anything a linked DM could mirror) simply
+        # doesn't exist at all until message management_cycle_interval, no
+        # matter how recently something relevant was actually said.
+        await self._save_snapshot()
+
         wm.clear_turn_output()
 
         if message_count % self._management_cycle_interval == 0:
@@ -416,7 +433,7 @@ class CoalaPolicy:
 
         history_summary, roles_summary = (
             await self._summarizer.summarize(
-                transcript=wm.transcript(),
+                transcript=wm.transcript(exclude_assistant=True),
                 previous_summary=wm.history_summary,
                 previous_roles=wm.participant_roles_summary,
             )
@@ -460,6 +477,34 @@ class CoalaPolicy:
             f"{wm.participant_roles_summary or '(none yet)'}\n\n"
         )
 
+        # General, not DM-specific: covers what the live session doesn't --
+        # e.g. after a restart, wm.history is restored from a snapshot but a
+        # freshly-connected session has never actually seen it. For an
+        # uninterrupted session this duplicates what the model already has
+        # live, which is harmless, just slightly redundant.
+        recent_block = (
+            f"Recent messages in this conversation, verbatim:\n{wm.transcript()}\n\n"
+            if wm.history
+            else ""
+        )
+
+        # Only ever non-empty for a DM from a recognized participant
+        # (CoalaPolicy._apply_linked_group_context) -- the group's own raw
+        # tail, covering what its own next management cycle would summarize
+        # but hasn't yet, since that group's snapshot may be more current
+        # than history_summary above (saved every turn, not just every
+        # management_cycle_interval messages).
+        linked_tail_block = (
+            "Recent messages in the linked group conversation, verbatim:\n"
+            + "\n".join(
+                f"{utterance.label()}: {utterance.content}"
+                for utterance in wm.linked_history_tail
+            )
+            + "\n\n"
+            if wm.linked_history_tail
+            else ""
+        )
+
         retrieved_block = (
             f"Retrieved conversation history:\n{wm.retrieved_context}\n\n"
             if wm.retrieved_context
@@ -478,6 +523,8 @@ class CoalaPolicy:
             f"{wm.main_persona}\n\n"
             f"Task context:\n{wm.main_task_knowledge}\n\n"
             f"{summary_block}"
+            f"{recent_block}"
+            f"{linked_tail_block}"
             f"{retrieved_block}"
             f"{directive_label}\n"
             f"{directive or 'Respond naturally as the ongoing conversation warrants.'}"

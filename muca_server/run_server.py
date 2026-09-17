@@ -36,6 +36,7 @@ ACTIVE_STRATEGY_IDS = [
     "non_offensive",
     "provide_summary",
 ]
+ASSISTANT_NAME = "MULCA"
 
 
 def build_app():
@@ -83,12 +84,18 @@ def build_app():
             main_task=task_knowledge,
             store_factory=store_factory,
             summarizer=summarizer,
+            assistant_name=ASSISTANT_NAME,
         )
 
     components_factory = DefaultSessionComponentsFactory(
         agent_factory=agent_factory,
         policy_factory=policy_factory,
-        main_agent_options=MainAgentOptions(),
+        # Without this, MainAgentOptions.name defaults to "ASSISTANT" -- the
+        # same missing-name bug as CoalaPolicy's assistant_name above, just
+        # in the Conversation layer: the intervention agent's own
+        # turn-tracking markers ("MAIN ASSISTANT (...) started speaking")
+        # would say "ASSISTANT" instead of "MULCA".
+        main_agent_options=MainAgentOptions(name=ASSISTANT_NAME),
     )
 
     return create_app(components_factory=components_factory)

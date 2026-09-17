@@ -4,6 +4,7 @@ from muca_server.cognition.memory import (
     InMemoryEpisodicStore,
     InMemorySnapshotStore,
     MemorySnapshot,
+    StoredUtterance,
 )
 from muca_server.cognition.strategies import Strategy, StrategyStore
 
@@ -237,6 +238,50 @@ async def test_an_assistant_reply_is_appended_to_history():
     assert policy._wm.history[-1].speaker_id == 0
 
 
+async def test_an_assistant_reply_is_labeled_by_name_not_user_0():
+    # The actual bug this covers: assistant_name defaulting to "" meant
+    # Utterance.label() fell back to f"User {speaker_id}" ("User 0"), so the
+    # summarizer (and anything else reading wm.history) saw MULCA's own
+    # replies as if they were an anonymous participant.
+    policy, port = make_policy(assistant_name="MULCA")
+    await policy.start(port)
+    await policy.on_utterance(make_utterance())
+
+    await policy.on_assistant_output("Hello there.", interrupted=False)
+
+    assert policy._wm.history[-1].label() == "MULCA"
+
+
+async def test_the_summarizer_never_sees_the_assistants_own_turns():
+    class RecordingSummarizer(FakeSummarizer):
+        def __init__(self):
+            self.seen_transcripts = []
+
+        async def summarize(self, *, transcript, previous_summary, previous_roles):
+            self.seen_transcripts.append(transcript)
+            return await super().summarize(
+                transcript=transcript,
+                previous_summary=previous_summary,
+                previous_roles=previous_roles,
+            )
+
+    summarizer = RecordingSummarizer()
+    policy, port = make_policy(
+        assistant_name="MULCA",
+        summarizer=summarizer,
+        management_cycle_interval=1,
+    )
+    await policy.start(port)
+
+    await policy.on_utterance(make_utterance(content="hi MULCA"))
+    await policy.on_assistant_output("Hello there.", interrupted=False)
+    await policy.on_intervention_signal(object(), None)
+
+    assert "hi MULCA" in summarizer.seen_transcripts[0]
+    assert "Hello there." not in summarizer.seen_transcripts[0]
+    assert "MULCA:" not in summarizer.seen_transcripts[0]
+
+
 async def test_a_present_but_silent_participant_reaches_trigger_variables():
     # Exercises the real wiring (port.participants() -> on_utterance ->
     # compute_trigger_variables), not just the pure function in isolation --
@@ -437,3 +482,82 @@ async def test_a_dm_gets_no_summarization_of_its_own_just_a_history_trim():
     # trimming is the only thing that happens, bounding raw history.
     assert policy._wm.history_summary == ""
     assert len(policy._wm.history) <= 2 + 1
+
+
+async def test_the_prompt_includes_this_conversation_verbatim_not_just_the_summary():
+    # Covers the restart case: a freshly-connected session has never
+    # actually seen wm.history (restored from a snapshot), so it has to
+    # reach the model through the prompt text, not just the live session.
+    policy, port = make_policy()
+    await policy.start(port)
+    await policy.on_utterance(make_utterance(content="the number is 6"))
+
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
+    )
+
+    assert "the number is 6" in port.instructions[0]
+
+
+async def test_a_groups_snapshot_saves_before_the_first_management_cycle():
+    # The bug this covers: "Mats says X in the group, then immediately DMs
+    # about X" failing because nothing had been saved yet -- a snapshot only
+    # existed once every management_cycle_interval messages, or on close().
+    snapshot_store = InMemorySnapshotStore()
+    policy, port = make_policy(
+        snapshot_store=snapshot_store,
+        management_cycle_interval=8,
+    )
+    await policy.start(port)
+
+    await policy.on_utterance(make_utterance(content="the number is 6"))
+    await policy.on_intervention_signal(object(), None)
+
+    saved = await snapshot_store.load(port.conversation_id)
+
+    assert saved is not None
+    assert any(u.content == "the number is 6" for u in saved.history_tail)
+
+
+async def test_a_dm_prompt_includes_the_linked_groups_verbatim_tail():
+    stores: dict[str, tuple] = {}
+
+    def store_factory(conversation_id):
+        return stores.setdefault(
+            conversation_id,
+            (InMemoryEpisodicStore(), InMemorySnapshotStore()),
+        )
+
+    _, group_snapshot_store = store_factory("instance:team-alpha")
+    await group_snapshot_store.save(
+        "instance:team-alpha",
+        MemorySnapshot(
+            history_tail=[
+                StoredUtterance(
+                    speaker_id=1,
+                    speaker_name="Mats",
+                    content="the number is 6",
+                    timestamp_ms=1,
+                ),
+            ],
+        ),
+    )
+
+    policy, port = make_policy(
+        store_factory=store_factory,
+        port=FakePort(
+            conversation_id="dm:153532335998894089",
+            is_private=True,
+            linked_conversation_id="instance:team-alpha",
+        ),
+    )
+    await policy.start(port)
+    await policy.on_utterance(make_utterance(content="what is the number?"))
+
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
+    )
+
+    assert "Mats: the number is 6" in port.instructions[0]
