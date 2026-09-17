@@ -85,6 +85,9 @@ class AlwaysAnswer:
     async def on_assistant_output(self, text, *, interrupted) -> None:
         self.replies.append(text)
 
+    async def wait_for_turn_to_finish(self) -> None:
+        pass
+
 
 def make_conversation():
     state = SessionState(session_id=uuid4())

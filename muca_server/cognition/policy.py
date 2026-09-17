@@ -8,6 +8,7 @@ once an observer has judged whether to act.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 RETRIEVAL_LIMIT = 50
 MANAGEMENT_CYCLE_INTERVAL = 8
+TURN_TIMEOUT_SECONDS = 30.0
 
 
 class CoalaPolicy:
@@ -53,6 +55,7 @@ class CoalaPolicy:
         summarizer: Summarizer | None = None,
         management_cycle_interval: int = MANAGEMENT_CYCLE_INTERVAL,
         retrieval_limit: int = RETRIEVAL_LIMIT,
+        turn_timeout_seconds: float = TURN_TIMEOUT_SECONDS,
     ) -> None:
         self._strategies = strategy_store
         self._main_persona = main_persona
@@ -70,9 +73,30 @@ class CoalaPolicy:
         self._summarizer = summarizer
         self._management_cycle_interval = management_cycle_interval
         self._retrieval_limit = retrieval_limit
+        self._turn_timeout_seconds = turn_timeout_seconds
 
         self._port: ConversationPort | None = None
         self._wm: WorkingMemory | None = None
+
+        # Turn serialization ("queued, not interleaved"), restored here
+        # after being silently lost when the intervention agent moved to
+        # an event-driven Realtime design -- its decision now arrives via
+        # a callback with no reference to which
+        # utterance it was judging, so a second utterance arriving before
+        # the first's decision resolved would corrupt attribution (found via
+        # a real duplicate/missing episodic-log entry, not hypothetically).
+        # Set whenever no turn is in progress; Conversation awaits it via
+        # wait_for_turn_to_finish() before processing the next utterance.
+        self._turn_done = asyncio.Event()
+        self._turn_done.set()
+        # The utterance the in-progress turn's eventual decision is about --
+        # captured once, not re-derived from wm.history[-1] later, which is
+        # exactly what could have moved on by the time a decision arrives.
+        self._pending_utterance: Utterance | None = None
+        # Deferred until on_assistant_output supplies the actual reply text,
+        # so the log captures what MULCA said, not just what triggered it --
+        # nothing ever wrote this before, at all.
+        self._pending_episodic_record: EpisodicRecord | None = None
 
     async def start(self, port: ConversationPort) -> None:
         self._port = port
@@ -186,6 +210,12 @@ class CoalaPolicy:
             f"{json.dumps(wm.trigger_variables)}.{cooldown_note}"
         )
 
+        # A decision -- forced or observer-judged -- is now pending for
+        # this exact utterance. Cleared again once that decision's whole
+        # cycle (including the assistant's reply, if any) resolves.
+        self._pending_utterance = utterance
+        self._turn_done.clear()
+
         forced = check_forced_intervention(utterance)
         if forced is None:
             return True
@@ -227,8 +257,8 @@ class CoalaPolicy:
 
         Re-read on every message, not cached: the token cost of including
         this is the same either way, since the main LLM rebuilds its full
-        prompt fresh every turn regardless (BLUEPRINT.md's "stateless main
-        LLM") -- caching would only reduce DB reads, at the cost of
+        prompt fresh every turn regardless (the "stateless main LLM"
+        design) -- caching would only reduce DB reads, at the cost of
         staleness, which matters for "ask individual questions whenever you
         want" over a long-running deployment. This never writes back to the
         linked conversation either way.
@@ -337,17 +367,77 @@ class CoalaPolicy:
         interrupted: bool,
     ) -> None:
         wm = self._wm
-        if wm is None or not text:
-            return
-
-        wm.append_history(
-            Utterance(
-                speaker_id=self._assistant_id,
-                speaker_name=self._assistant_name,
-                content=text,
-                timestamp_ms=int(time.time() * 1000),
+        if wm is not None and text:
+            wm.append_history(
+                Utterance(
+                    speaker_id=self._assistant_id,
+                    speaker_name=self._assistant_name,
+                    content=text,
+                    timestamp_ms=int(time.time() * 1000),
+                )
             )
-        )
+
+        # Resolves regardless of whether text was empty: a turn that
+        # triggered a reply but got nothing back (interrupted, or the model
+        # produced no output) still needs its pending record flushed and the
+        # turn marked done, or wait_for_turn_to_finish() would hang until
+        # its timeout for no reason.
+        await self._resolve_pending_turn(assistant_output=text or None)
+
+    async def wait_for_turn_to_finish(self) -> None:
+        """
+        Blocks until the turn started by the most recent on_utterance() call
+        has fully resolved -- Conversation awaits this before letting the
+        next utterance through, restoring the "queued, not interleaved"
+        guarantee for text (audio's own self-interrupt reflex is a
+        deliberate, separate exception -- this does not apply there).
+        """
+
+        try:
+            await asyncio.wait_for(
+                self._turn_done.wait(),
+                timeout=self._turn_timeout_seconds,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Turn for %s did not resolve within %.0fs -- forcing it "
+                "to finish so the conversation does not hang forever.",
+                self._wm.conversation_id if self._wm else "?",
+                self._turn_timeout_seconds,
+            )
+            await self._flush_pending_episodic_record()
+            self._pending_utterance = None
+            self._turn_done.set()
+
+    async def _resolve_pending_turn(
+        self,
+        *,
+        assistant_output: str | None,
+    ) -> None:
+        if self._pending_episodic_record is not None:
+            record = self._pending_episodic_record.model_copy(
+                update={"assistant_output": assistant_output},
+            )
+            self._pending_episodic_record = None
+            if self._episodic_store is not None:
+                await self._episodic_store.log(record)
+
+        self._pending_utterance = None
+        self._turn_done.set()
+
+    async def _flush_pending_episodic_record(self) -> None:
+        """
+        Logs a still-pending record as-is (no assistant_output) -- for a
+        turn whose reply never arrived, so it is not silently lost the next
+        time a record is about to be written.
+        """
+
+        if (
+            self._pending_episodic_record is not None
+            and self._episodic_store is not None
+        ):
+            await self._episodic_store.log(self._pending_episodic_record)
+        self._pending_episodic_record = None
 
     # ------------------------------------------------------------------
 
@@ -389,22 +479,38 @@ class CoalaPolicy:
         port = self._port
         assert wm is not None and port is not None
 
-        latest = wm.history[-1] if wm.history else None
+        # Not wm.history[-1]: by the time this runs, a second utterance
+        # could already have been appended to history if something upstream
+        # ever stops awaiting wait_for_turn_to_finish() again -- this is
+        # what actually ties the log entry to the utterance that caused it.
+        utterance = self._pending_utterance
         message_count = wm.total_message_count
 
         if not port.is_private and self._episodic_store is not None:
-            await self._episodic_store.log(
-                EpisodicRecord(
-                    timestamp=time.time(),
-                    conversation_id=port.conversation_id,
-                    intervention_path=path,
-                    speaker=latest.label() if latest else "",
-                    content=latest.content if latest else "",
-                    trigger_variables=dict(wm.trigger_variables),
-                    strategy_id=strategy_id,
-                    prompt_fragment=prompt_fragment,
-                )
+            # A record still sitting here means a previous turn's reply
+            # never arrived to attach itself to -- flush it plain rather
+            # than silently lose it when the line below replaces it.
+            await self._flush_pending_episodic_record()
+
+            record = EpisodicRecord(
+                timestamp=time.time(),
+                conversation_id=port.conversation_id,
+                intervention_path=path,
+                speaker=utterance.label() if utterance else "",
+                content=utterance.content if utterance else "",
+                trigger_variables=dict(wm.trigger_variables),
+                strategy_id=strategy_id,
+                prompt_fragment=prompt_fragment,
             )
+
+            if path == "none":
+                # Nothing was triggered, so there is no reply to wait for.
+                await self._episodic_store.log(record)
+            else:
+                # Written once on_assistant_output supplies the actual
+                # reply text, so the log captures what MULCA said, not
+                # just what triggered it -- this never happened before.
+                self._pending_episodic_record = record
 
         # Every turn, not just at a management cycle: otherwise a group's
         # snapshot (and therefore anything a linked DM could mirror) simply
@@ -423,6 +529,13 @@ class CoalaPolicy:
                 wm.trim_history(tail_size=self._management_cycle_interval)
             elif self._summarizer is not None:
                 await self._run_management_cycle(wm, port)
+
+        if path == "none":
+            # Nothing triggered, so nothing to wait for -- resolves this
+            # turn immediately instead of leaving it "in progress" until
+            # wait_for_turn_to_finish()'s timeout for no reason.
+            self._pending_utterance = None
+            self._turn_done.set()
 
     async def _run_management_cycle(
         self,

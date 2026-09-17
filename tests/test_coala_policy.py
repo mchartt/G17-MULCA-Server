@@ -1,3 +1,5 @@
+import asyncio
+
 from muca_server.cognition import CoalaPolicy, InterventionSignal, Utterance
 from muca_server.cognition.memory import (
     EpisodicRecord,
@@ -561,3 +563,104 @@ async def test_a_dm_prompt_includes_the_linked_groups_verbatim_tail():
     )
 
     assert "Mats: the number is 6" in port.instructions[0]
+
+
+async def test_episodic_log_attributes_to_the_pending_utterance_not_a_later_one():
+    # The actual bug this covers: _finish_turn used to read wm.history[-1],
+    # which could already be a *different* utterance by the time an
+    # observer's decision arrives (its callback carries no reference to
+    # which utterance it was judging) -- found from a real duplicate/
+    # missing episodic-log entry, not hypothetically.
+    episodic_store = InMemoryEpisodicStore()
+    policy, port = make_policy(episodic_store=episodic_store)
+    await policy.start(port)
+    await policy.on_utterance(make_utterance(content="message A"))
+
+    # Stands in for a second utterance's on_utterance() call landing before
+    # this decision resolves.
+    policy._wm.append_history(make_utterance(content="message B"))
+
+    await policy.on_intervention_signal(object(), None)
+
+    [record] = await episodic_store.recall_recent(port.conversation_id, 50)
+    assert record.content == "message A"
+
+
+async def test_the_episodic_log_captures_the_assistants_actual_reply():
+    # Nothing wrote this before at all -- the log wrote strategy_id/
+    # prompt_fragment (why MULCA was triggered), never what MULCA actually
+    # said, since the reply text does not exist yet at _finish_turn time.
+    episodic_store = InMemoryEpisodicStore()
+    policy, port = make_policy(episodic_store=episodic_store)
+    await policy.start(port)
+    await policy.on_utterance(make_utterance(content="hi"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
+    )
+
+    # Deferred: not written yet, since the reply hasn't arrived.
+    assert await episodic_store.recall_recent(port.conversation_id, 50) == []
+
+    await policy.on_assistant_output("Hello there.", interrupted=False)
+
+    [record] = await episodic_store.recall_recent(port.conversation_id, 50)
+    assert record.content == "hi"
+    assert record.assistant_output == "Hello there."
+
+
+async def test_wait_for_turn_to_finish_resolves_immediately_when_nothing_fired():
+    policy, port = make_policy()
+    await policy.start(port)
+    await policy.on_utterance(make_utterance())
+
+    waiter = asyncio.create_task(policy.wait_for_turn_to_finish())
+    await asyncio.sleep(0)
+    assert not waiter.done()
+
+    await policy.on_intervention_signal(object(), None)
+
+    await asyncio.wait_for(waiter, timeout=1)
+
+
+async def test_wait_for_turn_to_finish_waits_for_the_reply_when_one_fired():
+    policy, port = make_policy()
+    await policy.start(port)
+    await policy.on_utterance(make_utterance())
+
+    waiter = asyncio.create_task(policy.wait_for_turn_to_finish())
+    await asyncio.sleep(0)
+
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
+    )
+    await asyncio.sleep(0)
+    assert not waiter.done()  # a reply was triggered -- still waiting on it
+
+    await policy.on_assistant_output("Hi!", interrupted=False)
+
+    await asyncio.wait_for(waiter, timeout=1)
+
+
+async def test_wait_for_turn_to_finish_times_out_instead_of_hanging_forever():
+    episodic_store = InMemoryEpisodicStore()
+    policy, port = make_policy(
+        episodic_store=episodic_store,
+        turn_timeout_seconds=0.05,
+    )
+    await policy.start(port)
+    await policy.on_utterance(make_utterance(content="hi"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
+    )
+    # on_assistant_output is never called -- e.g. interrupted, or the model
+    # produced nothing.
+
+    await asyncio.wait_for(policy.wait_for_turn_to_finish(), timeout=1)
+
+    # The pending record still gets flushed, just without assistant_output.
+    [record] = await episodic_store.recall_recent(port.conversation_id, 50)
+    assert record.content == "hi"
+    assert record.assistant_output is None

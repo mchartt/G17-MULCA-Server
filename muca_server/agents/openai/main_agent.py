@@ -44,15 +44,15 @@ class MainAgentOpenAI(MainAgent):
     """
     Speaks on OpenAI's Realtime API, and summarizes on Chat Completions.
 
-    Undocumented until now: this is not the "stateless main LLM" the
-    blueprint originally specified. The old prototype used Chat Completions
-    (genuinely stateless -- one HTTP call, full history resent as text every
-    time). Realtime requires a persistent connection instead, needed for
-    audio output; once that connection exists, it inherently accumulates
-    every conversation item pushed to it, for as long as it stays open,
+    Undocumented until now: this is not the "stateless main LLM" originally
+    specified. The old prototype used Chat Completions (genuinely stateless
+    -- one HTTP call, full history resent as text every time). Realtime
+    requires a persistent connection instead, needed for audio output;
+    once that connection exists, it inherently accumulates every
+    conversation item pushed to it, for as long as it stays open,
     regardless of anything below. `instructions` (persona/task/summary/
-    directive) really is rebuilt fresh every call, matching the blueprint --
-    but that is only half the prompt. The other half, what was actually
+    directive) really is rebuilt fresh every call, matching the original
+    design -- but that is only half the prompt. The other half, what was actually
     said, lives in the session, not in anything resent per call. This is
     why a restart matters here in a way "stateless" would not have implied:
     a freshly-opened session has no memory of anything, and only

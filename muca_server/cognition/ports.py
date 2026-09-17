@@ -126,3 +126,13 @@ class CognitionPolicy(Protocol):
         interrupted: bool,
     ) -> None:
         ...
+
+    async def wait_for_turn_to_finish(self) -> None:
+        """
+        Blocks until the turn started by the most recent on_utterance() call
+        has fully resolved (decided, and if it triggered a reply, until that
+        reply's own text is known). Conversation awaits this before letting
+        the next utterance through, so a decision can never be attributed to
+        the wrong utterance because a second one arrived first.
+        """
+        ...

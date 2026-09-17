@@ -36,3 +36,6 @@ class NoCognition:
         interrupted: bool,
     ) -> None:
         pass
+
+    async def wait_for_turn_to_finish(self) -> None:
+        pass

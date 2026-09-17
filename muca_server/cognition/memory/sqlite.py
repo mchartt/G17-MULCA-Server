@@ -8,12 +8,12 @@ held open for the process lifetime: simpler, and safe under SQLite's own
 file-level locking at the write volume this project has (one row per turn,
 not a high-throughput log).
 
-RAG extension point (BLUEPRINT.md §12, not built here): retrieval today is
-purely recency-window (recall_recent), the same limitation the in-memory
-store has. Closing that gap needs no schema change to this table -- a
-future embeddings/FTS side-table can key off episodic_log's autoincrement
-`id`, and EpisodicStore.search() (or similar) can be added to the port
-without touching recall_recent() or any of its callers.
+RAG extension point, not built here: retrieval today is purely
+recency-window (recall_recent), the same limitation the in-memory store
+has. Closing that gap needs no schema change to this table -- a future
+embeddings/FTS side-table can key off episodic_log's autoincrement `id`,
+and EpisodicStore.search() (or similar) can be added to the port without
+touching recall_recent() or any of its callers.
 """
 
 from __future__ import annotations
@@ -116,9 +116,9 @@ class SqliteEpisodicStore:
             await _ensure_schema(db)
             db.row_factory = aiosqlite.Row
 
-            # Recency window, not relevance search (BLUEPRINT.md §12) --
-            # newest first here, then reversed below so callers get them
-            # chronological, matching the in-memory store's contract.
+            # Recency window, not relevance search -- newest first here,
+            # then reversed below so callers get them chronological,
+            # matching the in-memory store's contract.
             cursor = await db.execute(
                 """
                 SELECT * FROM episodic_log

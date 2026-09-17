@@ -12,6 +12,7 @@ Run with: python -m muca_server.run_server
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import uvicorn
 from dotenv import load_dotenv
@@ -38,6 +39,13 @@ ACTIVE_STRATEGY_IDS = [
 ]
 ASSISTANT_NAME = "MULCA"
 
+# Anchored to this package's own location, not the current working
+# directory -- a relative default here would mean restarting the server
+# from a different shell/cwd silently creates a second, empty database
+# instead of finding the one from before. Same pattern cognition/loader.py
+# already uses for config file resolution.
+DEFAULT_DB_DIR = Path(__file__).resolve().parent / "data"
+
 
 def build_app():
     load_dotenv()
@@ -56,21 +64,21 @@ def build_app():
     )
 
     # One SQLite file per conversation_id, not one shared file -- e.g. each
-    # of a deployment's Discord channels (BLUEPRINT.md's "Channel/instance
-    # scoping") gets its own database. The directory is what's fixed; the
+    # of a deployment's Discord channels (channel/instance scoping) gets
+    # its own database. The directory is what's fixed; the
     # filename is deterministically derived from conversation_id, so there's
     # nothing per-channel to separately configure here (that lives entirely
     # in the Discord-specific client, e.g. mulca_discord's instances.yaml --
     # this file never sees a channel id, only whatever conversation_id it's
     # handed).
-    db_dir = os.environ.get("MUCA_DB_DIR", "data")
+    db_dir = os.environ.get("MUCA_DB_DIR", str(DEFAULT_DB_DIR))
     os.makedirs(db_dir, exist_ok=True)
 
     def store_factory(conversation_id: str):
         path = db_path_for(conversation_id, base_dir=db_dir)
         return SqliteEpisodicStore(path), SqliteSnapshotStore(path)
 
-    # Without this, the management cycle (BLUEPRINT.md §11) never runs at
+    # Without this, the management cycle never runs at
     # all -- CoalaPolicy only calls it when a summarizer is configured, and
     # this was never wired in before, so history_summary/
     # participant_roles_summary never updated and wm.history never

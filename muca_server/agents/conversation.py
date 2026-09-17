@@ -356,6 +356,13 @@ class Conversation:
         if consult_observers:
             self._ask_observers_to_consider(message.speaker)
 
+        # Serializes text turns end to end (judge -> act -> reply), so a
+        # second utterance can never be attributed to the wrong decision --
+        # found from a real duplicate/missing episodic-log entry, not
+        # hypothetically. Text only: audio's own self-interrupt reflex is a
+        # deliberate, separate exception and does not go through here.
+        await self._policy.wait_for_turn_to_finish()
+
     async def route_participants(
         self,
         message: ParticipantsMessage,
