@@ -2,6 +2,7 @@ from collections.abc import Callable
 
 from .session_components import SessionComponents, SessionContext, SessionWorker
 from ..agents import AgentFactory, Conversation, MainAgentOptions
+from ..agents.conversation import DEFAULT_SILENCE_TIMEOUT_MS
 from ..cognition import CognitionPolicy
 
 PolicyFactory = Callable[[SessionContext], CognitionPolicy]
@@ -21,12 +22,14 @@ class DefaultSessionComponentsFactory:
         agent_factory: AgentFactory | None = None,
         policy_factory: PolicyFactory | None = None,
         main_agent_options: MainAgentOptions | None = None,
+        silence_timeout_ms: int = DEFAULT_SILENCE_TIMEOUT_MS,
     ) -> None:
         self.agent_factory = agent_factory
         self.policy_factory = policy_factory
         self.main_agent_options = (
             main_agent_options or MainAgentOptions()
         )
+        self.silence_timeout_ms = silence_timeout_ms
 
     async def create(
         self,
@@ -60,6 +63,7 @@ class DefaultSessionComponentsFactory:
             main_agent_options=self.main_agent_options,
             agent_factory=self.agent_factory,
             policy=policy,
+            silence_timeout_ms=self.silence_timeout_ms,
         )
 
     async def create_workers(

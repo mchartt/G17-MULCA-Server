@@ -6,6 +6,16 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 INTERVENTION_DETECTION = "intervention_detection"
+DEFAULT_AUXILIARY = "default"
+
+# The Unity client's AuxiliaryAgentType enum names, as it sends them.
+AUXILIARY_AGENT_ALIASES = {
+    "InterventionDetectionAgentOpenAI": INTERVENTION_DETECTION,
+    "TestableInterventionDetectionAgentOpenAI": INTERVENTION_DETECTION,
+    "InterventionDetectionGemini": INTERVENTION_DETECTION,
+    "DefaultAgentOpenAI": DEFAULT_AUXILIARY,
+    "DefaultAgentGemini": DEFAULT_AUXILIARY,
+}
 
 MAIN_AGENT_ID = 0
 
@@ -67,14 +77,33 @@ class AuxiliaryAgentOptions(AgentOptions):
         *,
         is_dm: bool = False,
     ) -> "AuxiliaryAgentOptions":
-        """Build options for one of the agent types the client can ask for."""
+        """
+        Build options for one of the agent types the client can ask for.
 
-        if auxiliary_agent_type == INTERVENTION_DETECTION:
+        Accepts MUCA's own names and the Unity client's AuxiliaryAgentType
+        enum names, which it sends verbatim.
+        """
+
+        agent_type = AUXILIARY_AGENT_ALIASES.get(
+            auxiliary_agent_type,
+            auxiliary_agent_type,
+        )
+
+        if agent_type == INTERVENTION_DETECTION:
             return cls(
                 agent_type=INTERVENTION_DETECTION,
-                listen_to_assistant=True,
+                # The "testable" Unity variant does not hear the assistant.
+                listen_to_assistant=(
+                    auxiliary_agent_type
+                    != "TestableInterventionDetectionAgentOpenAI"
+                ),
                 listened_users=None,
                 is_dm=is_dm,
             )
 
-        return cls(agent_type=auxiliary_agent_type, is_dm=is_dm)
+        if agent_type == DEFAULT_AUXILIARY:
+            return cls(agent_type=DEFAULT_AUXILIARY, is_dm=is_dm)
+
+        raise ValueError(
+            f"Unknown auxiliary agent type {auxiliary_agent_type!r}",
+        )

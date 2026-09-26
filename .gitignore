@@ -61,8 +61,10 @@ local_settings.py
 db.sqlite3
 db.sqlite3-journal
 
-# SqliteEpisodicStore/SqliteSnapshotStore's data (MUCA_DB_PATH, default
-# muca_server.db) -- runtime state, not source.
+# SqliteEpisodicStore/SqliteSnapshotStore's data: one file per conversation
+# in MUCA_DB_DIR (default data/ beside the package) -- runtime state, not
+# source.
+/data/
 *.db
 *.db-journal
 

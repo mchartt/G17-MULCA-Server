@@ -13,6 +13,7 @@ from ..protocol import (
     InterruptMessage,
     ParticipantsMessage,
     PlaybackFrameMessage,
+    RawProviderMessage,
     RemoveAuxiliaryAgentMessage,
     TextMessage,
     TriggerResponseMessage,
@@ -107,7 +108,7 @@ class DispatchResult(StrEnum):
 
 
 async def dispatch(
-    message: IncomingProtocolMessage,
+    message: IncomingProtocolMessage | RawProviderMessage,
     agent_router: AgentRouterProtocol,
 ) -> DispatchResult:
     """
@@ -157,6 +158,16 @@ async def dispatch(
                 return DispatchResult.CONTINUE
 
             return DispatchResult.CLOSE_SESSION
+
+        case RawProviderMessage():
+            # Provider passthrough (Unity's SendAnythingAsync). Not forwarded:
+            # the server owns each provider session's configuration, and a
+            # client's session.update (often in an older API dialect) would
+            # silently undo it. Forward it from here if a client ever needs to.
+            logger.info(
+                "Ignoring provider passthrough frame of type %r",
+                message.payload.get("type"),
+            )
 
         case _:
             raise TypeError(

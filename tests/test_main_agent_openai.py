@@ -1,4 +1,5 @@
 import base64
+import struct
 
 from openai.types.realtime.realtime_error_event import RealtimeErrorEvent
 from openai.types.realtime.response_audio_delta_event import ResponseAudioDeltaEvent
@@ -21,9 +22,13 @@ def make_agent(**kwargs) -> MainAgentOpenAI:
 class FakeItems:
     def __init__(self, calls: list) -> None:
         self._calls = calls
+        self.truncated: list[dict] = []
 
     async def create(self, *, item: dict) -> None:
         self._calls.append(item)
+
+    async def truncate(self, **kwargs) -> None:
+        self.truncated.append(kwargs)
 
 
 class FakeConversation:
@@ -34,9 +39,23 @@ class FakeConversation:
 class FakeResponse:
     def __init__(self) -> None:
         self.created = 0
+        self.params: list[dict | None] = []
+        self.cancelled = 0
 
-    async def create(self) -> None:
+    async def create(self, *, response: dict | None = None) -> None:
         self.created += 1
+        self.params.append(response)
+
+    async def cancel(self) -> None:
+        self.cancelled += 1
+
+
+class FakeAudioBuffer:
+    def __init__(self) -> None:
+        self.appended: list[str] = []
+
+    async def append(self, *, audio: str) -> None:
+        self.appended.append(audio)
 
 
 class FakeConnection:
@@ -44,6 +63,22 @@ class FakeConnection:
         self.item_calls: list = []
         self.conversation = FakeConversation(self.item_calls)
         self.response = FakeResponse()
+        self.input_audio_buffer = FakeAudioBuffer()
+
+
+class _Event:
+    """A provider event with just the attributes _interpret reads."""
+
+    def __init__(self, type: str, **fields) -> None:
+        self.type = type
+        for name, value in fields.items():
+            setattr(self, name, value)
+
+
+class _Obj:
+    def __init__(self, **fields) -> None:
+        for name, value in fields.items():
+            setattr(self, name, value)
 
 
 def audio_delta(data: bytes) -> ResponseAudioDeltaEvent:
@@ -78,7 +113,7 @@ def response_done() -> ResponseDoneEvent:
     )
 
 
-async def test_audio_deltas_reach_the_stream_audio_hook():
+async def test_audio_deltas_reach_the_stream_audio_hook_as_float32():
     agent = make_agent()
     chunks = []
 
@@ -87,17 +122,19 @@ async def test_audio_deltas_reach_the_stream_audio_hook():
 
     agent.on_audio = record
 
-    await agent._interpret(audio_delta(b"\x00\x00\x80\x3f"))
+    # PCM16 from the provider: silence, full scale, minus full scale.
+    pcm16 = struct.pack("<3h", 0, 32767, -32767)
+    await agent._interpret(audio_delta(pcm16))
 
     assert len(chunks) == 1
-    assert chunks[0].data == b"\x00\x00\x80\x3f"
+    assert struct.unpack("<3f", chunks[0].data) == (0.0, 1.0, -1.0)
 
 
 async def test_text_deltas_reach_the_stream_text_hook():
     agent = make_agent()
     deltas = []
 
-    async def record(text, is_final):
+    async def record(text, is_final, *_):
         deltas.append((text, is_final))
 
     agent.on_text = record
@@ -197,3 +234,228 @@ async def test_trigger_response_pushes_nothing_when_there_is_no_new_content():
 
     assert agent._connection.item_calls == []
     assert agent._connection.response.created == 1
+
+
+# ----------------------------------------------------------------------
+# Audio, speech events and interruption (parity with MainAgentOpenAi.cs)
+# ----------------------------------------------------------------------
+
+
+def response_created(response_id="r1", modalities=("audio",)):
+    return _Event(
+        "response.created",
+        response=_Obj(id=response_id, output_modalities=list(modalities)),
+    )
+
+
+def response_done_with(status: str):
+    return _Event("response.done", response=_Obj(status=status))
+
+
+def assistant_item_added(item_id="item-1"):
+    return _Event(
+        "response.output_item.added",
+        item=_Obj(id=item_id, role="assistant"),
+    )
+
+
+def record_events(agent) -> list:
+    events: list = []
+
+    async def record(event) -> None:
+        events.append(event)
+
+    agent.on_event = record
+    return events
+
+
+async def test_speech_started_is_raised_once_on_the_first_audio_of_a_response():
+    agent = make_agent()
+    events = record_events(agent)
+
+    await agent._interpret(response_created())
+    await agent._interpret(audio_delta(struct.pack("<2h", 1, 2)))
+    await agent._interpret(audio_delta(struct.pack("<2h", 3, 4)))
+
+    assert events == [MainAgentEvent.AGENT_SPEECH_STARTED]
+
+
+async def test_speech_stopped_follows_response_done_for_a_spoken_reply_only():
+    agent = make_agent()
+    events = record_events(agent)
+
+    await agent._interpret(response_created(modalities=("text",)))
+    await agent._interpret(text_delta("hi"))
+    await agent._interpret(response_done())
+    assert MainAgentEvent.AGENT_SPEECH_STOPPED not in events
+
+    await agent._interpret(response_created("r2"))
+    await agent._interpret(audio_delta(struct.pack("<2h", 1, 2)))
+    await agent._interpret(response_done())
+    assert events[-1] == MainAgentEvent.AGENT_SPEECH_STOPPED
+
+
+async def test_client_audio_is_sent_to_the_provider_as_pcm16():
+    agent = make_agent()
+    agent._connection = FakeConnection()
+
+    from muca_server.audio import AudioChunk
+
+    await agent._send_audio_chunk(
+        AudioChunk(data=struct.pack("<2f", 1.0, -1.0)),
+    )
+
+    sent = base64.b64decode(agent._connection.input_audio_buffer.appended[0])
+    assert struct.unpack("<2h", sent) == (32767, -32767)
+
+
+async def test_transcript_deltas_are_tagged_as_audio_and_final_carries_the_status():
+    agent = make_agent()
+    deltas = []
+
+    async def record(text, is_final, modality, interrupted):
+        deltas.append((text, is_final, modality, interrupted))
+
+    agent.on_text = record
+
+    await agent._interpret(response_created())
+    await agent._interpret(
+        _Event("response.output_audio_transcript.delta", delta="Hel"),
+    )
+    await agent._interpret(response_done_with("cancelled"))
+
+    assert deltas == [
+        ("Hel", False, "audio", False),
+        ("", True, "audio", True),
+    ]
+
+
+async def test_user_transcripts_reach_the_transcript_hook():
+    agent = make_agent()
+    received = []
+
+    async def record(item_id, transcript):
+        received.append((item_id, transcript))
+
+    agent.on_transcript = record
+
+    await agent._interpret(
+        _Event(
+            "conversation.item.input_audio_transcription.completed",
+            item_id="in-1",
+            transcript="hello there",
+        )
+    )
+
+    assert received == [("in-1", "hello there")]
+
+
+async def test_speech_started_remembers_the_input_item():
+    agent = make_agent()
+    record_events(agent)
+
+    await agent._interpret(
+        _Event("input_audio_buffer.speech_started", item_id="in-7"),
+    )
+
+    assert agent.last_input_item_id == "in-7"
+
+
+async def test_stop_speaking_cancels_and_truncates_the_assistant_item_at_playback():
+    agent = make_agent()
+    agent._connection = FakeConnection()
+    record_events(agent)
+
+    await agent._interpret(response_created())
+    await agent._interpret(assistant_item_added("item-9"))
+    # 24000 samples of PCM16 = 1000 ms generated.
+    await agent._interpret(audio_delta(bytes(2 * 24_000)))
+    agent.playback_time_ms = 400
+
+    await agent.stop_speaking()
+
+    assert agent._connection.response.cancelled == 1
+    assert agent._connection.conversation.item.truncated == [
+        {"item_id": "item-9", "content_index": 0, "audio_end_ms": 400},
+    ]
+
+
+async def test_stop_speaking_after_generation_still_truncates_but_does_not_cancel():
+    agent = make_agent()
+    agent._connection = FakeConnection()
+    record_events(agent)
+
+    await agent._interpret(response_created())
+    await agent._interpret(assistant_item_added("item-9"))
+    await agent._interpret(audio_delta(bytes(2 * 24_000)))
+    await agent._interpret(response_done_with("completed"))
+    agent.playback_time_ms = 5000  # past what was generated
+
+    await agent.stop_speaking()
+
+    assert agent._connection.response.cancelled == 0
+    assert agent._connection.conversation.item.truncated == [
+        {"item_id": "item-9", "content_index": 0, "audio_end_ms": 1000},
+    ]
+
+
+async def test_a_new_response_does_not_truncate_the_previous_one():
+    agent = make_agent()
+    agent._connection = FakeConnection()
+    record_events(agent)
+
+    await agent._interpret(response_created())
+    await agent._interpret(assistant_item_added("item-9"))
+    await agent._interpret(audio_delta(bytes(2 * 2400)))
+    await agent._interpret(response_done_with("completed"))
+
+    await agent.trigger_response(instructions="next")
+
+    assert agent._connection.conversation.item.truncated == []
+
+
+async def test_trigger_response_passes_modality_and_maps_unity_max_tokens():
+    agent = make_agent()
+    agent._connection = FakeConnection()
+
+    await agent._trigger_response(
+        max_tokens=2_147_483_647,
+        instructions="",
+        add_to_conversation=False,
+        output_modality="text",
+    )
+
+    assert agent._connection.response.params == [
+        {
+            "output_modalities": ["text"],
+            "max_output_tokens": "inf",
+            "conversation": "none",
+        }
+    ]
+
+
+async def test_a_late_cancel_error_is_not_reported_as_a_problem(caplog):
+    agent = make_agent()
+
+    await agent._interpret(
+        RealtimeErrorEvent.model_construct(
+            type="error",
+            event_id="e9",
+            error={"code": "response_cancel_not_active", "message": "x"},
+        )
+    )
+
+    assert "provider error" not in caplog.text
+
+
+def test_the_session_detects_and_transcribes_speech_but_never_answers_alone():
+    config = make_agent()._session_config()
+    turn_detection = config["audio"]["input"]["turn_detection"]
+
+    assert turn_detection["create_response"] is False
+    assert turn_detection["interrupt_response"] is False
+    assert config["audio"]["input"]["transcription"]["model"]
+    assert config["audio"]["input"]["format"] == {
+        "type": "audio/pcm",
+        "rate": 24_000,
+    }

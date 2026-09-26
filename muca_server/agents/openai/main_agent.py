@@ -14,6 +14,7 @@ from contextlib import suppress
 from openai import AsyncOpenAI
 
 from ...audio import AudioChunk
+from ...audio.pcm import float32_to_pcm16, pcm16_to_float32, resample_float32
 from ..main_agent import MainAgent, MainAgentEvent
 from ..options import AgentCapabilities, MainAgentOptions
 
@@ -21,6 +22,17 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_REALTIME_MODEL = "gpt-realtime"
 SUMMARY_MODEL = "gpt-4o"
+TRANSCRIPTION_MODEL = "gpt-4o-transcribe"
+PROVIDER_SAMPLE_RATE = 24_000
+MAX_OUTPUT_TOKENS = 4096
+
+# Errors that only mean a request raced the provider's own state (e.g. a
+# cancel arriving just after the response finished): nothing to report.
+IGNORABLE_ERROR_CODES = frozenset(
+    {
+        "response_cancel_not_active",
+    }
+)
 
 _MANAGEMENT_SCHEMA = {
     "name": "management_summary",
@@ -86,8 +98,51 @@ class MainAgentOpenAI(MainAgent):
         self._connection = None
         self._receive_task: asyncio.Task[None] | None = None
 
+        # The response in flight, and what of it has been produced so far.
+        self._response_id: str | None = None
+        self._response_modality = "audio"
+        self._response_audio_started = False
+        self._assistant_item_id: str | None = None
+        self._assistant_audio_ms = 0
+
     def _build_instructions(self) -> str:
         return f"{self._persona}\n\nTask context:\n{self._task_knowledge}"
+
+    def _session_config(self) -> dict:
+        """
+        Mirrors the Unity package's MainAgentOpenAiPayload: the provider
+        detects and transcribes user speech, but never answers or stops on
+        its own -- whether and when to speak is cognition's call, and
+        barge-in is handled by the conversation (cancel + truncate).
+        """
+
+        return {
+            "type": "realtime",
+            "output_modalities": ["audio"],
+            "instructions": self._build_instructions(),
+            "audio": {
+                "input": {
+                    "format": {
+                        "type": "audio/pcm",
+                        "rate": PROVIDER_SAMPLE_RATE,
+                    },
+                    "transcription": {"model": TRANSCRIPTION_MODEL},
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "create_response": False,
+                        "interrupt_response": False,
+                        "silence_duration_ms": 300,
+                        "prefix_padding_ms": 500,
+                    },
+                },
+                "output": {
+                    "format": {
+                        "type": "audio/pcm",
+                        "rate": PROVIDER_SAMPLE_RATE,
+                    },
+                },
+            },
+        }
 
     async def _connect(self) -> None:
         self._connection_manager = self._client.realtime.connect(
@@ -97,14 +152,13 @@ class MainAgentOpenAI(MainAgent):
             await self._connection_manager.__aenter__()
         )
 
-        session = await self._connection.session.update(
-            session={
-                "type": "realtime",
-                "output_modalities": ["audio"],
-                "instructions": self._build_instructions(),
-            }
+        # session.update returns nothing (the provider answers later with a
+        # session.updated event), so the capabilities come from the config
+        # sent, not from reading a reply.
+        await self._connection.session.update(
+            session=self._session_config(),
         )
-        self.capabilities = self._read_capabilities(session)
+        self.capabilities = AgentCapabilities(vad=True, interrupt=False)
 
         self._receive_task = asyncio.create_task(
             self._receive_loop(),
@@ -146,7 +200,7 @@ class MainAgentOpenAI(MainAgent):
             return
 
         await self._connection.input_audio_buffer.append(
-            audio=base64.b64encode(chunk.data).decode("ascii"),
+            audio=encode_for_provider(chunk),
         )
 
     async def _trigger_response(
@@ -155,6 +209,7 @@ class MainAgentOpenAI(MainAgent):
         max_tokens: int | None,
         instructions: str,
         add_to_conversation: bool,
+        output_modality: str | None = None,
     ) -> None:
         if self._connection is None:
             return
@@ -175,10 +230,51 @@ class MainAgentOpenAI(MainAgent):
                 }
             )
 
-        await self._connection.response.create()
+        response = response_params(
+            max_tokens=max_tokens,
+            add_to_conversation=add_to_conversation,
+            output_modality=output_modality,
+        )
+        if response:
+            await self._connection.response.create(response=response)
+        else:
+            await self._connection.response.create()
+
         # Marks a response as in flight so a later interrupt=True actually
-        # has something to cancel instead of erroring on nothing.
+        # has something to cancel instead of erroring on nothing. The
+        # provider's response.created confirms it (and covers responses
+        # this agent did not ask for).
         self._response_active = True
+
+    async def stop_speaking(self) -> None:
+        # Stop generating, if still generating...
+        await self.interrupt_response()
+
+        # ...and, whether or not it was, cut the assistant's spoken item at
+        # what the users actually heard: a reply is usually fully generated
+        # long before it has finished playing, so an interruption mostly
+        # lands after response.done. Otherwise the model believes it said
+        # the part nobody heard. Needs the item id, not the response id (a
+        # bug in the Unity original).
+        if (
+            self._connection is None
+            or self._assistant_item_id is None
+            or self._assistant_audio_ms <= 0
+        ):
+            return
+
+        audio_end_ms = max(
+            0,
+            min(self.playback_time_ms, self._assistant_audio_ms),
+        )
+        item_id, self._assistant_item_id = self._assistant_item_id, None
+
+        with suppress(Exception):
+            await self._connection.conversation.item.truncate(
+                item_id=item_id,
+                content_index=0,
+                audio_end_ms=audio_end_ms,
+            )
 
     async def _cancel_response(self) -> None:
         if self._connection is None:
@@ -196,31 +292,65 @@ class MainAgentOpenAI(MainAgent):
             await self._interpret(event)
 
     async def _interpret(self, event) -> None:
-        if event.type in ("response.done", "error"):
-            # Both are terminal for this response -- clearing this here,
-            # not just on success, is what keeps a later interrupt=True from
-            # cancelling a response that already ended on its own.
+        if event.type == "response.done":
+            # Terminal for this response -- clearing this here is what keeps
+            # a later interrupt=True from cancelling a response that
+            # already ended on its own.
             self._response_active = False
 
         match event.type:
+            case "response.created":
+                self._response_active = True
+                self._response_id = getattr(event.response, "id", None)
+                modalities = getattr(
+                    event.response,
+                    "output_modalities",
+                    None,
+                ) or ["audio"]
+                self._response_modality = (
+                    "audio" if "audio" in modalities else "text"
+                )
+                self._response_audio_started = False
+                self._assistant_item_id = None
+                self._assistant_audio_ms = 0
+
+            case "response.output_item.added":
+                if getattr(event.item, "role", None) == "assistant":
+                    self._assistant_item_id = event.item.id
+
             case "response.output_audio.delta":
-                await self._stream_audio(
-                    AudioChunk(
-                        data=base64.b64decode(event.delta),
+                chunk = AudioChunk(
+                    data=pcm16_to_float32(base64.b64decode(event.delta)),
+                    sample_rate=PROVIDER_SAMPLE_RATE,
+                )
+                self._assistant_audio_ms += chunk.duration_ms
+
+                # The first audio of a response is when the assistant starts
+                # to speak (MainAgentOpenAi.cs); the conversation then waits
+                # for the client to actually play it before taking the turn.
+                if not self._response_audio_started:
+                    self._response_audio_started = True
+                    await self._raise_event(
+                        MainAgentEvent.AGENT_SPEECH_STARTED,
                     )
+
+                await self._stream_audio(chunk)
+
+            case "response.output_text.delta":
+                await self._stream_text(event.delta, modality="text")
+
+            case "response.output_audio_transcript.delta":
+                # What is being said, for an audio-modality response.
+                await self._stream_text(event.delta, modality="audio")
+
+            case "conversation.item.input_audio_transcription.completed":
+                await self._stream_transcript(
+                    event.item_id,
+                    event.transcript,
                 )
 
-            case (
-                "response.output_text.delta"
-                | "response.output_audio_transcript.delta"
-            ):
-                # The GA Realtime API names the spoken-word transcript event
-                # differently for an audio-modality response than for a
-                # text-modality one; this agent requests audio, so without
-                # this branch assistant_text was always empty downstream.
-                await self._stream_text(event.delta)
-
             case "response.done":
+                status = getattr(event.response, "status", None)
                 # response.output_text.done/response.output_audio_transcript
                 # .done also fire, but response.done is the one signal
                 # common to both modalities and guaranteed to fire exactly
@@ -234,9 +364,25 @@ class MainAgentOpenAI(MainAgent):
                 # Confirmed live: found via a two-turn scratch test where
                 # the second turn's assistant_output logged as None despite
                 # a real reply streaming to the client.
-                await self._stream_text("", is_final=True)
+                await self._stream_text(
+                    "",
+                    is_final=True,
+                    modality=self._response_modality,
+                    interrupted=status in ("cancelled", "incomplete"),
+                )
+
+                # Generation is over; the turn itself only ends once the
+                # client has finished playing it (the conversation waits).
+                if self._response_audio_started:
+                    await self._raise_event(
+                        MainAgentEvent.AGENT_SPEECH_STOPPED,
+                    )
+
+                self._response_id = None
+                self._response_audio_started = False
 
             case "input_audio_buffer.speech_started":
+                self.last_input_item_id = getattr(event, "item_id", None)
                 await self._raise_event(
                     MainAgentEvent.USER_SPEECH_STARTED,
                 )
@@ -246,41 +392,65 @@ class MainAgentOpenAI(MainAgent):
                     MainAgentEvent.USER_SPEECH_STOPPED,
                 )
 
-            case "response.output_audio.done":
-                await self._raise_event(
-                    MainAgentEvent.AGENT_SPEECH_STOPPED,
-                )
-
             case "error":
+                error = getattr(event, "error", None)
+                if error_code(error) in IGNORABLE_ERROR_CODES:
+                    logger.debug("Main agent: %s", error)
+                    return
+
                 logger.warning(
                     "Main agent got a provider error: %s",
-                    event.error,
+                    error,
                 )
 
-    def _read_capabilities(self, session) -> AgentCapabilities:
-        turn_detection = getattr(
-            getattr(session, "audio", None),
-            "input",
-            None,
-        )
-        turn_detection = getattr(
-            turn_detection,
-            "turn_detection",
-            None,
+
+def error_code(error) -> str | None:
+    if isinstance(error, dict):
+        return error.get("code")
+
+    return getattr(error, "code", None)
+
+
+def encode_for_provider(chunk: AudioChunk) -> str:
+    """Wire audio (float32, any rate) -> base64 PCM16 at the provider rate."""
+
+    data = chunk.data
+    if chunk.sample_rate != PROVIDER_SAMPLE_RATE:
+        data = resample_float32(
+            data,
+            chunk.sample_rate,
+            PROVIDER_SAMPLE_RATE,
         )
 
-        if turn_detection is None:
-            return AgentCapabilities()
+    return base64.b64encode(float32_to_pcm16(data)).decode("ascii")
 
-        vad = getattr(turn_detection, "type", None) in (
-            "server_vad",
-            "semantic_vad",
-        )
-        interrupt = bool(
-            getattr(turn_detection, "interrupt_response", False),
+
+def response_params(
+    *,
+    max_tokens: int | None,
+    add_to_conversation: bool,
+    output_modality: str | None,
+) -> dict:
+    """The response.create parameters that differ from the session's."""
+
+    response: dict = {}
+
+    if output_modality in ("text", "audio"):
+        response["output_modalities"] = [output_modality]
+
+    if max_tokens is not None:
+        # The Unity client sends int.MaxValue for "no limit"
+        # (RealtimeConnectionOpenAi.cs); the provider caps at 4096.
+        response["max_output_tokens"] = (
+            "inf"
+            if max_tokens <= 0 or max_tokens > MAX_OUTPUT_TOKENS
+            else max_tokens
         )
 
-        return AgentCapabilities(vad=vad, interrupt=interrupt)
+    if not add_to_conversation:
+        response["conversation"] = "none"
+
+    return response
 
 
 class ChatCompletionsSummarizer:

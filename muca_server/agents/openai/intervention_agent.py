@@ -12,10 +12,17 @@ from contextlib import suppress
 
 from openai import AsyncOpenAI
 
+from ...audio import AudioChunk
 from ...cognition.ports import InterventionSignal
 from ...cognition.strategies import StrategyStore
 from ..auxiliary_agent import AuxiliaryAgent
 from ..options import AuxiliaryAgentOptions
+from .main_agent import (
+    IGNORABLE_ERROR_CODES,
+    PROVIDER_SAMPLE_RATE,
+    encode_for_provider,
+    error_code,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +79,23 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
                 "instructions": self._build_instructions(),
                 "tools": [self._tool_definition()],
                 "tool_choice": "auto",
+                # It hears the conversation's audio too (the Unity
+                # original's intervention agent does), and VAD commits that
+                # audio into its context -- but it only ever judges when the
+                # conversation asks it to, never on its own.
+                "audio": {
+                    "input": {
+                        "format": {
+                            "type": "audio/pcm",
+                            "rate": PROVIDER_SAMPLE_RATE,
+                        },
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "create_response": False,
+                            "interrupt_response": False,
+                        },
+                    },
+                },
             }
         )
 
@@ -103,11 +127,19 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
         await self._connection.conversation.item.create(
             item={
                 "type": "message",
-                "role": "user",
+                "role": role if role in ("user", "system") else "user",
                 "content": [
                     {"type": "input_text", "text": text},
                 ],
             }
+        )
+
+    async def _send_audio_chunk(self, chunk: AudioChunk) -> None:
+        if self._connection is None:
+            return
+
+        await self._connection.input_audio_buffer.append(
+            audio=encode_for_provider(chunk),
         )
 
     async def _trigger_response(
@@ -116,6 +148,7 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
         max_tokens: int | None,
         instructions: str,
         add_to_conversation: bool,
+        output_modality: str | None = None,
     ) -> None:
         if self._connection is None:
             return
@@ -149,16 +182,28 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
         belongs to the cognition policy.
         """
 
+        if event.type == "response.created":
+            self._response_active = True
+            return
+
         if event.type == "error":
-            # Terminal for this response, same as response.done below -- keeps
-            # a later interrupt=True from cancelling a response that already
-            # ended (in this case, by erroring) on its own.
-            self._response_active = False
+            if error_code(event.error) in IGNORABLE_ERROR_CODES:
+                return
+
             logger.warning(
                 "Intervention agent %s got a provider error: %s",
                 self.guid,
                 event.error,
             )
+
+            # An error unrelated to a judgement in flight (a rejected item,
+            # say) must not throw away a decision that is still coming, nor
+            # report a decision nobody asked for.
+            if not self._response_active:
+                return
+
+            # Terminal for this judgement, same as response.done below.
+            self._response_active = False
             self._pending_signal = None
             await self._signal_decision(None)
             return

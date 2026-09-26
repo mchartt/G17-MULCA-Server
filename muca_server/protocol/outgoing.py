@@ -34,13 +34,18 @@ class StateUpdateMessage(OutgoingMessage):
         current_speaker: int,
         last_speaker: int,
         encoded_audio: str,
+        is_answering: bool = True,
+        assistant_spoke_last: bool = True,
     ) -> "StateUpdateMessage":
+        # is_answering follows the assistant's turn (playback start to
+        # playback drain), not the chunks: the first chunks of a reply are
+        # generated before the client has played anything.
         return cls(
             is_connected=True,
             current_speaker=current_speaker,
             last_speaker=last_speaker,
-            is_answering=True,
-            assistant_spoke_last=True,
+            is_answering=is_answering,
+            assistant_spoke_last=assistant_spoke_last,
             clear_audio_queue=False,
             audio=encoded_audio,
         )
@@ -112,6 +117,13 @@ class AssistantTextMessage(OutgoingMessage):
         serialization_alias="isFinal",
     )
 
+    # "text": this is the reply itself. "audio": this is the transcript of a
+    # reply that is being spoken, and its audio travels in state_update.
+    modality: Literal["text", "audio"] = "text"
+
+    # Only meaningful on the final frame: the reply was cut short.
+    interrupted: bool = False
+
     @classmethod
     def delta(cls, text: str) -> "AssistantTextMessage":
         return cls(text=text, is_final=False)
@@ -121,11 +133,28 @@ class AssistantTextMessage(OutgoingMessage):
         return cls(text="", is_final=True)
 
 
+class ErrorMessage(OutgoingMessage):
+    """
+    A client message could not be carried out.
+
+    The session stays open; clients that do not know this event ignore it.
+    """
+
+    event: Literal["error"] = "error"
+
+    message: str
+    agent_guid: str | None = Field(
+        default=None,
+        serialization_alias="targetAgentGuid",
+    )
+
+
 OutgoingProtocolMessage = (
     StateUpdateMessage
     | AgentMessage
     | AgentGuidMessage
     | AssistantTextMessage
+    | ErrorMessage
 )
 
 def serialize_outgoing_message(

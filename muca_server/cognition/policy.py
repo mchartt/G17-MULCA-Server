@@ -16,6 +16,7 @@ from collections.abc import Callable
 from uuid import UUID
 
 from .forced_intervention import check_forced_intervention
+from .memory.in_memory import InMemoryEpisodicStore, InMemorySnapshotStore
 from .memory.ports import EpisodicStore, SnapshotStore
 from .memory.records import EpisodicRecord, MemorySnapshot, StoredUtterance
 from .ports import ConversationPort, InterventionSignal, Summarizer, Utterance
@@ -98,9 +99,15 @@ class CoalaPolicy:
         self._port = port
 
         if self._store_factory is not None:
-            self._episodic_store, self._snapshot_store = (
-                self._store_factory(port.conversation_id)
-            )
+            if getattr(port, "is_ephemeral", False):
+                # No conversation id from the client: nothing to continue
+                # later, so nothing is written to disk for it either.
+                self._episodic_store = InMemoryEpisodicStore()
+                self._snapshot_store = InMemorySnapshotStore()
+            else:
+                self._episodic_store, self._snapshot_store = (
+                    self._store_factory(port.conversation_id)
+                )
 
         wm = WorkingMemory(
             conversation_id=port.conversation_id,
@@ -125,6 +132,8 @@ class CoalaPolicy:
         self._wm = wm
 
     async def close(self) -> None:
+        # A turn whose reply never arrived is still worth its log entry.
+        await self._flush_pending_episodic_record()
         await self._save_snapshot()
 
     async def _save_snapshot(self) -> None:
@@ -161,11 +170,10 @@ class CoalaPolicy:
 
     async def on_utterance(self, utterance: Utterance) -> bool:
         """
-        Text-only today: Conversation calls this from route_user_text, but
-        audio's _on_speaker_changed calls _ask_observers_to_consider
-        directly and never reaches here, so spoken turns get none of what
-        this method does (history/trigger-variable/forced-intervention
-        handling, or the turn-serialization state below).
+        Somebody said something, in text or (once transcribed) in speech.
+
+        Conversation calls this once per whole turn, one turn at a time, and
+        awaits wait_for_turn_to_finish() before handing over the next.
         """
 
         wm = self._wm
@@ -185,12 +193,12 @@ class CoalaPolicy:
                 participants=participants,
             )
         )
-        # TODO: remove once live-tested (mirrors the old MULCA prototype's
-        # orchestrator.py debug print of roster + trigger_variables).
-        print(
-            f"[MUCA debug] {wm.conversation_id} participants={participants} "
-            f"gini_index={wm.trigger_variables['gini_index']} "
-            f"participant_message_counts={wm.trigger_variables['participant_message_counts']}"
+        logger.info(
+            "%s participants=%s gini_index=%s participant_message_counts=%s",
+            wm.conversation_id,
+            participants,
+            wm.trigger_variables["gini_index"],
+            wm.trigger_variables["participant_message_counts"],
         )
 
         # The observer only ever sees raw utterance text otherwise (routed
@@ -257,13 +265,12 @@ class CoalaPolicy:
         messages the group's own next management cycle will summarize, just
         not compressed yet.
 
-        Re-read on every message, not cached: the token cost of including
-        this is the same either way, since the main LLM rebuilds its full
-        prompt fresh every turn regardless (the "stateless main LLM"
-        design) -- caching would only reduce DB reads, at the cost of
-        staleness, which matters for "ask individual questions whenever you
-        want" over a long-running deployment. This never writes back to the
-        linked conversation either way.
+        Re-read on every message, not cached: _render_prompt sends the
+        summary and recent tail with every triggered turn anyway, so caching
+        would only save DB reads, at the cost of staleness, which matters
+        for "ask individual questions whenever you want" over a
+        long-running deployment. This never writes back to the linked
+        conversation either way.
 
         A DM from someone not recognized as belonging to any instance simply
         has no linked_conversation_id, so this does nothing for them --
@@ -306,21 +313,24 @@ class CoalaPolicy:
         needs_history = bool(signal and signal.needs_history)
         needs_web_search = bool(signal and signal.needs_web_search)
 
-        # print(), not logger.debug(): nothing in this project configures a
-        # logging level yet, so debug/info calls are otherwise invisible.
-        print(
-            f"[MUCA debug] {wm.conversation_id} intervention decision: "
-            f"strategy_id={strategy_id!r} prompt_fragment={prompt_fragment!r} "
-            f"needs_history={needs_history} needs_web_search={needs_web_search}"
+        logger.info(
+            "%s intervention decision: strategy_id=%r prompt_fragment=%r "
+            "needs_history=%s needs_web_search=%s",
+            wm.conversation_id,
+            strategy_id,
+            prompt_fragment,
+            needs_history,
+            needs_web_search,
         )
 
         # Hard veto: not a request the model might ignore, the guarantee.
         if strategy_id is not None:
             strategy = self._strategies.get(strategy_id)
             if strategy is not None and wm.strategy_in_cooldown(strategy):
-                print(
-                    f"[MUCA debug] {wm.conversation_id} vetoed "
-                    f"{strategy_id!r}: still in cooldown"
+                logger.info(
+                    "%s vetoed %r: still in cooldown",
+                    wm.conversation_id,
+                    strategy_id,
                 )
                 strategy_id = None
                 prompt_fragment = None
@@ -338,9 +348,7 @@ class CoalaPolicy:
             await self._finish_turn(path=path, strategy_id=None)
             return
 
-        if (
-            needs_history or strategy_id == "provide_summary"
-        ) and self._episodic_store is not None:
+        if needs_history or strategy_id == "provide_summary":
             await self._retrieve(wm, port)
 
         strategy = self._strategies.get(strategy_id)
@@ -448,17 +456,20 @@ class CoalaPolicy:
         wm: WorkingMemory,
         port: ConversationPort,
     ) -> None:
-        assert self._episodic_store is not None
+        store, conversation_id = self._retrieval_source(port)
+        if store is None:
+            wm.set_retrieved_context("(no prior conversation found)")
+            return
 
-        records = await self._episodic_store.recall_recent(
-            port.conversation_id,
+        records = await store.recall_recent(
+            conversation_id,
             self._retrieval_limit,
         )
 
         lines = [
             f"{record.speaker}: {record.content}"
             + (
-                f"\nMULCA: {record.assistant_output}"
+                f"\n{self._assistant_name or 'Assistant'}: {record.assistant_output}"
                 if record.assistant_output
                 else ""
             )
@@ -469,6 +480,26 @@ class CoalaPolicy:
         wm.set_retrieved_context(
             "\n".join(lines) or "(no prior conversation found)",
         )
+
+    def _retrieval_source(
+        self,
+        port: ConversationPort,
+    ) -> tuple[EpisodicStore | None, str]:
+        """
+        Where a history lookup reads from. A DM's own log is never written,
+        so a DM looks in its linked group's log instead (read-only, as with
+        _apply_linked_group_context), or nowhere.
+        """
+
+        if not port.is_private:
+            return self._episodic_store, port.conversation_id
+
+        linked = port.linked_conversation_id
+        if linked is None or self._store_factory is None:
+            return None, ""
+
+        linked_store, _ = self._store_factory(linked)
+        return linked_store, linked
 
     async def _finish_turn(
         self,

@@ -42,6 +42,7 @@ class FakeInterventionAgent(AuxiliaryAgent):
         max_tokens,
         instructions,
         add_to_conversation,
+        **_,
     ) -> None:
         await self._signal_decision(self.signal)
 
@@ -57,6 +58,7 @@ class ScriptedMainAgent(MainAgent):
         max_tokens,
         instructions,
         add_to_conversation,
+        **_,
     ) -> None:
         self.instructions.append(instructions)
         await self._stream_text("Sure, ")
@@ -123,6 +125,8 @@ async def test_an_observers_signal_reaches_the_main_agent():
         )
     )
 
+    await conversation.wait_until_idle()
+
     # trigger_response() is fired as a background task.
     for _ in range(5):
         await asyncio.sleep(0)
@@ -167,6 +171,8 @@ async def test_the_observer_declining_produces_no_reply():
             }
         )
     )
+
+    await conversation.wait_until_idle()
 
     for _ in range(5):
         await asyncio.sleep(0)

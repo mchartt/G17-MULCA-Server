@@ -145,10 +145,47 @@ async def test_a_provider_error_does_not_hang_and_reports_no_signal():
 
     agent = make_agent()
     decisions = await record_decisions(agent)
+    agent._response_active = True  # a judgement is in flight
 
     await agent._interpret(error_event())
 
     assert decisions == [None]
+
+
+async def test_an_error_with_no_judgement_in_flight_reports_nothing():
+    """
+    An unrelated error (a rejected item, say) must not report a decision
+    nobody asked for, nor drop the one still being made.
+    """
+
+    agent = make_agent()
+    decisions = await record_decisions(agent)
+
+    await agent._interpret(error_event())
+
+    assert decisions == []
+
+
+async def test_a_late_cancel_error_does_not_clobber_the_pending_signal():
+    agent = make_agent()
+    decisions = await record_decisions(agent)
+    agent._response_active = True
+    agent._pending_signal = "kept"
+
+    await agent._interpret(
+        RealtimeErrorEvent.model_construct(
+            type="error",
+            event_id="e5",
+            error={
+                "message": "no active response",
+                "type": "invalid_request_error",
+                "code": "response_cancel_not_active",
+            },
+        )
+    )
+
+    assert decisions == []
+    assert agent._pending_signal == "kept"
 
 
 async def test_malformed_tool_arguments_are_dropped_not_raised():

@@ -36,6 +36,7 @@ class ScriptedMainAgent(MainAgent):
         max_tokens,
         instructions,
         add_to_conversation,
+        **_,
     ) -> None:
         self.instructions.append(instructions)
 
@@ -141,6 +142,8 @@ async def test_a_text_utterance_is_a_whole_turn():
         user_text(1, "morning", name="Ada"),
     )
 
+    await conversation.wait_until_idle()
+
     assert len(conversation.turns) == 1
     assert conversation.turns[0].speaker_name == "Ada"
     assert not conversation.turns[0].is_open
@@ -163,6 +166,8 @@ async def test_the_utterance_reaches_the_main_agent_labelled():
         user_text(1, "morning", name="Ada"),
     )
 
+    await conversation.wait_until_idle()
+
     assert sent == [("Ada: morning", "user")]
 
 
@@ -173,6 +178,8 @@ async def test_the_policy_sees_the_utterance_and_answers():
     await conversation.route_user_text(
         user_text(7, "hello?", name="Grace"),
     )
+
+    await conversation.wait_until_idle()
 
     assert [u.content for u in policy.utterances] == ["hello?"]
     assert factory.main.instructions == [
@@ -193,6 +200,8 @@ async def test_a_completed_reply_is_reported_to_the_policy():
 
     await conversation.route_user_text(user_text(1, "hi"))
 
+    await conversation.wait_until_idle()
+
     assert policy.replies == ["Hello there."]
 
 
@@ -212,6 +221,8 @@ async def test_participants_name_people_who_have_not_spoken():
     )
 
     await conversation.route_user_text(user_text(9, "hi"))
+
+    await conversation.wait_until_idle()
 
     assert policy.utterances[0].speaker_name == "Alan"
 

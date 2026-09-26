@@ -84,5 +84,7 @@ def test_assistant_text_streams_then_closes():
         "event": "assistant_text",
         "text": "hel",
         "isFinal": False,
+        "modality": "text",
+        "interrupted": False,
     }
     assert final["isFinal"] is True

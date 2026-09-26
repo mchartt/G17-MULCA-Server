@@ -10,6 +10,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from ..events import AgentRouterProtocol, DispatchResult, dispatch
 from ..protocol import (
     CONNECT_EVENTS,
+    ErrorMessage,
     parse_incoming_message,
     OutgoingProtocolMessage,
     serialize_outgoing_message,
@@ -74,7 +75,21 @@ class SessionRuntime:
                 # before the session's components start, so working memory
                 # is created under the right scope/privacy from the first
                 # turn onward -- not after the fact.
-                await dispatch(message, self.agent_router)
+                try:
+                    await dispatch(message, self.agent_router)
+                except Exception:
+                    # Typically the provider refusing the main agent's
+                    # connection: nothing in this session can work then.
+                    logger.exception(
+                        "Session %s could not connect its main agent",
+                        self.session_id,
+                    )
+                    await self.websocket.close(
+                        code=1011,
+                        reason="Cannot connect the main agent",
+                    )
+                    return
+
                 await self.start()
                 await self.receive_loop()
 
@@ -89,6 +104,12 @@ class SessionRuntime:
                 self.session_id,
             )
             self.state.is_connected = False
+        except RuntimeError:
+            # Receiving on a socket send_loop has already closed.
+            logger.info(
+                "Session %s ended after its socket closed",
+                self.session_id,
+            )
         finally:
             await self.close()
 
@@ -115,7 +136,29 @@ class SessionRuntime:
                 await self.handle_protocol_error(exc)
                 continue
 
-            result = await dispatch(message, self.agent_router)
+            try:
+                result = await dispatch(message, self.agent_router)
+            except Exception as exc:
+                # One failed request (a provider call that errored, an
+                # auxiliary agent that could not connect) must not take the
+                # whole conversation down with it.
+                logger.exception(
+                    "Session %s failed to handle %s",
+                    self.session_id,
+                    message.event,
+                )
+                await self.outbound_queue.put(
+                    ErrorMessage(
+                        message=f"{message.event} failed: {exc}",
+                        agent_guid=getattr(
+                            message,
+                            "target_agent_guid",
+                            None,
+                        ) or None,
+                    )
+                )
+                continue
+
             if result == DispatchResult.CLOSE_SESSION:
                 break
 
@@ -129,6 +172,25 @@ class SessionRuntime:
                 )
 
                 await self.websocket.send_text(payload)
+            except Exception as exc:
+                # The socket is gone. Close it for good so receive_loop ends
+                # too, instead of the session's workers blocking forever on
+                # a full outbound queue nobody drains.
+                if isinstance(exc, WebSocketDisconnect):
+                    # The client left while replies were still in flight.
+                    logger.info(
+                        "Session %s: client gone, dropping unsent messages",
+                        self.session_id,
+                    )
+                else:
+                    logger.warning(
+                        "Session %s could not send, closing",
+                        self.session_id,
+                        exc_info=True,
+                    )
+                with suppress(Exception):
+                    await self.websocket.close()
+                return
             finally:
                 self.outbound_queue.task_done()
 

@@ -11,6 +11,7 @@ Run with: python -m muca_server.run_server
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
 from .agents import MainAgentOptions
+from .agents.conversation import DEFAULT_SILENCE_TIMEOUT_MS
 from .agents.openai import ChatCompletionsSummarizer, OpenAIAgentFactory
 from .cognition import CoalaPolicy
 from .cognition.loader import load_persona, load_strategy_store, load_task
@@ -42,9 +44,10 @@ ASSISTANT_NAME = "MULCA"
 # Anchored to this package's own location, not the current working
 # directory -- a relative default here would mean restarting the server
 # from a different shell/cwd silently creates a second, empty database
-# instead of finding the one from before. Same pattern cognition/loader.py
-# already uses for config file resolution.
-DEFAULT_DB_DIR = Path(__file__).resolve().parent / "data"
+# instead of finding the one from before. Beside the package rather than
+# inside it, so conversation data never lands among the source (or in
+# site-packages). Set MUCA_DB_DIR for a real deployment.
+DEFAULT_DB_DIR = Path(__file__).resolve().parent.parent / "data"
 
 
 def build_app():
@@ -103,6 +106,12 @@ def build_app():
         # turn-tracking markers ("MAIN ASSISTANT (...) started speaking")
         # would say "ASSISTANT" instead of "MULCA".
         main_agent_options=MainAgentOptions(name=ASSISTANT_NAME),
+        silence_timeout_ms=int(
+            os.environ.get(
+                "MUCA_SILENCE_TIMEOUT_MS",
+                DEFAULT_SILENCE_TIMEOUT_MS,
+            )
+        ),
     )
 
     return create_app(components_factory=components_factory)
@@ -111,6 +120,10 @@ def build_app():
 def main() -> None:
     host = os.environ.get("MUCA_SERVER_HOST", "0.0.0.0")
     port = int(os.environ.get("MUCA_SERVER_PORT", "8000"))
+    logging.basicConfig(
+        level=os.environ.get("MUCA_LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     uvicorn.run(build_app(), host=host, port=port)
 
 

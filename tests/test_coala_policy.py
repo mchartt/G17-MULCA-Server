@@ -660,3 +660,98 @@ async def test_wait_for_turn_to_finish_times_out_instead_of_hanging_forever():
     [record] = await episodic_store.recall_recent(port.conversation_id, 50)
     assert record.content == "hi"
     assert record.assistant_output is None
+
+
+# ----------------------------------------------------------------------
+# Memory scoping
+# ----------------------------------------------------------------------
+
+
+class EphemeralPort(FakePort):
+    is_ephemeral = True
+
+
+async def test_a_session_nobody_named_keeps_its_memory_in_process_only():
+    requested: list[str] = []
+
+    def store_factory(conversation_id):
+        requested.append(conversation_id)
+        return InMemoryEpisodicStore(), InMemorySnapshotStore()
+
+    policy = CoalaPolicy(
+        strategy_store=STRATEGIES,
+        store_factory=store_factory,
+    )
+    await policy.start(EphemeralPort(conversation_id="a-random-uuid"))
+
+    assert requested == []
+    assert isinstance(policy._episodic_store, InMemoryEpisodicStore)
+
+
+async def test_closing_logs_a_turn_whose_reply_never_arrived():
+    episodic = InMemoryEpisodicStore()
+    policy, port = make_policy(episodic_store=episodic)
+    await policy.start(port)
+    await policy.on_utterance(make_utterance(content="anyone?"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="respond_when_addressed",
+            prompt_fragment="asked",
+        ),
+    )
+
+    await policy.close()
+
+    records = await episodic.recall_recent("conv-1", 10)
+    assert [r.content for r in records] == ["anyone?"]
+    assert records[0].assistant_output is None
+
+
+async def test_a_dm_history_lookup_reads_the_linked_groups_log_only():
+    stores: dict[str, tuple] = {}
+
+    def store_factory(conversation_id):
+        if conversation_id not in stores:
+            stores[conversation_id] = (
+                InMemoryEpisodicStore(),
+                InMemorySnapshotStore(),
+            )
+        return stores[conversation_id]
+
+    group_log, _ = store_factory("instance:team-alpha")
+    await group_log.log(
+        EpisodicRecord(
+            timestamp=1.0,
+            conversation_id="instance:team-alpha",
+            intervention_path="strategy",
+            speaker="Ada",
+            content="the deadline is friday",
+        )
+    )
+
+    port = FakePort(
+        conversation_id="dm:1",
+        is_private=True,
+        linked_conversation_id="instance:team-alpha",
+    )
+    policy = CoalaPolicy(
+        strategy_store=STRATEGIES,
+        store_factory=store_factory,
+        assistant_name="MULCA",
+    )
+    await policy.start(port)
+    await policy.on_utterance(make_utterance(content="when is it due?"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="respond_when_addressed",
+            prompt_fragment="asked about the deadline",
+            needs_history=True,
+        ),
+    )
+
+    assert "the deadline is friday" in port.instructions[-1]
+    # The DM's own store was never asked for anything.
+    dm_log, _ = stores.get("dm:1", (None, None))
+    assert dm_log is None or await dm_log.recall_recent("dm:1", 10) == []

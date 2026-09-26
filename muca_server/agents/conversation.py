@@ -4,12 +4,14 @@ import asyncio
 import binascii
 import logging
 import time
-from collections.abc import Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from ..audio import AudioChunk
+from ..audio.chunk import DEFAULT_SAMPLE_RATE
+from ..audio.pcm import split_float32
 from ..cognition.noop import NoCognition
 from ..cognition.ports import (
     CognitionPolicy,
@@ -49,6 +51,29 @@ logger = logging.getLogger(__name__)
 
 NO_SPEAKER = -1
 
+# Stands in for an observer's guid when a turn had nobody to judge it.
+NO_OBSERVER = UUID(int=0)
+
+# How long without a client audio frame counts as silence. The Unity client
+# sends frames only while somebody is speaking, so silence is an absence.
+DEFAULT_SILENCE_TIMEOUT_MS = 400
+
+# How often the conversation re-reads the clock (silence, playback drain).
+TICK_MS = 100
+
+# How long a closed spoken turn waits for its transcript to come back.
+TRANSCRIPT_WAIT_SECONDS = 3.0
+
+# How long a reply may take to become audible on the client before the
+# assistant takes its turn anyway.
+PLAYBACK_START_TIMEOUT_SECONDS = 3.0
+
+# Unity's receive loop reads 16 KB per frame; 3000 float32 samples, base64
+# encoded, keep a state_update well under that.
+MAX_SAMPLES_PER_FRAME = 3000
+
+TurnJob = Callable[[], Awaitable[None]]
+
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
@@ -59,15 +84,21 @@ class Conversation:
     Orchestrates a realtime multi-agent conversation and delegates the
     assistant's work to a MainAgent.
 
-    This class assumes the client reports the user whose turn it is right now,
-    that two users never hold the turn at the same time, and that backchannels
-    ("um", "hmm") are already filtered out. It also assumes that if a user and
-    the assistant speak over each other, the assistant is interrupted, either
-    by its own provider or by this class.
+    The server-side port of the Unity package's SpeechToSpeechSession. It
+    assumes the client reports the user whose turn it is right now, that two
+    users never hold the turn at the same time, and that backchannels ("um",
+    "hmm") are already filtered out. If a user and the assistant speak over
+    each other, the assistant is interrupted, either by its own provider or
+    by this class.
 
-    Only the main agent speaks to the users, so only its audio travels back to
-    the client. Auxiliary agents observe: they receive user audio, and the
+    Only the main agent speaks to the users, so only its audio travels back
+    to the client. Auxiliary agents observe: they receive user audio, and the
     assistant's audio only once the users have actually heard it.
+
+    Whole turns -- a text message, or a spoken turn once its transcript is
+    back -- go through cognition one at a time, on a queue of their own, so
+    the socket keeps being read (audio, interruptions) while a turn is being
+    judged and answered.
     """
 
     def __init__(
@@ -80,6 +111,7 @@ class Conversation:
         main_agent_options: MainAgentOptions,
         agent_factory: AgentFactory | None = None,
         policy: CognitionPolicy | None = None,
+        silence_timeout_ms: int = DEFAULT_SILENCE_TIMEOUT_MS,
     ) -> None:
         self._state = state
         self._outbound_queue = outbound_queue
@@ -88,8 +120,10 @@ class Conversation:
             agent_factory or DefaultAgentFactory()
         )
         self._policy = policy or NoCognition()
+        self._silence_timeout_ms = silence_timeout_ms
 
         self._conversation_id = str(state.session_id)
+        self._has_conversation_id = False
         self._is_private = False
         self._linked_conversation_id: str | None = None
 
@@ -106,17 +140,37 @@ class Conversation:
         self._assistant_reply: list[str] = []
 
         # What the client reports about its own playback of the main
-        # agent's audio: the server cannot see it directly.
+        # agent's audio: the server cannot see it directly. When the client
+        # stops reporting, playback is estimated from the audio sent.
+        self._client_notifying = False
+        self._last_client_frame_ms: int | None = None
+        self._assistant_audio_first_ms: int | None = None
+        self._assistant_audio_sent_ms = 0
         self._assistant_notifying = asyncio.Event()
         self._assistant_silent = asyncio.Event()
         self._assistant_silent.set()
 
-        self._user_voice_activity_detected = False
-        self._tasks: set[asyncio.Task[None]] = set()
+        # The assistant's turn: generated in full, and already being closed.
+        self._assistant_generation_done = False
+        self._assistant_turn_ending = False
 
-    # ------------------------------------------------------------------
-    # Conversation state, derived from the turns rather than tracked
-    # ------------------------------------------------------------------
+        self._user_voice_activity_detected = False
+        self._last_voice_frame_ms = 0
+        self._last_client_speaker = NO_SPEAKER
+
+        # Spoken input, as the main agent's provider transcribes it: who was
+        # speaking when each input item started, and what it said.
+        self._item_speakers: dict[str, int] = {}
+        self._transcripts: dict[str, str] = {}
+        self._transcript_arrived = asyncio.Event()
+
+        # Whole turns, handled strictly one after the other.
+        self._turn_queue: asyncio.Queue[TurnJob] = asyncio.Queue()
+        self._turn_modality: str | None = None
+
+        self._tasks: set[asyncio.Task[None]] = set()
+        self._background: list[asyncio.Task[None]] = []
+        self._closed = False
 
     # ------------------------------------------------------------------
     # ConversationPort — what the cognition policy may ask of us
@@ -131,6 +185,15 @@ class Conversation:
         return self._is_private
 
     @property
+    def is_ephemeral(self) -> bool:
+        """
+        No client-given conversation id: this session is not a continuation
+        of anything, so nothing about it is worth keeping.
+        """
+
+        return not self._has_conversation_id
+
+    @property
     def linked_conversation_id(self) -> str | None:
         return self._linked_conversation_id
 
@@ -141,13 +204,20 @@ class Conversation:
         if self._main_agent is None:
             return
 
+        # Answer in the medium the turn arrived in: a text message gets a
+        # text reply, a spoken turn a spoken one.
         await self._main_agent.trigger_response(
             instructions=directive,
+            output_modality=self._turn_modality,
         )
 
     async def tell_observers(self, text: str) -> None:
         for agent in list(self._auxiliary_agents.values()):
             await agent.send_text(text)
+
+    # ------------------------------------------------------------------
+    # Conversation state, derived from the turns rather than tracked
+    # ------------------------------------------------------------------
 
     @property
     def main_agent(self) -> MainAgent | None:
@@ -195,25 +265,37 @@ class Conversation:
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
+        self._background = [
+            asyncio.create_task(self._run_turns()),
+            asyncio.create_task(self._run_clock()),
+        ]
+
         await self._policy.start(self)
 
-        # The client's handshake is its request to connect the main agent,
-        # and the runtime consumes that message before dispatching begins.
+        # The client's handshake already connected the main agent; this
+        # only matters for a conversation started without one.
         await self._connect_main_agent()
 
     async def close(self) -> None:
+        # Closed by an explicit disconnect and again by the runtime.
+        if self._closed:
+            return
+
+        self._closed = True
+
         with suppress(Exception):
             await self._policy.close()
 
-        for task in self._tasks:
+        for task in [*self._background, *self._tasks]:
             task.cancel()
 
-        if self._tasks:
-            await asyncio.gather(
-                *self._tasks,
-                return_exceptions=True,
-            )
+        await asyncio.gather(
+            *self._background,
+            *self._tasks,
+            return_exceptions=True,
+        )
 
+        self._background.clear()
         self._tasks.clear()
 
         if self._main_agent is not None:
@@ -229,6 +311,11 @@ class Conversation:
         self._state.connected_agents.clear()
         self._state.active_agent = None
 
+    async def wait_until_idle(self) -> None:
+        """Wait until every queued turn has been fully handled."""
+
+        await self._turn_queue.join()
+
     # ------------------------------------------------------------------
     # Incoming client messages
     # ------------------------------------------------------------------
@@ -240,14 +327,19 @@ class Conversation:
         """
         Forward one frame of user audio, then re-read who is speaking.
 
-        Each of these frames is one tick of the conversation: the client
-        pushes them continuously, whether or not anyone is talking.
+        Each frame is one tick of the conversation. A frame with no audio (or
+        with speaker -1) means nobody is speaking; so does a long enough gap
+        between frames, since some clients only send while someone talks.
         """
+
+        now = _now_ms()
 
         self._report_assistant_playback(
             is_notifying=message.is_notifying,
         )
         self._state.playback_time_ms = message.playback_time_ms
+        if self._main_agent is not None:
+            self._main_agent.playback_time_ms = message.playback_time_ms
 
         chunk = self._decode(
             message.audio,
@@ -255,6 +347,10 @@ class Conversation:
         )
 
         if chunk is not None:
+            self._last_voice_frame_ms = now
+            if message.speaker != NO_SPEAKER:
+                self._last_client_speaker = message.speaker
+
             if self._main_agent is not None:
                 await self._main_agent.send_audio_chunk(chunk)
 
@@ -262,9 +358,10 @@ class Conversation:
                 if agent.listens_to_user(message.speaker):
                     await agent.send_audio_chunk(chunk)
 
-        # A frame with no audio means nobody is speaking.
         await self._read_speaker(
-            message.speaker if chunk is not None else None,
+            message.speaker
+            if chunk is not None and message.speaker != NO_SPEAKER
+            else None,
         )
 
     async def route_playback_frame(
@@ -301,69 +398,13 @@ class Conversation:
         message: UserTextMessage,
     ) -> None:
         """
-        Take one user's text utterance as a complete turn.
+        Queue one user's text utterance as a complete turn.
 
-        Unlike audio, which arrives as a stream of frames the server has to
-        read a speaker out of, a text message is a whole turn the moment it
-        arrives: it opens and closes in one step.
-
-        Ordering invariant: the raw utterance is forwarded to observers here,
-        *before* `self._policy.on_utterance(...)` runs below. That call is
-        what appends this utterance to working memory and computes trigger
-        variables from it, and `CoalaPolicy.on_utterance` then sends those
-        variables to the same observers as a second message. So an observer
-        always sees (this turn's utterance, then this turn's variables) in
-        that order, both before it's ever asked to decide anything -- reorder
-        either side of this and an observer would be asked to judge before
-        seeing one half of this turn's information.
+        Returns as soon as the turn is queued; `wait_until_idle` waits for it
+        to be judged and answered.
         """
 
-        if message.speaker_name:
-            self._participants[message.speaker] = message.speaker_name
-
-        label = self._username(message.speaker)
-        spoken = f"{label}: {message.text}"
-
-        if self._main_agent is not None:
-            await self._main_agent.send_text(spoken, role="user")
-
-        for agent in list(self._auxiliary_agents.values()):
-            if agent.listens_to_user(message.speaker):
-                await agent.send_text(spoken, role="user")
-
-        timestamp = _now_ms()
-        self.turns.append(
-            Turn(
-                start_time=timestamp,
-                end_time=timestamp,
-                speaker_id=message.speaker,
-                speaker_name=label,
-            )
-        )
-
-        await self._send_state_update()
-
-        consult_observers = await self._policy.on_utterance(
-            Utterance(
-                speaker_id=message.speaker,
-                speaker_name=label,
-                content=message.text,
-                timestamp_ms=timestamp,
-                modality="text",
-            )
-        )
-
-        if consult_observers:
-            self._ask_observers_to_consider(message.speaker)
-
-        # Serializes text turns end to end (judge -> act -> reply), so a
-        # second utterance can never be attributed to the wrong decision --
-        # found from a real duplicate/missing episodic-log entry, not
-        # hypothetically. Text only: this call site is only reachable from
-        # route_user_text, since audio never calls on_utterance in the
-        # first place (see _ask_observers_to_consider below) -- audio's own
-        # self-interrupt reflex handles overlap instead.
-        await self._policy.wait_for_turn_to_finish()
+        self._enqueue_turn(lambda: self._take_text_turn(message))
 
     async def route_participants(
         self,
@@ -396,6 +437,10 @@ class Conversation:
         if agent is None:
             return
 
+        if agent is self._main_agent:
+            await self._main_agent.stop_speaking()
+            return
+
         await agent.interrupt_response()
 
     async def connect_agent(
@@ -405,6 +450,7 @@ class Conversation:
         if not message.target_agent_guid:
             if message.conversation_id:
                 self._conversation_id = message.conversation_id
+                self._has_conversation_id = True
 
             self._is_private = message.is_dm
             self._linked_conversation_id = message.linked_conversation_id
@@ -458,9 +504,11 @@ class Conversation:
         )
         agent.on_decision = self._handle_intervention_signal
 
-        self._auxiliary_agents[agent.guid] = agent
-
         await agent.connect()
+
+        # Registered only once connected, so a failed connection leaves
+        # nothing half-built behind.
+        self._auxiliary_agents[agent.guid] = agent
         self._state.connected_agents.add(str(agent.guid))
 
         await self._send(
@@ -490,8 +538,230 @@ class Conversation:
             await agent.disconnect()
 
     # ------------------------------------------------------------------
+    # Whole turns, through cognition
+    # ------------------------------------------------------------------
+
+    def _enqueue_turn(self, job: TurnJob) -> None:
+        self._turn_queue.put_nowait(job)
+
+    async def _run_turns(self) -> None:
+        while True:
+            job = await self._turn_queue.get()
+
+            try:
+                await job()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception(
+                    "A turn in conversation %s failed",
+                    self._conversation_id,
+                )
+            finally:
+                self._turn_modality = None
+                self._turn_queue.task_done()
+
+    async def _take_text_turn(self, message: UserTextMessage) -> None:
+        """
+        One user's text utterance, taken as a complete turn.
+
+        Unlike audio, which arrives as a stream of frames the server has to
+        read a speaker out of, a text message is a whole turn the moment it
+        arrives: it opens and closes in one step.
+
+        Ordering invariant: the raw utterance is forwarded to observers here,
+        *before* `self._policy.on_utterance(...)` runs below. That call is
+        what appends this utterance to working memory and computes trigger
+        variables from it, and `CoalaPolicy.on_utterance` then sends those
+        variables to the same observers as a second message. So an observer
+        always sees (this turn's utterance, then this turn's variables) in
+        that order, both before it's ever asked to decide anything -- reorder
+        either side of this and an observer would be asked to judge before
+        seeing one half of this turn's information.
+        """
+
+        self._turn_modality = "text"
+
+        if message.speaker_name:
+            self._participants[message.speaker] = message.speaker_name
+
+        label = self._username(message.speaker)
+        spoken = f"{label}: {message.text}"
+
+        if self._main_agent is not None:
+            await self._main_agent.send_text(spoken, role="user")
+
+        for agent in list(self._auxiliary_agents.values()):
+            if agent.listens_to_user(message.speaker):
+                await agent.send_text(spoken, role="user")
+
+        timestamp = _now_ms()
+        self.turns.append(
+            Turn(
+                start_time=timestamp,
+                end_time=timestamp,
+                speaker_id=message.speaker,
+                speaker_name=label,
+            )
+        )
+
+        await self._send_state_update()
+
+        await self._judge(
+            Utterance(
+                speaker_id=message.speaker,
+                speaker_name=label,
+                content=message.text,
+                timestamp_ms=timestamp,
+                modality="text",
+            )
+        )
+
+    async def _take_voice_turn(
+        self,
+        speaker: int,
+        ended_at: int,
+    ) -> None:
+        """
+        A spoken turn that just ended, once the provider has transcribed it.
+
+        The main agent and the observers have already heard the audio; this
+        is what gives cognition the words (history, trigger variables, the
+        episodic log), exactly as a text message does.
+        """
+
+        self._turn_modality = "audio"
+
+        transcript = await self._collect_transcript(speaker)
+        if not transcript:
+            # Nothing understood (noise, or transcription failed): the
+            # observers can still judge from what they heard.
+            logger.info(
+                "No transcript for %s's turn, asking observers anyway",
+                self._username(speaker),
+            )
+            self._ask_observers_to_consider(speaker)
+            return
+
+        await self._judge(
+            Utterance(
+                speaker_id=speaker,
+                speaker_name=self._username(speaker),
+                content=transcript,
+                timestamp_ms=ended_at,
+                modality="audio",
+            )
+        )
+
+    async def _judge(self, utterance: Utterance) -> None:
+        consult_observers = await self._policy.on_utterance(utterance)
+
+        if consult_observers:
+            if self._listening_to_user(utterance.speaker_id):
+                self._ask_observers_to_consider(utterance.speaker_id)
+            else:
+                # Nobody to judge this turn: it resolves as "say nothing"
+                # right away, rather than holding every later turn until
+                # the policy's timeout.
+                await self._policy.on_intervention_signal(
+                    NO_OBSERVER,
+                    None,
+                )
+
+        # Serializes turns end to end (judge -> act -> reply), so a second
+        # utterance can never be attributed to the wrong decision -- found
+        # from a real duplicate/missing episodic-log entry, not
+        # hypothetically.
+        await self._policy.wait_for_turn_to_finish()
+
+    async def _collect_transcript(self, speaker: int) -> str:
+        """
+        What the provider transcribed of `speaker`'s input items, waiting
+        (briefly) for the ones still being transcribed.
+        """
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + TRANSCRIPT_WAIT_SECONDS
+        texts: list[str] = []
+
+        while True:
+            for item_id, item_speaker in list(self._item_speakers.items()):
+                if item_speaker == speaker and item_id in self._transcripts:
+                    del self._item_speakers[item_id]
+                    text = self._transcripts.pop(item_id)
+                    if text:
+                        texts.append(text)
+
+            pending = [
+                item_id
+                for item_id, item_speaker in self._item_speakers.items()
+                if item_speaker == speaker
+            ]
+
+            remaining = deadline - loop.time()
+            if (texts and not pending) or remaining <= 0:
+                # A transcript that never came is not waited for again.
+                for item_id in pending:
+                    self._item_speakers.pop(item_id, None)
+
+                return " ".join(texts)
+
+            self._transcript_arrived.clear()
+            with suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(
+                    self._transcript_arrived.wait(),
+                    timeout=remaining,
+                )
+
+    # ------------------------------------------------------------------
     # Turn taking
     # ------------------------------------------------------------------
+
+    async def _run_clock(self) -> None:
+        """
+        Re-read the conversation every tick, for what no message announces:
+        a client that went quiet (silence), and playback that drained.
+        """
+
+        silence = AudioChunk(
+            data=bytes(4 * DEFAULT_SAMPLE_RATE * TICK_MS // 1000),
+        )
+
+        while True:
+            await asyncio.sleep(TICK_MS / 1000)
+
+            try:
+                now = _now_ms()
+                self._refresh_playback()
+
+                # Keep the provider's audio clock running while its VAD
+                # still hears speech: a client that stops sending when
+                # nobody talks would otherwise leave the provider waiting
+                # forever for the trailing silence that ends the utterance.
+                if (
+                    self._user_voice_activity_detected
+                    and now - self._last_voice_frame_ms >= TICK_MS
+                ):
+                    await self._send_to_listeners(silence)
+
+                stale = (
+                    self._last_client_frame_ms is None
+                    or now - self._last_client_frame_ms
+                    > self._silence_timeout_ms
+                )
+                if stale:
+                    await self._read_speaker(None)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Conversation clock tick failed")
+
+    async def _send_to_listeners(self, chunk: AudioChunk) -> None:
+        if self._main_agent is not None:
+            await self._main_agent.send_audio_chunk(chunk)
+
+        for agent in list(self._auxiliary_agents.values()):
+            await agent.send_audio_chunk(chunk)
 
     async def _read_speaker(
         self,
@@ -533,10 +803,8 @@ class Conversation:
                 await self._handle_main_agent_event(
                     MainAgentEvent.AGENT_SPEECH_INTERRUPTED,
                 )
-            elif not self._assistant_notifying.is_set():
-                await self._handle_main_agent_event(
-                    MainAgentEvent.AGENT_SPEECH_STOPPED,
-                )
+            elif self._assistant_can_stop():
+                self._spawn(self._end_assistant_turn())
 
             # Wait for the assistant's turn to close before moving on.
             return
@@ -608,11 +876,15 @@ class Conversation:
         if current_speaker is not None:
             return
 
-        # Goes straight to the observers, bypassing CoalaPolicy.on_utterance
-        # entirely -- spoken turns are not appended to working memory, get
-        # no trigger variables, no forced-intervention check, and no
-        # episodic log entry, unlike text.
-        self._ask_observers_to_consider(old_speaker)
+        if self._provider_vad():
+            # The provider transcribes speech: the turn goes through
+            # cognition like a text message, once its words are back.
+            self._enqueue_turn(
+                lambda: self._take_voice_turn(old_speaker, timestamp),
+            )
+        else:
+            # No words will ever come for it; the observers judge the audio.
+            self._ask_observers_to_consider(old_speaker)
 
     def _ask_observers_to_consider(self, speaker: int) -> None:
         """Somebody finished speaking: let the observers decide to step in."""
@@ -632,10 +904,18 @@ class Conversation:
 
         match event:
             case MainAgentEvent.AGENT_SPEECH_STARTED:
+                self._assistant_generation_done = False
+                self._assistant_turn_ending = False
+                self._assistant_audio_first_ms = None
+                self._assistant_audio_sent_ms = 0
                 self._spawn(self._begin_assistant_turn())
 
             case MainAgentEvent.AGENT_SPEECH_STOPPED:
-                self._spawn(self._end_assistant_turn())
+                # Generation is over; the turn ends once playback drains
+                # (checked here and on every tick from then on).
+                self._assistant_generation_done = True
+                if self._assistant_turn_open() and self._assistant_can_stop():
+                    self._spawn(self._end_assistant_turn())
 
             case MainAgentEvent.AGENT_SPEECH_INTERRUPTED:
                 await self._interrupt_assistant_turn()
@@ -646,6 +926,10 @@ class Conversation:
 
                 self._user_voice_activity_detected = True
                 self.main_agent_state = MainAgentState.LISTENING
+
+                item_id = self._main_agent.last_input_item_id
+                if item_id:
+                    self._item_speakers[item_id] = self._voice_speaker_now()
 
             case MainAgentEvent.USER_SPEECH_STOPPED:
                 if not self._provider_vad():
@@ -664,17 +948,26 @@ class Conversation:
 
         # A user is still mid-turn, so the assistant should not have started.
         if self._user_is_speaking() and not interrupts_itself:
-            await self._main_agent.interrupt_response()
+            await self._main_agent.stop_speaking()
             await self._clear_client_audio()
             return
 
-        await self._assistant_notifying.wait()
+        try:
+            await asyncio.wait_for(
+                self._assistant_notifying.wait(),
+                timeout=PLAYBACK_START_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            logger.info(
+                "The client never reported playing the reply; the "
+                "assistant takes its turn anyway",
+            )
 
         # A user started before the assistant became audible: it never really
         # took a turn.
         if self._user_is_speaking():
             if not interrupts_itself:
-                await self._main_agent.interrupt_response()
+                await self._main_agent.stop_speaking()
 
             await self._clear_client_audio()
             await self._tell_observers(
@@ -696,10 +989,18 @@ class Conversation:
         )
 
         self.main_agent_state = MainAgentState.ANSWERING
+        await self._send_state_update()
+
+        # A short reply may have finished generating (and even playing)
+        # before the turn was taken.
+        if self._assistant_can_stop():
+            self._spawn(self._end_assistant_turn())
 
     async def _end_assistant_turn(self) -> None:
-        if self._main_agent is None:
+        if self._main_agent is None or self._assistant_turn_ending:
             return
+
+        self._assistant_turn_ending = True
 
         await self._assistant_silent.wait()
 
@@ -709,6 +1010,7 @@ class Conversation:
 
         self._close_assistant_turn(_now_ms())
         self.main_agent_state = MainAgentState.INACTIVE
+        self._reset_assistant_audio()
 
         await self._send(
             StateUpdateMessage.response_completed(
@@ -721,6 +1023,8 @@ class Conversation:
         if self._main_agent is None:
             return
 
+        self._assistant_turn_ending = True
+
         await self._tell_observers(
             f"MAIN ASSISTANT ({self._main_agent.name}) stopped speaking but "
             "it did not finish saying what it wanted to say because it was "
@@ -728,10 +1032,11 @@ class Conversation:
         )
 
         if not self._main_agent.capabilities.interrupt:
-            await self._main_agent.interrupt_response()
+            await self._main_agent.stop_speaking()
 
         self._close_assistant_turn(_now_ms())
         self.main_agent_state = MainAgentState.INACTIVE
+        self._reset_assistant_audio()
 
         # Audio is generated faster than it is played, so the client is still
         # holding speech that is no longer wanted.
@@ -741,21 +1046,36 @@ class Conversation:
         self,
         chunk: AudioChunk,
     ) -> None:
-        await self._send(
-            StateUpdateMessage.audio_chunk(
-                current_speaker=self.current_speaker,
-                last_speaker=self.last_speaker,
-                encoded_audio=chunk.to_base64(),
+        if self._assistant_audio_first_ms is None:
+            self._assistant_audio_first_ms = _now_ms()
+        self._assistant_audio_sent_ms += chunk.duration_ms
+        self._refresh_playback()
+
+        for frame in split_float32(chunk.data, MAX_SAMPLES_PER_FRAME):
+            await self._send(
+                StateUpdateMessage.audio_chunk(
+                    current_speaker=self.current_speaker,
+                    last_speaker=self.last_speaker,
+                    encoded_audio=AudioChunk(data=frame).to_base64(),
+                    is_answering=self.is_answering,
+                    assistant_spoke_last=self.assistant_spoke_last,
+                )
             )
-        )
 
     async def _handle_main_agent_text(
         self,
         text: str,
         is_final: bool,
+        modality: str = "text",
+        interrupted: bool = False,
     ) -> None:
         await self._send(
-            AssistantTextMessage(text=text, is_final=is_final),
+            AssistantTextMessage(
+                text=text,
+                is_final=is_final,
+                modality=modality,
+                interrupted=interrupted and is_final,
+            ),
         )
 
         if text:
@@ -768,8 +1088,13 @@ class Conversation:
             # Observers otherwise only ever hear that MULCA spoke (the
             # generic "started/stopped speaking" notices below), never what
             # it actually said -- a blind spot found while auditing history
-            # symmetry between the main and intervention agents.
-            if reply and self._main_agent is not None:
+            # symmetry between the main and intervention agents. A spoken
+            # reply they have already heard, through playback frames.
+            if (
+                reply
+                and modality == "text"
+                and self._main_agent is not None
+            ):
                 spoken = f"{self._main_agent.name}: {reply}"
                 for agent in list(self._auxiliary_agents.values()):
                     if agent.listen_to_assistant:
@@ -777,8 +1102,19 @@ class Conversation:
 
             await self._policy.on_assistant_output(
                 reply,
-                interrupted=False,
+                interrupted=interrupted,
             )
+
+    async def _handle_transcript(
+        self,
+        item_id: str,
+        transcript: str,
+    ) -> None:
+        # Speech the provider heard without raising speech_started for it
+        # (it happens) still belongs to someone: the last person who spoke.
+        self._item_speakers.setdefault(item_id, self._voice_speaker_now())
+        self._transcripts[item_id] = transcript.strip()
+        self._transcript_arrived.set()
 
     async def _handle_intervention_signal(
         self,
@@ -821,6 +1157,9 @@ class Conversation:
             )
             self._main_agent.on_text = (
                 self._handle_main_agent_text
+            )
+            self._main_agent.on_transcript = (
+                self._handle_transcript
             )
             self._main_agent.on_message = (
                 self._handle_main_agent_message
@@ -872,7 +1211,42 @@ class Conversation:
                 await agent.send_text(SPEAKER_CHANGED + text)
 
     def _user_is_speaking(self) -> bool:
-        return bool(self.turns) and self.turns[-1].is_open
+        return (
+            bool(self.turns)
+            and self.turns[-1].is_open
+            and not self._assistant_turn_open()
+        )
+
+    def _assistant_turn_open(self) -> bool:
+        return (
+            bool(self.turns)
+            and self.turns[-1].is_open
+            and self.turns[-1].speaker_id == self._main_agent_options.agent_id
+        )
+
+    def _assistant_can_stop(self) -> bool:
+        """Generated in full, and no longer audible on the client."""
+
+        return (
+            self._assistant_generation_done
+            and not self._assistant_turn_ending
+            and self._assistant_silent.is_set()
+        )
+
+    def _voice_speaker_now(self) -> int:
+        """Who is speaking according to the client, or who spoke last."""
+
+        recent = (
+            _now_ms() - self._last_voice_frame_ms
+            <= self._silence_timeout_ms + TICK_MS
+        )
+        if recent and self._last_client_speaker != NO_SPEAKER:
+            return self._last_client_speaker
+
+        if self._user_is_speaking():
+            return self.turns[-1].speaker_id
+
+        return self.last_speaker
 
     def _provider_vad(self) -> bool:
         return (
@@ -886,8 +1260,14 @@ class Conversation:
 
         for turn in reversed(self.turns):
             if turn.speaker_id == self._main_agent.agent_id:
-                turn.end_time = timestamp
+                if turn.is_open:
+                    turn.end_time = timestamp
                 return
+
+    def _reset_assistant_audio(self) -> None:
+        self._assistant_generation_done = False
+        self._assistant_audio_first_ms = None
+        self._assistant_audio_sent_ms = 0
 
     def _username(self, user_id: int) -> str:
         if user_id == self._main_agent_options.agent_id:
@@ -903,7 +1283,36 @@ class Conversation:
         *,
         is_notifying: bool,
     ) -> None:
-        if is_notifying:
+        self._client_notifying = is_notifying
+        self._last_client_frame_ms = _now_ms()
+        self._refresh_playback()
+
+    def _refresh_playback(self) -> None:
+        """
+        Whether the assistant is audible on the client right now.
+
+        Taken from the client while it keeps reporting; estimated from the
+        audio sent so far once it goes quiet (a client that only sends frames
+        while someone talks).
+        """
+
+        now = _now_ms()
+        reporting = (
+            self._last_client_frame_ms is not None
+            and now - self._last_client_frame_ms <= self._silence_timeout_ms
+        )
+
+        if reporting:
+            audible = self._client_notifying
+        else:
+            audible = (
+                self._assistant_audio_first_ms is not None
+                and now
+                < self._assistant_audio_first_ms
+                + self._assistant_audio_sent_ms
+            )
+
+        if audible:
             self._assistant_silent.clear()
             self._assistant_notifying.set()
         else:

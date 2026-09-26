@@ -1,3 +1,4 @@
+import json
 from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -146,6 +147,19 @@ IncomingProtocolMessage = Annotated[
     Field(discriminator="event"),
 ]
 
+class RawProviderMessage(TargetedMessage):
+    """
+    A frame with no `event`: a provider payload the client wants passed
+    through as-is (the Unity client's SendAnythingAsync, e.g. the
+    session.update JSON it sends right after connecting).
+
+    Not part of the discriminated union, since it has no discriminator.
+    """
+
+    event: Literal["raw_provider_message"] = "raw_provider_message"
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
 CONNECT_EVENTS = frozenset(
     {"connect_main_assistant", "connect"}
 )
@@ -155,9 +169,17 @@ incoming_message_adapter = TypeAdapter(IncomingProtocolMessage)
 
 def parse_incoming_message(
     raw_message: str | bytes | dict[str, Any],
-) -> IncomingProtocolMessage:
-    return incoming_message_adapter.validate_json(
-        raw_message
-    ) if isinstance(raw_message, (str, bytes)) else (
-        incoming_message_adapter.validate_python(raw_message)
+) -> IncomingProtocolMessage | RawProviderMessage:
+    data = (
+        json.loads(raw_message)
+        if isinstance(raw_message, (str, bytes))
+        else raw_message
     )
+
+    if isinstance(data, dict) and "event" not in data:
+        return RawProviderMessage(
+            target_agent_guid=data.get("targetAgentGuid"),
+            payload=data,
+        )
+
+    return incoming_message_adapter.validate_python(data)

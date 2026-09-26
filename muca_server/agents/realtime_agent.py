@@ -78,7 +78,15 @@ class RealtimeAgent:
         interrupt: bool = True,
         instructions: str = "",
         add_to_conversation: bool = True,
+        output_modality: str | None = None,
     ) -> None:
+        """
+        Ask the provider for a response.
+
+        `output_modality` is "text" or "audio" for this one response; None
+        keeps the agent's session default.
+        """
+
         if interrupt:
             await self.interrupt_response()
 
@@ -86,6 +94,7 @@ class RealtimeAgent:
             max_tokens=max_tokens,
             instructions=instructions,
             add_to_conversation=add_to_conversation,
+            output_modality=output_modality,
         )
 
     async def interrupt_response(self) -> None:
@@ -135,6 +144,7 @@ class RealtimeAgent:
         max_tokens: int | None,
         instructions: str,
         add_to_conversation: bool,
+        output_modality: str | None = None,
     ) -> None:
         logger.debug("No provider configured, dropping response trigger")
 
