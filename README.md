@@ -65,6 +65,15 @@ python -m venv .venv
 | `MUCA_SILENCE_TIMEOUT_MS` | `400` | How long without audio frames counts as silence. |
 | `MUCA_LOG_LEVEL` | `INFO` | |
 
+### In Docker
+
+```bash
+docker build -t muca-server .
+docker run -p 8000:8000 -e OPENAI_API_KEY=... -v muca-data:/data muca-server
+```
+
+The image keeps its SQLite files in `/data`, so mount a volume there. It also reads any Docker secret under `/run/secrets/` as the environment variable of the same name, so `OPENAI_API_KEY` can come from a secret. The swarm deployment, together with MULCA, is in MULCA's `deploy/README.md`.
+
 ## Testing
 
 ```bash

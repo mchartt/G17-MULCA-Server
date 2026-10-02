@@ -1,0 +1,19 @@
+# Builds the Docker image into this project's GitLab container registry.
+# The GitHub repo is mirrored on GitLab ("CI/CD for external repository"),
+# so every push to GitHub runs this there.
+#
+# Each build is tagged with its commit (what a deploy should name) and with
+# its branch (always the branch's newest build).
+build-image:
+  image: docker:27
+  services:
+    - docker:27-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  rules:
+    - if: $CI_COMMIT_BRANCH
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  script:
+    - docker build -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA" -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG" .
+    - docker push --all-tags "$CI_REGISTRY_IMAGE"
