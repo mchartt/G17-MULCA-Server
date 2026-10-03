@@ -9,6 +9,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 from contextlib import suppress
 
 from openai import AsyncOpenAI
@@ -28,6 +29,17 @@ MAX_OUTPUT_TOKENS = 4096
 
 # Errors that only mean a request raced the provider's own state (e.g. a
 # cancel arriving just after the response finished): nothing to report.
+# Testing only: end every provider connection after this many seconds, as
+# OpenAI's 60-minute Realtime limit does, to exercise the recovery from it
+# (see Conversation._handle_agent_connection_lost) without waiting an hour.
+DEBUG_PROVIDER_TTL_ENV_VAR = "MUCA_DEBUG_PROVIDER_TTL_SECONDS"
+
+
+def debug_provider_ttl() -> float | None:
+    value = os.environ.get(DEBUG_PROVIDER_TTL_ENV_VAR, "").strip()
+    return float(value) if value else None
+
+
 IGNORABLE_ERROR_CODES = frozenset(
     {
         "response_cancel_not_active",
@@ -285,11 +297,32 @@ class MainAgentOpenAI(MainAgent):
     async def _receive_loop(self) -> None:
         assert self._connection is not None
 
-        async for event in self._connection:
-            await self._handle_provider_message(
-                event.model_dump_json(),
-            )
-            await self._interpret(event)
+        reason = "the provider closed the connection"
+        try:
+            # No timeout unless the testing-only TTL is set.
+            async with asyncio.timeout(debug_provider_ttl()):
+                async for event in self._connection:
+                    # One event that fails to handle is a bug to log, not a
+                    # reason to stop listening to every later one.
+                    try:
+                        await self._handle_provider_message(
+                            event.model_dump_json(),
+                        )
+                        await self._interpret(event)
+                    except Exception:
+                        logger.exception(
+                            "Could not handle a provider event of type %r",
+                            getattr(event, "type", None),
+                        )
+        except TimeoutError:
+            reason = f"{DEBUG_PROVIDER_TTL_ENV_VAR} reached"
+        except Exception as exc:
+            reason = repr(exc)
+
+        # Reached when the provider ends the connection (the SDK's iterator
+        # just stops on a normal close, e.g. Realtime's 60-minute limit),
+        # never on a disconnect(), which cancels this task instead.
+        await self._connection_lost(reason)
 
     async def _interpret(self, event) -> None:
         if event.type == "response.done":

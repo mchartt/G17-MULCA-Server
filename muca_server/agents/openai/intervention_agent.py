@@ -18,8 +18,10 @@ from ...cognition.strategies import StrategyStore
 from ..auxiliary_agent import AuxiliaryAgent
 from ..options import AuxiliaryAgentOptions
 from .main_agent import (
+    DEBUG_PROVIDER_TTL_ENV_VAR,
     IGNORABLE_ERROR_CODES,
     PROVIDER_SAMPLE_RATE,
+    debug_provider_ttl,
     encode_for_provider,
     error_code,
 )
@@ -167,11 +169,32 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
     async def _receive_loop(self) -> None:
         assert self._connection is not None
 
-        async for event in self._connection:
-            await self._handle_provider_message(
-                event.model_dump_json(),
-            )
-            await self._interpret(event)
+        reason = "the provider closed the connection"
+        try:
+            # No timeout unless the testing-only TTL is set.
+            async with asyncio.timeout(debug_provider_ttl()):
+                async for event in self._connection:
+                    # One event that fails to handle is a bug to log, not a
+                    # reason to stop listening to every later one.
+                    try:
+                        await self._handle_provider_message(
+                            event.model_dump_json(),
+                        )
+                        await self._interpret(event)
+                    except Exception:
+                        logger.exception(
+                            "Could not handle a provider event of type %r",
+                            getattr(event, "type", None),
+                        )
+        except TimeoutError:
+            reason = f"{DEBUG_PROVIDER_TTL_ENV_VAR} reached"
+        except Exception as exc:
+            reason = repr(exc)
+
+        # Reached when the provider ends the connection (the SDK's iterator
+        # just stops on a normal close, e.g. Realtime's 60-minute limit),
+        # never on a disconnect(), which cancels this task instead.
+        await self._connection_lost(reason)
 
     async def _interpret(self, event) -> None:
         """

@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import WebSocket
 
 from ..events import AgentRouterProtocol
-from ..protocol import OutgoingProtocolMessage
+from ..protocol import EndSession, OutgoingProtocolMessage
 from .session_state import SessionState
 
 
@@ -24,7 +24,7 @@ class SessionContext:
     session_id: UUID
     websocket: WebSocket
     state: SessionState
-    outbound_queue: asyncio.Queue[OutgoingProtocolMessage]
+    outbound_queue: asyncio.Queue[OutgoingProtocolMessage | EndSession]
 
 
 @dataclass(slots=True)

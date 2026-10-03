@@ -8,6 +8,7 @@ from ..audio import AudioChunk
 logger = logging.getLogger(__name__)
 
 MessageHandler = Callable[[str], Awaitable[None]]
+ConnectionLostHandler = Callable[["RealtimeAgent"], Awaitable[None]]
 
 
 class RealtimeAgent:
@@ -33,6 +34,11 @@ class RealtimeAgent:
 
         # Raw provider messages, exactly as they arrive.
         self.on_message: MessageHandler | None = None
+
+        # The provider ended the connection on its own -- OpenAI closes
+        # every Realtime session after 60 minutes, for one. Never called for
+        # a disconnect() asked for here.
+        self.on_connection_lost: ConnectionLostHandler | None = None
 
     @property
     def is_connected(self) -> bool:
@@ -111,6 +117,28 @@ class RealtimeAgent:
 
         if self.on_message is not None:
             await self.on_message(raw)
+
+    async def _connection_lost(self, reason: str) -> None:
+        """
+        A provider subclass calls this when its connection ends without a
+        disconnect() -- after which every send would only fail, so stop
+        claiming to be connected and let the owner decide what to do.
+        """
+
+        if not self._connected:
+            # disconnect() already cleared it: this end was asked for.
+            return
+
+        self._connected = False
+        self._response_active = False
+        logger.warning(
+            "%s lost its provider connection: %s",
+            type(self).__name__,
+            reason,
+        )
+
+        if self.on_connection_lost is not None:
+            await self.on_connection_lost(self)
 
     # ------------------------------------------------------------------
     # Provider hooks — override in a provider-specific subclass.

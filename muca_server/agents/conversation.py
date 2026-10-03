@@ -26,6 +26,7 @@ from ..protocol import (
     ConnectAgentMessage,
     CreateAuxiliaryAgentMessage,
     DisconnectMessage,
+    EndSession,
     InterruptMessage,
     OutgoingProtocolMessage,
     ParticipantsMessage,
@@ -106,7 +107,7 @@ class Conversation:
         *,
         state: SessionState,
         outbound_queue: asyncio.Queue[
-            OutgoingProtocolMessage
+            OutgoingProtocolMessage | EndSession
         ],
         main_agent_options: MainAgentOptions,
         agent_factory: AgentFactory | None = None,
@@ -171,6 +172,11 @@ class Conversation:
         self._tasks: set[asyncio.Task[None]] = set()
         self._background: list[asyncio.Task[None]] = []
         self._closed = False
+
+        # Set once a provider connection was lost and this session is on
+        # its way out (see _handle_agent_connection_lost).
+        self._ending = False
+        self._policy_closed = False
 
     # ------------------------------------------------------------------
     # ConversationPort — what the cognition policy may ask of us
@@ -283,8 +289,13 @@ class Conversation:
 
         self._closed = True
 
-        with suppress(Exception):
-            await self._policy.close()
+        # Already closed (memory saved) when a lost provider connection
+        # ended this session; saving again now, possibly after the client's
+        # next session has loaded that memory, could only overwrite it.
+        if not self._policy_closed:
+            self._policy_closed = True
+            with suppress(Exception):
+                await self._policy.close()
 
         for task in [*self._background, *self._tasks]:
             task.cancel()
@@ -503,6 +514,7 @@ class Conversation:
             agent.guid,
         )
         agent.on_decision = self._handle_intervention_signal
+        agent.on_connection_lost = self._handle_agent_connection_lost
 
         await agent.connect()
 
@@ -542,6 +554,10 @@ class Conversation:
     # ------------------------------------------------------------------
 
     def _enqueue_turn(self, job: TurnJob) -> None:
+        if self._ending:
+            # The session is closing; its successor takes new turns.
+            return
+
         self._turn_queue.put_nowait(job)
 
     async def _run_turns(self) -> None:
@@ -1164,6 +1180,9 @@ class Conversation:
             self._main_agent.on_message = (
                 self._handle_main_agent_message
             )
+            self._main_agent.on_connection_lost = (
+                self._handle_agent_connection_lost
+            )
 
         await self._main_agent.connect()
         self._state.active_agent = self._main_agent.name
@@ -1341,7 +1360,7 @@ class Conversation:
 
     async def _send(
         self,
-        message: OutgoingProtocolMessage,
+        message: OutgoingProtocolMessage | EndSession,
     ) -> None:
         self._state.current_speaker = self.current_speaker
         self._state.last_speaker = self.last_speaker
@@ -1351,6 +1370,41 @@ class Conversation:
         )
 
         await self._outbound_queue.put(message)
+
+    async def _handle_agent_connection_lost(
+        self,
+        agent: RealtimeAgent,
+    ) -> None:
+        """
+        A provider connection ended on its own -- OpenAI closes every
+        Realtime session after 60 minutes. Nothing in this session works
+        without it, so end the whole session and let the client reopen: a
+        fresh session reconnects the agents and reloads the memory saved
+        here, the same path a server restart takes.
+
+        Runs inside the lost agent's own receive task, which close() would
+        cancel -- so it only asks the runtime to close the websocket (an
+        EndSession on the outbound queue), it doesn't close anything itself.
+        """
+
+        if self._closed or self._ending:
+            return
+
+        self._ending = True
+        logger.info(
+            "%s's provider ended the realtime session of %s; ending this "
+            "session so the client reopens it",
+            type(agent).__name__,
+            self._conversation_id,
+        )
+
+        # Saved before the socket closes, not after: the client reopens as
+        # soon as it sees the close, and its new session loads this memory.
+        self._policy_closed = True
+        with suppress(Exception):
+            await self._policy.close()
+
+        await self._send(EndSession())
 
     def _spawn(
         self,

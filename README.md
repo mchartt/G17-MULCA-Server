@@ -64,6 +64,9 @@ python -m venv .venv
 | `MUCA_DB_DIR` | `data/` beside the package | One SQLite file per `conversationId`. |
 | `MUCA_SILENCE_TIMEOUT_MS` | `400` | How long without audio frames counts as silence. |
 | `MUCA_LOG_LEVEL` | `INFO` | |
+| `MUCA_DEBUG_PROVIDER_TTL_SECONDS` | unset | Testing only: end every provider connection after this many seconds. |
+
+OpenAI ends every Realtime connection after 60 minutes. When a provider connection ends on its own, the server saves the conversation's memory and closes that client's session with code 1012. The client reconnects, and the new session reloads the memory. `MUCA_DEBUG_PROVIDER_TTL_SECONDS` triggers the same thing early, to test it without waiting an hour.
 
 ### In Docker
 

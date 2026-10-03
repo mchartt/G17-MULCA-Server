@@ -10,6 +10,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from ..events import AgentRouterProtocol, DispatchResult, dispatch
 from ..protocol import (
     CONNECT_EVENTS,
+    EndSession,
     ErrorMessage,
     parse_incoming_message,
     OutgoingProtocolMessage,
@@ -31,7 +32,7 @@ class SessionRuntime:
         state: SessionState,
         agent_router: AgentRouterProtocol,
         outbound_queue: asyncio.Queue[
-            OutgoingProtocolMessage
+            OutgoingProtocolMessage | EndSession
         ],
         workers: list[SessionWorker],
     ) -> None:
@@ -165,6 +166,24 @@ class SessionRuntime:
     async def send_loop(self) -> None:
         while not self._closed:
             message = await self.outbound_queue.get()
+
+            if isinstance(message, EndSession):
+                # A worker can't end its own session (it would be cancelling
+                # itself), so it asks here. Closing the socket ends
+                # receive_loop through the same path as a client that left,
+                # and run()'s finally closes everything else.
+                logger.info(
+                    "Ending session %s: %s",
+                    self.session_id,
+                    message.reason,
+                )
+                self.outbound_queue.task_done()
+                with suppress(Exception):
+                    await self.websocket.close(
+                        code=message.code,
+                        reason=message.reason,
+                    )
+                return
 
             try:
                 payload = serialize_outgoing_message(

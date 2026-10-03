@@ -1,3 +1,4 @@
+from .control import EndSession
 from .incoming import (
     CONNECT_EVENTS,
     AudioStreamMessage,
@@ -38,6 +39,7 @@ __all__ = [
     "ConnectAgentMessage",
     "CreateAuxiliaryAgentMessage",
     "DisconnectMessage",
+    "EndSession",
     "ErrorMessage",
     "IncomingMessage",
     "IncomingProtocolMessage",
