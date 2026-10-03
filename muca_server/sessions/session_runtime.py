@@ -245,5 +245,8 @@ class SessionRuntime:
 
         self._tasks.clear()
 
-        with suppress(RuntimeError):
+        # RuntimeError: already closed (send_loop or an EndSession did it).
+        # WebSocketDisconnect: the client is already gone without a close
+        # handshake (e.g. this server shutting down under it).
+        with suppress(RuntimeError, WebSocketDisconnect):
             await self.websocket.close()
