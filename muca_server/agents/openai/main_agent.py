@@ -523,7 +523,16 @@ class ChatCompletionsSummarizer:
                         "-- not a human. Optimize for information density: "
                         "concrete facts, names, numbers, and decisions, "
                         "not a list of topics that were merely mentioned. "
-                        "Target roughly 250-300 words for history_summary."
+                        "If something has to be compressed away to stay "
+                        "within budget, prioritize in this order: (1) key "
+                        "decisions and their outcomes, (2) important "
+                        "process information -- who proposed or argued for "
+                        "what, and why a decision was made the way it was, "
+                        "not just what was decided, (3) the most important "
+                        "task-specific details (e.g. agreed-on design "
+                        "choices, numbers, constraints) that people "
+                        "shouldn't have to repeat themselves on later. "
+                        "Target roughly 1500 words for history_summary."
                     ),
                 },
                 {

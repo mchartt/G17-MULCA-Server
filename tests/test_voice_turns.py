@@ -63,6 +63,7 @@ class RecordingPolicy:
 
     def __init__(self) -> None:
         self.utterances: list[Utterance] = []
+        self.untranscribed: list[tuple[int, str, int]] = []
         self.port = None
 
     async def start(self, port) -> None:
@@ -84,6 +85,17 @@ class RecordingPolicy:
 
     async def wait_for_turn_to_finish(self) -> None:
         pass
+
+    def observer_catchup_text(self) -> str:
+        return ""
+
+    async def on_untranscribed_turn(
+        self,
+        speaker_id: int,
+        speaker_name: str,
+        timestamp_ms: int,
+    ) -> None:
+        self.untranscribed.append((speaker_id, speaker_name, timestamp_ms))
 
 
 def make_conversation(*, vad: bool = True, silence_timeout_ms: int = 400):
@@ -175,6 +187,38 @@ async def test_a_transcribed_spoken_turn_reaches_the_policy_attributed():
             for u in policy.utterances] == [
         (5, "Ada", "what time is it?", "audio"),
     ]
+
+
+async def test_an_untranscribed_turn_is_logged_and_observers_still_asked(
+    monkeypatch,
+):
+    """
+    Noise, or a provider transcription failure: no transcript ever arrives.
+    Every other outcome gets an audit row (even "decided not to act") --
+    this shouldn't be the one silent exception, and the observers (who
+    already heard the raw audio) should still get a chance to judge.
+    """
+
+    import muca_server.agents.conversation as conversation_module
+
+    monkeypatch.setattr(conversation_module, "TRANSCRIPT_WAIT_SECONDS", 0.01)
+
+    conversation, factory, policy, _ = make_conversation()
+    await conversation.start()
+    await conversation.route_participants(
+        parse_incoming_message(
+            {"event": "participants", "participants": [{"id": 5, "name": "Ada"}]},
+        )
+    )
+
+    await speak_one_turn(conversation, factory, speaker=5, item_id="in-1")
+    # No _handle_transcript call -- nothing ever arrives for "in-1".
+    await conversation.wait_until_idle()
+
+    assert policy.utterances == []
+    assert len(policy.untranscribed) == 1
+    speaker_id, speaker_name, _timestamp_ms = policy.untranscribed[0]
+    assert (speaker_id, speaker_name) == (5, "Ada")
 
 
 async def test_a_spoken_turn_is_answered_in_audio_and_a_text_turn_in_text():

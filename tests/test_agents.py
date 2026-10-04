@@ -186,6 +186,62 @@ async def test_creating_an_auxiliary_agent_announces_its_guid():
     assert str(guid) in state.connected_agents
 
 
+async def test_a_newly_connected_observer_gets_caught_up_on_existing_history():
+    """
+    After a restart, WM's history is restored before any observer exists to
+    have seen it live -- a freshly connecting observer gets a one-time
+    catchup message instead, so it isn't judging blind. Targeted at just
+    this agent, not broadcast: see Conversation.create_auxiliary_agent.
+    """
+
+    class CatchupPolicy:
+        async def start(self, port) -> None:
+            pass
+
+        async def close(self) -> None:
+            pass
+
+        async def on_utterance(self, utterance) -> bool:
+            return True
+
+        async def on_intervention_signal(self, agent_guid, signal) -> None:
+            pass
+
+        async def on_assistant_output(self, text, *, interrupted) -> None:
+            pass
+
+        async def wait_for_turn_to_finish(self) -> None:
+            pass
+
+        def observer_catchup_text(self) -> str:
+            return "Ada: the deadline is friday"
+
+    state = SessionState(session_id=uuid4())
+    state.is_connected = True
+    conversation = Conversation(
+        state=state,
+        outbound_queue=asyncio.Queue(),
+        main_agent_options=MainAgentOptions(),
+        policy=CatchupPolicy(),
+    )
+    await conversation.start()
+
+    received: list[str] = []
+    original_send_text = AuxiliaryAgent._send_text
+
+    async def recording_send_text(self, text: str, *, role: str = "system") -> None:
+        received.append(text)
+        await original_send_text(self, text, role=role)
+
+    AuxiliaryAgent._send_text = recording_send_text
+    try:
+        await conversation.create_auxiliary_agent(create_auxiliary())
+    finally:
+        AuxiliaryAgent._send_text = original_send_text
+
+    assert received == ["Ada: the deadline is friday"]
+
+
 async def test_removing_an_auxiliary_agent_forgets_it():
     state, conversation, _ = make_conversation()
     await conversation.start()

@@ -136,3 +136,31 @@ class CognitionPolicy(Protocol):
         the wrong utterance because a second one arrived first.
         """
         ...
+
+    async def on_untranscribed_turn(
+        self,
+        speaker_id: int,
+        speaker_name: str,
+        timestamp_ms: int,
+    ) -> None:
+        """
+        A voice turn ended but the provider never produced a transcript for
+        it (noise, provider failure). Distinct from a normal on_utterance
+        call: there's no content to judge or add to conversational memory,
+        only the fact that something happened -- logged for audit
+        completeness, not something to act on.
+        """
+        ...
+
+    def observer_catchup_text(self) -> str:
+        """
+        What a freshly-connected observer should be told once, to catch up
+        on history already in WM it was never live for -- after a restart
+        (WM restored from a snapshot before any observer existed), or any
+        time a new observer connects mid-conversation. Empty if there's
+        nothing to catch up on. Never the compressed summary -- an observer
+        only ever reads raw history/trigger variables, never
+        history_summary, so catching it up means the same raw tail, not a
+        different kind of context it wouldn't otherwise be given.
+        """
+        ...

@@ -89,6 +89,9 @@ class AlwaysAnswer:
     async def wait_for_turn_to_finish(self) -> None:
         pass
 
+    def observer_catchup_text(self) -> str:
+        return ""
+
 
 def make_conversation():
     state = SessionState(session_id=uuid4())

@@ -27,7 +27,18 @@ from .working_memory import WorkingMemory
 logger = logging.getLogger(__name__)
 
 RETRIEVAL_LIMIT = 50
-MANAGEMENT_CYCLE_INTERVAL = 8
+# Sized for the actual deployment this project targets: 10 teams x 6 tasks x
+# ~30 min sessions each, one shared conversation_id per team across all of
+# them (nothing resets between tasks). A rough ~2-5 messages/minute estimate
+# for an active group discussion puts one session at ~60-150 turns; 24
+# keeps several minutes of recent back-and-forth fully verbatim (not relying
+# on the compressed summary for anything just said) without resending a huge
+# block on every single triggered reply -- that per-turn resend, not the
+# summarization call itself, is the bigger cost driver, since replies fire
+# far more often than management cycles do. The old default of 8 was a demo
+# value, not tuned for this; raising it also needed working_memory.py's
+# transcript() to stop independently re-capping at a smaller, unrelated 20.
+MANAGEMENT_CYCLE_INTERVAL = 24
 TURN_TIMEOUT_SECONDS = 30.0
 
 
@@ -431,6 +442,43 @@ class CoalaPolicy:
             await self._flush_pending_episodic_record()
             self._pending_utterance = None
             self._turn_done.set()
+
+    def observer_catchup_text(self) -> str:
+        if self._wm is None or not self._wm.history:
+            return ""
+
+        return (
+            "Catching you up on this conversation's history, which you "
+            "were not connected for:\n" + self._wm.transcript()
+        )
+
+    async def on_untranscribed_turn(
+        self,
+        speaker_id: int,
+        speaker_name: str,
+        timestamp_ms: int,
+    ) -> None:
+        """
+        A voice turn ended with no transcript (noise, provider failure).
+        Logs the bare fact that something happened, same file a DM's audit
+        record goes to -- but doesn't touch WM: there's no content to add
+        to conversational history or judge, and wm.total_message_count
+        driving cooldowns/the management cycle shouldn't advance for a turn
+        with nothing in it.
+        """
+
+        if self._episodic_store is None:
+            return
+
+        await self._episodic_store.log(
+            EpisodicRecord(
+                timestamp=timestamp_ms / 1000,
+                conversation_id=self._wm.conversation_id if self._wm else "",
+                intervention_path="untranscribed",
+                speaker=speaker_name or f"User {speaker_id}",
+                modality="audio",
+            )
+        )
 
     async def _resolve_pending_turn(
         self,

@@ -50,6 +50,9 @@ class AnswerEverything:
     async def wait_for_turn_to_finish(self) -> None:
         pass
 
+    def observer_catchup_text(self) -> str:
+        return ""
+
 
 def make_client() -> TestClient:
     return TestClient(

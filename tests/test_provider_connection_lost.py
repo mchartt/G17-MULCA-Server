@@ -199,6 +199,9 @@ class CountingPolicy:
     async def wait_for_turn_to_finish(self) -> None:
         pass
 
+    def observer_catchup_text(self) -> str:
+        return ""
+
 
 def test_a_lost_provider_connection_saves_memory_then_ends_the_session():
     log: list[str] = []

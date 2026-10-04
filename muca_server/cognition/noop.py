@@ -39,3 +39,14 @@ class NoCognition:
 
     async def wait_for_turn_to_finish(self) -> None:
         pass
+
+    async def on_untranscribed_turn(
+        self,
+        speaker_id: int,
+        speaker_name: str,
+        timestamp_ms: int,
+    ) -> None:
+        pass
+
+    def observer_catchup_text(self) -> str:
+        return ""

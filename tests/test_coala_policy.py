@@ -76,12 +76,15 @@ def make_policy(**kwargs) -> tuple[CoalaPolicy, FakePort]:
     return policy, port
 
 
-def make_utterance(speaker_id=1, name="Ada", content="hello") -> Utterance:
+def make_utterance(
+    speaker_id=1, name="Ada", content="hello", modality="text"
+) -> Utterance:
     return Utterance(
         speaker_id=speaker_id,
         speaker_name=name,
         content=content,
         timestamp_ms=0,
+        modality=modality,
     )
 
 
@@ -202,6 +205,77 @@ async def test_provide_summary_always_retrieves_regardless_of_the_signal():
     )
 
     assert "the sky is blue" in port.instructions[0]
+
+
+async def test_provide_summary_retrieves_text_and_voice_turns_together():
+    """
+    Retrieval has no modality concept at all -- text and voice turns share
+    one conversation_id/log and are returned in one chronologically-ordered
+    window, whichever modality asked for the summary. An untranscribed
+    voice turn (no content) must not show up as a blank line.
+    """
+
+    episodic = InMemoryEpisodicStore()
+    await episodic.log(
+        EpisodicRecord(
+            timestamp=0,
+            conversation_id="conv-1",
+            intervention_path="strategy",
+            speaker="Ada",
+            content="let's ship friday",
+            modality="text",
+        )
+    )
+    await episodic.log(
+        EpisodicRecord(
+            timestamp=1,
+            conversation_id="conv-1",
+            intervention_path="untranscribed",
+            speaker="Ada",
+            modality="audio",
+        )
+    )
+    await episodic.log(
+        EpisodicRecord(
+            timestamp=2,
+            conversation_id="conv-1",
+            intervention_path="strategy",
+            speaker="Ada",
+            content="actually let's make it monday",
+            modality="audio",
+        )
+    )
+
+    strategies = StrategyStore(
+        {
+            "provide_summary": Strategy(
+                id="provide_summary",
+                trigger_description="",
+                prompt_template="Summarize. {prompt_fragment}",
+            ),
+        }
+    )
+    policy = CoalaPolicy(strategy_store=strategies, episodic_store=episodic)
+    port = FakePort()
+    await policy.start(port)
+    # A spoken question triggers the same retrieval path as a typed one.
+    await policy.on_utterance(
+        make_utterance(content="what did we decide?", modality="audio")
+    )
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="provide_summary",
+            prompt_fragment="",
+            needs_history=False,
+        ),
+    )
+
+    retrieved = port.instructions[0]
+    assert "let's ship friday" in retrieved
+    assert "actually let's make it monday" in retrieved
+    # The untranscribed turn (empty content) contributes no blank line.
+    assert "Ada: \n" not in retrieved
 
 
 async def test_a_private_conversations_turns_are_logged_too():
@@ -691,6 +765,57 @@ async def test_the_episodic_log_captures_the_assistants_actual_reply():
     [record] = await episodic_store.recall_recent(port.conversation_id, 50)
     assert record.content == "hi"
     assert record.assistant_output == "Hello there."
+
+
+async def test_observer_catchup_text_is_empty_with_no_history():
+    policy, port = make_policy()
+    await policy.start(port)
+
+    assert policy.observer_catchup_text() == ""
+
+
+async def test_observer_catchup_text_carries_restored_history():
+    """
+    After a restart, WM's history is restored from a snapshot before any
+    observer exists to have seen it live -- this is what a freshly
+    connecting observer gets instead, so it isn't judging blind.
+    """
+
+    policy, port = make_policy()
+    await policy.start(port)
+    await policy.on_utterance(make_utterance(content="the deadline is friday"))
+
+    catchup = policy.observer_catchup_text()
+
+    assert "the deadline is friday" in catchup
+    # Raw history, never the compressed summary -- an observer only ever
+    # reads wm.history/trigger variables directly, same as every other turn.
+    assert "Summary of the conversation" not in catchup
+
+
+async def test_an_untranscribed_turn_is_logged_without_touching_wm():
+    """
+    A voice turn with no transcript (noise, provider failure) still gets an
+    audit row -- every other outcome does, this shouldn't be the silent
+    exception -- but there's no content to add to conversational memory or
+    judge, so WM itself (history, message count) is untouched.
+    """
+
+    episodic = InMemoryEpisodicStore()
+    policy, port = make_policy(episodic_store=episodic)
+    await policy.start(port)
+
+    await policy.on_untranscribed_turn(1, "Mats", 1000)
+
+    records = await episodic.recall_recent(port.conversation_id, 50)
+    assert len(records) == 1
+    assert records[0].intervention_path == "untranscribed"
+    assert records[0].speaker == "Mats"
+    assert records[0].modality == "audio"
+    assert records[0].content == ""
+
+    assert policy._wm.history == []
+    assert policy._wm.total_message_count == 0
 
 
 async def test_wait_for_turn_to_finish_resolves_immediately_when_nothing_fired():

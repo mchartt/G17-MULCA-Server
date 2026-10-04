@@ -523,6 +523,17 @@ class Conversation:
         self._auxiliary_agents[agent.guid] = agent
         self._state.connected_agents.add(str(agent.guid))
 
+        # Catches this one agent up on whatever's already in WM it was
+        # never live for -- after a restart (WM restored from a snapshot
+        # before any observer existed to see it happen), or any time a new
+        # observer connects mid-conversation. A targeted send to just this
+        # agent, not a broadcast via tell_observers: an observer that's
+        # already been running this whole time already saw everything live
+        # and doesn't need re-telling.
+        catchup = self._policy.observer_catchup_text()
+        if catchup:
+            await agent.send_text(catchup, role="user")
+
         await self._send(
             AgentGuidMessage(agent_guid=str(agent.guid)),
         )
@@ -651,10 +662,17 @@ class Conversation:
         transcript = await self._collect_transcript(speaker)
         if not transcript:
             # Nothing understood (noise, or transcription failed): the
-            # observers can still judge from what they heard.
+            # observers can still judge from what they heard. Logged too --
+            # every other outcome (including "decided not to act") gets an
+            # audit row; this one shouldn't be the silent exception.
             logger.info(
                 "No transcript for %s's turn, asking observers anyway",
                 self._username(speaker),
+            )
+            await self._policy.on_untranscribed_turn(
+                speaker,
+                self._username(speaker),
+                ended_at,
             )
             self._ask_observers_to_consider(speaker)
             return

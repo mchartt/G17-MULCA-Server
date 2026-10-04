@@ -9,6 +9,11 @@ InterventionPath = Literal[
     "strategy",
     "forced",
     "management_cycle",
+    # A voice turn that ended but couldn't be transcribed (noise, provider
+    # failure) -- distinct from "none" (judged, decided not to act), since
+    # nothing was ever judged here at all. Logged so the audit trail shows
+    # something happened, not silence, same as every other outcome.
+    "untranscribed",
 ]
 
 

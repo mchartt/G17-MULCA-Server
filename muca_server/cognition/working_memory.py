@@ -155,7 +155,7 @@ class WorkingMemory:
 
     def transcript(
         self,
-        limit: int = 20,
+        limit: int | None = None,
         *,
         exclude_assistant: bool = False,
     ) -> str:
@@ -168,10 +168,19 @@ class WorkingMemory:
         way a human's older messages functionally are. The main LLM's own
         "recent messages" block still wants exclude_assistant=False, since
         it should see what it itself just said for continuity.
+
+        limit defaults to None (render all of self.history), not an
+        independent cap -- self.history's size is already controlled by
+        apply_management_cycle/trim_history's tail_size. A second,
+        separately-tuned limit here would have to be kept in sync by hand
+        with whatever tail_size is configured, and silently re-truncating
+        below it (as a stale smaller default once did) would quietly drop
+        messages the management cycle hadn't summarized yet.
         """
 
+        history = self.history if limit is None else self.history[-limit:]
         return "\n".join(
             f"{utterance.label()}: {utterance.content}"
-            for utterance in self.history[-limit:]
+            for utterance in history
             if not exclude_assistant or utterance.speaker_id != self.assistant_id
         )
