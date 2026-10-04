@@ -28,6 +28,10 @@ class EpisodicRecord(BaseModel):
 
     speaker: str = ""
     content: str = ""
+    # "text" for a management_cycle row too -- not tied to one utterance's
+    # modality, there's nothing truer to put here, and it keeps the column
+    # non-null without inventing a third value nothing reads.
+    modality: Literal["text", "audio"] = "text"
     trigger_variables: dict = Field(default_factory=dict)
 
     strategy_id: str | None = None

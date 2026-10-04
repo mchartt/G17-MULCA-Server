@@ -204,7 +204,13 @@ async def test_provide_summary_always_retrieves_regardless_of_the_signal():
     assert "the sky is blue" in port.instructions[0]
 
 
-async def test_a_private_conversation_is_never_logged():
+async def test_a_private_conversations_turns_are_logged_too():
+    """
+    A DM's own episodic log is an audit record now, not a memory source --
+    see test_a_dm_history_lookup_reads_the_linked_groups_log_only for the
+    other half: this log is written, but never read back for retrieval.
+    """
+
     episodic = InMemoryEpisodicStore()
     port = FakePort(is_private=True)
     policy, _ = make_policy(episodic_store=episodic, port=port)
@@ -218,8 +224,13 @@ async def test_a_private_conversation_is_never_logged():
             prompt_fragment="",
         ),
     )
+    # The record is deferred until the reply arrives (so it captures what
+    # MULCA actually said, not just what triggered it).
+    await policy.on_assistant_output("hi there", interrupted=False)
 
-    assert await episodic.recall_recent("conv-1", 50) == []
+    records = await episodic.recall_recent("conv-1", 50)
+    assert [r.content for r in records] == ["hello"]
+    assert records[0].assistant_output == "hi there"
 
 
 async def test_an_assistant_reply_is_appended_to_history():
@@ -498,6 +509,83 @@ async def test_the_prompt_includes_this_conversation_verbatim_not_just_the_summa
     assert "the number is 6" in port.instructions[0]
 
 
+async def test_a_groups_own_summary_is_sent_once_then_not_again():
+    """
+    A group's own live session already has everything its summary covers
+    (it was there when it was said), so resending it every turn is just
+    waste -- unlike a DM reading a linked group's summary, which has no
+    other way to see that content at all (see the DM test below).
+    """
+
+    policy, port = make_policy()
+    await policy.start(port)
+    policy._wm.history_summary = "Previously, the team discussed the deadline."
+
+    await policy.on_utterance(make_utterance(content="first message"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
+    )
+    await policy.on_assistant_output("ok", interrupted=False)
+
+    await policy.on_utterance(make_utterance(content="second message"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
+    )
+
+    assert "Previously, the team discussed the deadline." in port.instructions[0]
+    assert "Previously, the team discussed the deadline." not in port.instructions[1]
+
+
+async def test_a_dms_linked_summary_is_sent_every_turn_not_just_once():
+    """
+    Unlike a group's own summary, a DM's session was never part of the
+    linked group's conversation -- there is no live fallback, so this must
+    keep refreshing every turn, not just the first.
+    """
+
+    stores: dict[str, tuple] = {}
+
+    def store_factory(conversation_id):
+        return stores.setdefault(
+            conversation_id,
+            (InMemoryEpisodicStore(), InMemorySnapshotStore()),
+        )
+
+    _, group_snapshot_store = store_factory("instance:team-alpha")
+    await group_snapshot_store.save(
+        "instance:team-alpha",
+        MemorySnapshot(history_summary="The team discussed the deadline."),
+    )
+
+    policy, port = make_policy(
+        store_factory=store_factory,
+        port=FakePort(
+            conversation_id="dm:1",
+            is_private=True,
+            linked_conversation_id="instance:team-alpha",
+        ),
+    )
+    await policy.start(port)
+
+    await policy.on_utterance(make_utterance(content="first message"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
+    )
+    await policy.on_assistant_output("ok", interrupted=False)
+
+    await policy.on_utterance(make_utterance(content="second message"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
+    )
+
+    assert "The team discussed the deadline." in port.instructions[0]
+    assert "The team discussed the deadline." in port.instructions[1]
+
+
 async def test_a_groups_snapshot_saves_before_the_first_management_cycle():
     # The bug this covers: "Mats says X in the group, then immediately DMs
     # about X" failing because nothing had been saved yet -- a snapshot only
@@ -750,8 +838,12 @@ async def test_a_dm_history_lookup_reads_the_linked_groups_log_only():
             needs_history=True,
         ),
     )
+    await policy.on_assistant_output("it's due friday", interrupted=False)
 
     assert "the deadline is friday" in port.instructions[-1]
-    # The DM's own store was never asked for anything.
-    dm_log, _ = stores.get("dm:1", (None, None))
-    assert dm_log is None or await dm_log.recall_recent("dm:1", 10) == []
+    # The DM's own store gets an audit record of its own turn (it isn't a
+    # memory source, but it isn't a black hole either) -- the retrieval
+    # above still only ever pulled from the linked group's log.
+    dm_log, _ = stores["dm:1"]
+    dm_records = await dm_log.recall_recent("dm:1", 10)
+    assert [r.content for r in dm_records] == ["when is it due?"]

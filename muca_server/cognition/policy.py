@@ -95,6 +95,18 @@ class CoalaPolicy:
         # nothing ever wrote this before, at all.
         self._pending_episodic_record: EpisodicRecord | None = None
 
+        # Whether this session's main agent has already been sent the
+        # group's own history_summary/participant_roles_summary once since
+        # connecting. Group-only: once sent, the live session already has
+        # everything that summary covers (it was there when it was said),
+        # so resending it every turn is pure waste, not safety -- unlike a
+        # DM's linked read of a group it was never part of, which has no
+        # other way to get that content and must keep refreshing live.
+        # False at construction and never reset mid-session on purpose: a
+        # reconnect builds a fresh CoalaPolicy via policy_factory, so a new
+        # session starts this at False again without any explicit reset.
+        self._group_summary_sent = False
+
     async def start(self, port: ConversationPort) -> None:
         self._port = port
 
@@ -235,6 +247,7 @@ class CoalaPolicy:
             self._render_prompt(
                 wm,
                 directive=f"Forced intervention: {forced}",
+                port=port,
             )
         )
         await self._finish_turn(path="forced", strategy_id=None)
@@ -361,7 +374,7 @@ class CoalaPolicy:
         )
 
         await port.instruct_main_agent(
-            self._render_prompt(wm, directive=directive),
+            self._render_prompt(wm, directive=directive, port=port),
         )
 
         await self._finish_turn(
@@ -486,9 +499,12 @@ class CoalaPolicy:
         port: ConversationPort,
     ) -> tuple[EpisodicStore | None, str]:
         """
-        Where a history lookup reads from. A DM's own log is never written,
-        so a DM looks in its linked group's log instead (read-only, as with
-        _apply_linked_group_context), or nowhere.
+        Where a history lookup reads from. A DM's own log is written now
+        (an audit record), but retrieval deliberately never reads it --
+        intentionally kept to "what the group said", not "what this person
+        told MULCA privately". A DM's retrieval always redirects to its
+        linked group's log instead (read-only, as with
+        _apply_linked_group_context), or nowhere if it has none.
         """
 
         if not port.is_private:
@@ -519,7 +535,16 @@ class CoalaPolicy:
         utterance = self._pending_utterance
         message_count = wm.total_message_count
 
-        if not port.is_private and self._episodic_store is not None:
+        if self._episodic_store is not None:
+            # DMs are logged too (their own separate file, via
+            # store_factory) -- an audit record of what was said, same as a
+            # group. This is deliberately NOT a memory/retrieval source: a
+            # DM's own retrieval always redirects to its linked group's log
+            # instead (_retrieval_source), never to this file, and a
+            # group's own retrieval/management cycle has no path to a DM's
+            # file at all (one SQLite file per conversation_id, never
+            # shared). So this file exists for review, not recall.
+            #
             # A record still sitting here means a previous turn's reply
             # never arrived to attach itself to -- flush it plain rather
             # than silently lose it when the line below replaces it.
@@ -531,6 +556,7 @@ class CoalaPolicy:
                 intervention_path=path,
                 speaker=utterance.label() if utterance else "",
                 content=utterance.content if utterance else "",
+                modality=utterance.modality if utterance else "text",
                 trigger_variables=dict(wm.trigger_variables),
                 strategy_id=strategy_id,
                 prompt_fragment=prompt_fragment,
@@ -608,6 +634,7 @@ class CoalaPolicy:
         wm: WorkingMemory,
         *,
         directive: str,
+        port: ConversationPort,
     ) -> str:
         """
         Assemble this turn's payload for the main agent -- everything
@@ -618,11 +645,26 @@ class CoalaPolicy:
         overwrite -- see MainAgentOpenAI._trigger_response.
         """
 
+        # A DM always needs this live -- it's mirroring a *different*
+        # conversation's summary (_apply_linked_group_context), which this
+        # session was never part of and has no other way to learn about. A
+        # group's own summary is different: once sent, the live session
+        # already has everything it covers, so it's only sent once, right
+        # after connecting -- every turn after that would just be re-telling
+        # the model something it was already there for.
+        include_summary = port.is_private or not self._group_summary_sent
+        if include_summary and not port.is_private:
+            self._group_summary_sent = True
+
         summary_block = (
-            "Summary of the conversation so far:\n"
-            f"{wm.history_summary or '(none yet)'}\n\n"
-            "Participants and roles observed so far:\n"
-            f"{wm.participant_roles_summary or '(none yet)'}\n\n"
+            (
+                "Summary of the conversation so far:\n"
+                f"{wm.history_summary or '(none yet)'}\n\n"
+                "Participants and roles observed so far:\n"
+                f"{wm.participant_roles_summary or '(none yet)'}\n\n"
+            )
+            if include_summary
+            else ""
         )
 
         # General, not DM-specific: covers what the live session doesn't --

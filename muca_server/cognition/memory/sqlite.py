@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS episodic_log (
     intervention_path TEXT NOT NULL,
     speaker TEXT NOT NULL DEFAULT '',
     content TEXT NOT NULL DEFAULT '',
+    modality TEXT NOT NULL DEFAULT 'text',
     trigger_variables TEXT NOT NULL DEFAULT '{}',
     strategy_id TEXT,
     prompt_fragment TEXT,
@@ -72,6 +73,24 @@ CREATE TABLE IF NOT EXISTS memory_snapshot (
 
 async def _ensure_schema(db: aiosqlite.Connection) -> None:
     await db.executescript(_SCHEMA)
+    await _migrate(db)
+
+
+async def _migrate(db: aiosqlite.Connection) -> None:
+    """
+    Bring a file created before a column existed up to date, in place --
+    CREATE TABLE IF NOT EXISTS above is a no-op against an already-existing
+    table, so a new column needs its own ALTER TABLE, run once per db file.
+    """
+
+    cursor = await db.execute("PRAGMA table_info(episodic_log)")
+    columns = {row[1] for row in await cursor.fetchall()}
+
+    if "modality" not in columns:
+        await db.execute(
+            "ALTER TABLE episodic_log ADD COLUMN modality TEXT NOT NULL DEFAULT 'text'"
+        )
+        await db.commit()
 
 
 class SqliteEpisodicStore:
@@ -87,9 +106,10 @@ class SqliteEpisodicStore:
                 """
                 INSERT INTO episodic_log (
                     timestamp, conversation_id, intervention_path, speaker,
-                    content, trigger_variables, strategy_id, prompt_fragment,
-                    assistant_output, history_summary, participant_roles_summary
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    content, modality, trigger_variables, strategy_id,
+                    prompt_fragment, assistant_output, history_summary,
+                    participant_roles_summary
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.timestamp,
@@ -97,6 +117,7 @@ class SqliteEpisodicStore:
                     record.intervention_path,
                     record.speaker,
                     record.content,
+                    record.modality,
                     json.dumps(record.trigger_variables),
                     record.strategy_id,
                     record.prompt_fragment,
@@ -137,6 +158,7 @@ class SqliteEpisodicStore:
                 intervention_path=row["intervention_path"],
                 speaker=row["speaker"],
                 content=row["content"],
+                modality=row["modality"],
                 trigger_variables=json.loads(row["trigger_variables"]),
                 strategy_id=row["strategy_id"],
                 prompt_fragment=row["prompt_fragment"],
