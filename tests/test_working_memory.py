@@ -32,10 +32,31 @@ def test_a_strategy_leaves_cooldown_after_enough_messages():
     wm = WorkingMemory(conversation_id="c1")
     strategy = make_strategy(cooldown=5)
     wm.total_message_count = 10
-    wm.record_action(strategy.id, 10)
+    wm.record_action(strategy.id, 10, now=0.0)
     wm.total_message_count = 16
 
-    assert not wm.strategy_in_cooldown(strategy)
+    # now=20: past both the message-count gate and the wall-clock one, so
+    # this isolates the message-count gate specifically.
+    assert not wm.strategy_in_cooldown(strategy, now=20.0)
+
+
+def test_the_wall_clock_gate_vetoes_even_once_enough_messages_have_passed():
+    """
+    Voice produces more completed turns per real second than text (people
+    talk faster than they type), so the same message-count window alone
+    lets a nagging strategy like participation_equality refire far more
+    often, in real time, in a voice call than it would in text. This
+    secondary, flat wall-clock floor is what actually bounds that.
+    """
+
+    wm = WorkingMemory(conversation_id="c1")
+    strategy = make_strategy(cooldown=1)
+    wm.total_message_count = 10
+    wm.record_action(strategy.id, 10, now=100.0)
+    wm.total_message_count = 11  # Message-count gate alone is satisfied.
+
+    assert wm.strategy_in_cooldown(strategy, now=105.0)  # Only 5s passed.
+    assert not wm.strategy_in_cooldown(strategy, now=111.0)  # 11s passed.
 
 
 def test_cooldown_survives_a_history_truncation():
@@ -48,17 +69,17 @@ def test_cooldown_survives_a_history_truncation():
     wm = WorkingMemory(conversation_id="c1")
     strategy = make_strategy(cooldown=5)
     wm.total_message_count = 10
-    wm.record_action(strategy.id, 10)
+    wm.record_action(strategy.id, 10, now=0.0)
 
     # A management cycle truncates history but total_message_count is
     # untouched -- it must be, since it is the cooldown clock.
     wm.apply_management_cycle("summary", "roles", tail_size=8)
     assert len(wm.history) == 0
 
-    assert wm.strategy_in_cooldown(strategy)
+    assert wm.strategy_in_cooldown(strategy, now=20.0)
 
     wm.total_message_count = 16
-    assert not wm.strategy_in_cooldown(strategy)
+    assert not wm.strategy_in_cooldown(strategy, now=20.0)
 
 
 def test_a_forced_context_and_a_selected_strategy_are_mutually_exclusive():

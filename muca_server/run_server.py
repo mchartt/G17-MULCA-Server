@@ -120,9 +120,23 @@ def build_app():
 def main() -> None:
     host = os.environ.get("MUCA_SERVER_HOST", "0.0.0.0")
     port = int(os.environ.get("MUCA_SERVER_PORT", "8000"))
+    # Root stays at INFO always -- a DEBUG root would also unleash
+    # httpx/openai/websockets' own verbose internals, not just ours.
+    # MUCA_LOG_LEVEL only ever controls the muca_server logger tree
+    # specifically (every logger here is logging.getLogger(__name__),
+    # under that namespace).
+    #
+    # Defaults to DEBUG, not INFO: a plain run with nothing special set is
+    # a human at a terminal actively watching it, who wants the
+    # [voice-turn]-tagged diagnostic detail. Set MUCA_LOG_LEVEL=INFO
+    # explicitly for a quiet run (e.g. scripted/live-verification runs that
+    # don't need per-tick detail).
     logging.basicConfig(
-        level=os.environ.get("MUCA_LOG_LEVEL", "INFO"),
+        level="INFO",
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    logging.getLogger("muca_server").setLevel(
+        os.environ.get("MUCA_LOG_LEVEL", "DEBUG"),
     )
     uvicorn.run(build_app(), host=host, port=port)
 

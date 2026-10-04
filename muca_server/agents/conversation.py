@@ -660,12 +660,22 @@ class Conversation:
         self._turn_modality = "audio"
 
         transcript = await self._collect_transcript(speaker)
+        # debug, not info: this is diagnostic detail for investigating the
+        # turn/cooldown machinery, not something worth seeing on every
+        # single spoken turn by default -- set MUCA_LOG_LEVEL=DEBUG to see
+        # these (and the rest of the [voice-turn]-tagged lines) again.
+        logger.debug(
+            "[voice-turn] %s _take_voice_turn transcript for %s: %r",
+            self._conversation_id,
+            self._username(speaker),
+            transcript,
+        )
         if not transcript:
             # Nothing understood (noise, or transcription failed): the
             # observers can still judge from what they heard. Logged too --
             # every other outcome (including "decided not to act") gets an
             # audit row; this one shouldn't be the silent exception.
-            logger.info(
+            logger.debug(
                 "No transcript for %s's turn, asking observers anyway",
                 self._username(speaker),
             )
@@ -832,7 +842,9 @@ class Conversation:
             old_speaker is not None
             and old_speaker == self._main_agent.agent_id
         ):
-            logger.info(
+            # debug: fires on every tick while the assistant is speaking --
+            # the noisiest of these by far. MUCA_LOG_LEVEL=DEBUG to see it.
+            logger.debug(
                 "[voice-turn] %s _read_speaker: assistant was speaking, "
                 "incoming speaker=%s (raw=%s) -> %s",
                 self._conversation_id,
@@ -928,6 +940,25 @@ class Conversation:
         if self._provider_vad():
             # The provider transcribes speech: the turn goes through
             # cognition like a text message, once its words are back.
+            #
+            # Debugging a reported cooldown bug (a strategy refiring far
+            # more often than cooldown_messages should allow): every one of
+            # these is a complete turn for cognition purposes (one
+            # increment of total_message_count, one cooldown check). If the
+            # provider's VAD ever reports a false "stopped speaking" mid
+            # sentence (a natural pause exceeding its silence threshold)
+            # followed by "started" again for the same continuous
+            # utterance, one human sentence becomes several of these here
+            # -- which would silently consume a whole cooldown window
+            # within a single sentence. This count is exactly what would
+            # show that. debug: MUCA_LOG_LEVEL=DEBUG to see it.
+            logger.debug(
+                "[voice-turn] %s enqueuing a voice turn for %s "
+                "(old_speaker=%s -> current_speaker=None)",
+                self._conversation_id,
+                self._username(old_speaker),
+                old_speaker,
+            )
             self._enqueue_turn(
                 lambda: self._take_voice_turn(old_speaker, timestamp),
             )
@@ -949,11 +980,10 @@ class Conversation:
         self,
         event: MainAgentEvent,
     ) -> None:
-        # INFO, not debug: this project defaults to INFO-level logging, and
-        # these state transitions are exactly what's needed to debug the
-        # barge-in/interrupt path live -- a debug-level line here was
-        # invisible by default.
-        logger.info(
+        # debug: fires on every MainAgentEvent (several times per turn) --
+        # MUCA_LOG_LEVEL=DEBUG to see it when actively investigating the
+        # barge-in/interrupt path specifically.
+        logger.debug(
             "[voice-turn] %s event=%s turn_ending=%s state=%s "
             "generation_done=%s silent=%s",
             self._conversation_id,
@@ -1007,7 +1037,7 @@ class Conversation:
         interrupts_itself = (
             self._main_agent.capabilities.interrupt
         )
-        logger.info(
+        logger.debug(
             "[voice-turn] %s _begin_assistant_turn interrupts_itself=%s "
             "user_speaking=%s open_turns=%d",
             self._conversation_id,
@@ -1018,7 +1048,7 @@ class Conversation:
 
         # A user is still mid-turn, so the assistant should not have started.
         if self._user_is_speaking() and not interrupts_itself:
-            logger.info(
+            logger.debug(
                 "[voice-turn] %s _begin_assistant_turn: bailing, user "
                 "already speaking",
                 self._conversation_id,
@@ -1073,7 +1103,7 @@ class Conversation:
 
     async def _end_assistant_turn(self) -> None:
         if self._main_agent is None or self._assistant_turn_ending:
-            logger.info(
+            logger.debug(
                 "[voice-turn] %s _end_assistant_turn: bailing early "
                 "(main_agent=%s already_ending=%s) -- a call that returns "
                 "here instead of proceeding never clears the turn, which "
@@ -1089,7 +1119,7 @@ class Conversation:
 
         await self._assistant_silent.wait()
 
-        logger.info(
+        logger.debug(
             "[voice-turn] %s _end_assistant_turn: silent after %dms wait, "
             "closing turn",
             self._conversation_id,
@@ -1115,7 +1145,7 @@ class Conversation:
         if self._main_agent is None:
             return
 
-        logger.info(
+        logger.debug(
             "[voice-turn] %s _interrupt_assistant_turn: interrupts_itself=%s",
             self._conversation_id,
             self._main_agent.capabilities.interrupt,

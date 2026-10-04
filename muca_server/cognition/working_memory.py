@@ -11,10 +11,21 @@ never has to reconcile both at once.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 from .ports import Utterance
 from .strategies import Strategy
+
+# On top of cooldown_messages, for the same strategies -- voice naturally
+# produces more completed turns per real second than text (people talk
+# faster than they type), so the same message-count window elapses in much
+# less wall-clock time there. Found live: participation_equality refiring
+# within a voice call far more often than it felt like it should, even
+# though message counting itself is correct and identical for both
+# modalities (one increment per completed turn, text or voice, via the one
+# shared on_utterance path). A flat constant, not per-strategy, for now.
+SECONDARY_COOLDOWN_SECONDS = 10.0
 
 
 @dataclass
@@ -40,6 +51,9 @@ class WorkingMemory:
 
     # {strategy_id: total_message_count when it last fired}.
     recent_actions: dict[str, int] = field(default_factory=dict)
+    # {strategy_id: time.time() when it last fired} -- the secondary,
+    # wall-clock half of cooldown (SECONDARY_COOLDOWN_SECONDS).
+    recent_action_at: dict[str, float] = field(default_factory=dict)
 
     # Monotonic: survives the history truncation below.
     total_message_count: int = 0
@@ -96,17 +110,31 @@ class WorkingMemory:
         self,
         strategy_id: str,
         message_count: int,
+        *,
+        now: float | None = None,
     ) -> None:
         self.recent_actions[strategy_id] = message_count
+        self.recent_action_at[strategy_id] = time.time() if now is None else now
 
-    def strategy_in_cooldown(self, strategy: Strategy) -> bool:
+    def strategy_in_cooldown(
+        self,
+        strategy: Strategy,
+        *,
+        now: float | None = None,
+    ) -> bool:
         """
         Whether this strategy fired too recently to fire again.
 
-        Measured against `total_message_count`, never against
-        `trigger_variables["message_count"]`: the latter is the length of the
-        history, which the management cycle truncates, so the gap could reset
-        or go negative and leave a strategy stuck in cooldown forever.
+        Two independent gates, either one enough to veto: the message-count
+        one (measured against `total_message_count`, never against
+        `trigger_variables["message_count"]` -- the latter is the length of
+        the history, which the management cycle truncates, so the gap could
+        reset or go negative and leave a strategy stuck in cooldown
+        forever), and a flat wall-clock one (SECONDARY_COOLDOWN_SECONDS) on
+        top of it. The message-count gate alone means the same "N turns"
+        contract permits much more frequent real-time firing in voice than
+        in text, since people talk faster than they type -- the wall-clock
+        gate is what actually bounds that.
         """
 
         if not strategy.cooldown_messages:
@@ -116,9 +144,15 @@ class WorkingMemory:
         if last_fired is None:
             return False
 
-        return (
-            self.total_message_count - last_fired
-        ) < strategy.cooldown_messages
+        if (self.total_message_count - last_fired) < strategy.cooldown_messages:
+            return True
+
+        last_fired_at = self.recent_action_at.get(strategy.id)
+        if last_fired_at is None:
+            return False
+
+        now = time.time() if now is None else now
+        return (now - last_fired_at) < SECONDARY_COOLDOWN_SECONDS
 
     def set_trigger_variables(self, variables: dict) -> None:
         self.trigger_variables = variables
