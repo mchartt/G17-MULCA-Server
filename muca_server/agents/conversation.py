@@ -832,6 +832,21 @@ class Conversation:
             old_speaker is not None
             and old_speaker == self._main_agent.agent_id
         ):
+            logger.info(
+                "[voice-turn] %s _read_speaker: assistant was speaking, "
+                "incoming speaker=%s (raw=%s) -> %s",
+                self._conversation_id,
+                current_speaker,
+                speaker,
+                "interrupting"
+                if current_speaker is not None
+                else (
+                    "ending (can_stop)"
+                    if self._assistant_can_stop()
+                    else "waiting"
+                ),
+            )
+
             # The main agent cannot see playback, so these come from here.
             if current_speaker is not None:
                 await self._handle_main_agent_event(
@@ -934,7 +949,20 @@ class Conversation:
         self,
         event: MainAgentEvent,
     ) -> None:
-        logger.debug("Main agent event %s", event)
+        # INFO, not debug: this project defaults to INFO-level logging, and
+        # these state transitions are exactly what's needed to debug the
+        # barge-in/interrupt path live -- a debug-level line here was
+        # invisible by default.
+        logger.info(
+            "[voice-turn] %s event=%s turn_ending=%s state=%s "
+            "generation_done=%s silent=%s",
+            self._conversation_id,
+            event,
+            self._assistant_turn_ending,
+            self.main_agent_state,
+            self._assistant_generation_done,
+            self._assistant_silent.is_set(),
+        )
 
         match event:
             case MainAgentEvent.AGENT_SPEECH_STARTED:
@@ -979,9 +1007,22 @@ class Conversation:
         interrupts_itself = (
             self._main_agent.capabilities.interrupt
         )
+        logger.info(
+            "[voice-turn] %s _begin_assistant_turn interrupts_itself=%s "
+            "user_speaking=%s open_turns=%d",
+            self._conversation_id,
+            interrupts_itself,
+            self._user_is_speaking(),
+            sum(1 for t in self.turns if t.is_open),
+        )
 
         # A user is still mid-turn, so the assistant should not have started.
         if self._user_is_speaking() and not interrupts_itself:
+            logger.info(
+                "[voice-turn] %s _begin_assistant_turn: bailing, user "
+                "already speaking",
+                self._conversation_id,
+            )
             await self._main_agent.stop_speaking()
             await self._clear_client_audio()
             return
@@ -1032,11 +1073,28 @@ class Conversation:
 
     async def _end_assistant_turn(self) -> None:
         if self._main_agent is None or self._assistant_turn_ending:
+            logger.info(
+                "[voice-turn] %s _end_assistant_turn: bailing early "
+                "(main_agent=%s already_ending=%s) -- a call that returns "
+                "here instead of proceeding never clears the turn, which "
+                "is how a stuck turn would show up in these logs",
+                self._conversation_id,
+                self._main_agent is not None,
+                self._assistant_turn_ending,
+            )
             return
 
         self._assistant_turn_ending = True
+        wait_started = _now_ms()
 
         await self._assistant_silent.wait()
+
+        logger.info(
+            "[voice-turn] %s _end_assistant_turn: silent after %dms wait, "
+            "closing turn",
+            self._conversation_id,
+            _now_ms() - wait_started,
+        )
 
         await self._tell_observers(
             f"MAIN ASSISTANT ({self._main_agent.name}) stopped speaking."
@@ -1056,6 +1114,12 @@ class Conversation:
     async def _interrupt_assistant_turn(self) -> None:
         if self._main_agent is None:
             return
+
+        logger.info(
+            "[voice-turn] %s _interrupt_assistant_turn: interrupts_itself=%s",
+            self._conversation_id,
+            self._main_agent.capabilities.interrupt,
+        )
 
         self._assistant_turn_ending = True
 

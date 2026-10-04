@@ -281,18 +281,51 @@ class MainAgentOpenAI(MainAgent):
         )
         item_id, self._assistant_item_id = self._assistant_item_id, None
 
-        with suppress(Exception):
+        try:
             await self._connection.conversation.item.truncate(
                 item_id=item_id,
                 content_index=0,
                 audio_end_ms=audio_end_ms,
+            )
+        except Exception:
+            # Was a bare suppress(Exception) -- completely silent, so a
+            # failure here (e.g. audio_end_ms past what the item actually
+            # has, or the item already gone) was invisible. Logged now:
+            # if this fires, the model's own memory keeps whatever it
+            # thinks it said past the interruption point, which wouldn't
+            # explain a live "won't stop talking", but could explain
+            # degraded coherence on turns after a barge-in.
+            logger.exception(
+                "conversation.item.truncate() failed for item %s "
+                "(audio_end_ms=%d) -- the model's memory of this reply may "
+                "not reflect the interruption",
+                item_id,
+                audio_end_ms,
             )
 
     async def _cancel_response(self) -> None:
         if self._connection is None:
             return
 
-        await self._connection.response.cancel()
+        try:
+            await self._connection.response.cancel()
+        except Exception:
+            # Not re-raised: this used to propagate straight out of
+            # _interrupt_assistant_turn/_begin_assistant_turn (conversation.py),
+            # skipping all of their cleanup -- main_agent_state stuck at
+            # ANSWERING, _assistant_turn_ending stuck True forever, which
+            # permanently blocks every future _end_assistant_turn() call via
+            # its own guard. A real, observed failure mode: the response can
+            # finish naturally (response.done) in the instant between
+            # _response_active being read as True and this call reaching the
+            # provider, and the API rejects cancelling a response that's
+            # already done. Logged loudly -- if this fires a lot, that's the
+            # "interrupting MULCA makes it stop responding" bug, confirmed.
+            logger.exception(
+                "response.cancel() failed -- the response may have already "
+                "finished on its own; continuing anyway so the caller's own "
+                "turn cleanup isn't skipped"
+            )
 
     async def _receive_loop(self) -> None:
         assert self._connection is not None
