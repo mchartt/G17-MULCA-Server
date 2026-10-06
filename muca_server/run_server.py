@@ -33,9 +33,13 @@ from .main import create_app
 from .sessions.session_components_factory import DefaultSessionComponentsFactory
 
 TASK_ID = "general_moderation"
+# participation_equality_voice deliberately left out: voice is mention-only
+# (respond_when_addressed/provide_summary/remember, all solicited) -- the
+# strategy and its voice-only roster/trigger-variable plumbing stay in the
+# codebase (cognition/config/strategies/participation_equality_voice.yaml),
+# just not active, in case that decision changes again later.
 ACTIVE_STRATEGY_IDS = [
     "participation_equality_text",
-    "participation_equality_voice",
     "respond_when_addressed",
     "non_offensive",
     "provide_summary",
