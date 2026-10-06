@@ -5,6 +5,8 @@ replaces the in-memory stores for real deployments.
 Each test uses its own temp file (pytest's tmp_path), never a shared/live DB.
 """
 
+import aiosqlite
+
 from muca_server.cognition.memory.records import (
     EpisodicRecord,
     MemorySnapshot,
@@ -122,12 +124,47 @@ async def test_snapshot_save_and_load_round_trips_every_field(tmp_path):
         ],
         total_message_count=17,
         updated_at=999.5,
+        recent_actions={"participation_equality_text": 12},
+        recent_action_at={"participation_equality_text": 1000.25},
     )
 
     await store.save("c1", snapshot)
     loaded = await store.load("c1")
 
     assert loaded == snapshot
+
+
+async def test_a_snapshot_file_from_before_cooldown_columns_existed_still_loads(
+    tmp_path,
+):
+    # Simulates a real pre-existing DB file: the memory_snapshot table
+    # without recent_actions/recent_action_at, same shape _migrate() has
+    # to bring up to date in place.
+    db_path = tmp_path / "test.db"
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """
+            CREATE TABLE memory_snapshot (
+                conversation_id TEXT PRIMARY KEY,
+                history_summary TEXT NOT NULL DEFAULT '',
+                participant_roles_summary TEXT NOT NULL DEFAULT '',
+                history_tail TEXT NOT NULL DEFAULT '[]',
+                total_message_count INTEGER NOT NULL DEFAULT 0,
+                updated_at REAL NOT NULL DEFAULT 0
+            )
+            """
+        )
+        await db.execute(
+            "INSERT INTO memory_snapshot (conversation_id, total_message_count) "
+            "VALUES ('c1', 5)"
+        )
+        await db.commit()
+
+    loaded = await SqliteSnapshotStore(db_path).load("c1")
+
+    assert loaded.total_message_count == 5
+    assert loaded.recent_actions == {}
+    assert loaded.recent_action_at == {}
 
 
 async def test_saving_again_overwrites_rather_than_duplicates(tmp_path):

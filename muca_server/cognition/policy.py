@@ -166,6 +166,8 @@ class CoalaPolicy:
                     stored.restore()
                     for stored in snapshot.history_tail
                 ]
+                wm.recent_actions = dict(snapshot.recent_actions)
+                wm.recent_action_at = dict(snapshot.recent_action_at)
 
         self._wm = wm
 
@@ -203,6 +205,8 @@ class CoalaPolicy:
                 ],
                 total_message_count=self._wm.total_message_count,
                 updated_at=time.time(),
+                recent_actions=dict(self._wm.recent_actions),
+                recent_action_at=dict(self._wm.recent_action_at),
             ),
         )
 

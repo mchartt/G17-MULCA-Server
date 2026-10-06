@@ -95,3 +95,14 @@ class MemorySnapshot(BaseModel):
     )
     total_message_count: int = 0
     updated_at: float = 0.0
+
+    # Cooldown bookkeeping (WorkingMemory.recent_actions/recent_action_at).
+    # Found live: every reconnect (OpenAI's 60-minute Realtime limit, the
+    # Watchdog's tier-1 recovery, a network blip) builds a brand-new
+    # WorkingMemory and restored only the fields above -- total_message_count
+    # carried over, but cooldown state silently reset to empty, so a
+    # strategy that had just fired could immediately fire again right after
+    # a reconnect, with no warning and no way to tell from the logs alone
+    # that a reconnect was even the cause.
+    recent_actions: dict[str, int] = Field(default_factory=dict)
+    recent_action_at: dict[str, float] = Field(default_factory=dict)

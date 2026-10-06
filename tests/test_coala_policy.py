@@ -899,6 +899,62 @@ async def test_a_groups_snapshot_saves_before_the_first_management_cycle():
     assert any(u.content == "the number is 6" for u in saved.history_tail)
 
 
+async def test_cooldown_survives_a_reconnect_not_just_total_message_count():
+    """
+    Found live: a reconnect (OpenAI's 60-minute limit, the Watchdog's tier-1
+    recovery, a network blip) builds a brand-new WorkingMemory and restored
+    only history_summary/participant_roles_summary/total_message_count/
+    history -- cooldown state silently reset to empty, so a strategy that
+    had just fired could immediately fire again right after a reconnect.
+    Reproduced here as two separate CoalaPolicy instances sharing one
+    snapshot_store, standing in for before/after a real reconnect.
+    """
+
+    snapshot_store = InMemorySnapshotStore()
+    episodic_store = InMemoryEpisodicStore()
+
+    first = CoalaPolicy(
+        strategy_store=STRATEGIES,
+        episodic_store=episodic_store,
+        snapshot_store=snapshot_store,
+    )
+    port = FakePort()
+    await first.start(port)
+    await first.on_utterance(make_utterance())
+    await first.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="participation_equality",
+            prompt_fragment="invite Grace",
+        ),
+    )
+    assert len(port.instructions) == 1
+
+    await first.close()  # Saves a snapshot, same as a real session ending.
+
+    # A fresh CoalaPolicy, same conversation_id -- standing in for the
+    # session reopening after a reconnect.
+    second = CoalaPolicy(
+        strategy_store=STRATEGIES,
+        episodic_store=episodic_store,
+        snapshot_store=snapshot_store,
+    )
+    second_port = FakePort(conversation_id=port.conversation_id)
+    await second.start(second_port)
+
+    await second.on_utterance(make_utterance())
+    await second.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="participation_equality",
+            prompt_fragment="invite Grace again",
+        ),
+    )
+
+    # Still in cooldown -- restored from the snapshot, not reset.
+    assert second_port.instructions == []
+
+
 async def test_a_dm_prompt_includes_the_linked_groups_verbatim_tail():
     stores: dict[str, tuple] = {}
 

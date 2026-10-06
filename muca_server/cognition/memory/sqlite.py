@@ -79,7 +79,9 @@ CREATE TABLE IF NOT EXISTS memory_snapshot (
     participant_roles_summary TEXT NOT NULL DEFAULT '',
     history_tail TEXT NOT NULL DEFAULT '[]',
     total_message_count INTEGER NOT NULL DEFAULT 0,
-    updated_at REAL NOT NULL DEFAULT 0
+    updated_at REAL NOT NULL DEFAULT 0,
+    recent_actions TEXT NOT NULL DEFAULT '{}',
+    recent_action_at TEXT NOT NULL DEFAULT '{}'
 );
 """
 
@@ -102,6 +104,20 @@ async def _migrate(db: aiosqlite.Connection) -> None:
     if "modality" not in columns:
         await db.execute(
             "ALTER TABLE episodic_log ADD COLUMN modality TEXT NOT NULL DEFAULT 'text'"
+        )
+        await db.commit()
+
+    snapshot_cursor = await db.execute("PRAGMA table_info(memory_snapshot)")
+    snapshot_columns = {row[1] for row in await snapshot_cursor.fetchall()}
+
+    if "recent_actions" not in snapshot_columns:
+        await db.execute(
+            "ALTER TABLE memory_snapshot ADD COLUMN recent_actions "
+            "TEXT NOT NULL DEFAULT '{}'"
+        )
+        await db.execute(
+            "ALTER TABLE memory_snapshot ADD COLUMN recent_action_at "
+            "TEXT NOT NULL DEFAULT '{}'"
         )
         await db.commit()
 
@@ -329,6 +345,8 @@ class SqliteSnapshotStore:
             ],
             total_message_count=row["total_message_count"],
             updated_at=row["updated_at"],
+            recent_actions=json.loads(row["recent_actions"]),
+            recent_action_at=json.loads(row["recent_action_at"]),
         )
 
     async def save(
@@ -342,14 +360,17 @@ class SqliteSnapshotStore:
                 """
                 INSERT INTO memory_snapshot (
                     conversation_id, history_summary, participant_roles_summary,
-                    history_tail, total_message_count, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    history_tail, total_message_count, updated_at,
+                    recent_actions, recent_action_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(conversation_id) DO UPDATE SET
                     history_summary = excluded.history_summary,
                     participant_roles_summary = excluded.participant_roles_summary,
                     history_tail = excluded.history_tail,
                     total_message_count = excluded.total_message_count,
-                    updated_at = excluded.updated_at
+                    updated_at = excluded.updated_at,
+                    recent_actions = excluded.recent_actions,
+                    recent_action_at = excluded.recent_action_at
                 """,
                 (
                     conversation_id,
@@ -360,6 +381,8 @@ class SqliteSnapshotStore:
                     ),
                     snapshot.total_message_count,
                     snapshot.updated_at,
+                    json.dumps(snapshot.recent_actions),
+                    json.dumps(snapshot.recent_action_at),
                 ),
             )
             await db.commit()
