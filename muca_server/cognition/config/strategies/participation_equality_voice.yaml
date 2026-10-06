@@ -8,6 +8,12 @@ trigger_description: >
   channel's own roster and spoken turns only, not anyone only present in
   text), so you can invite the quietest voice participant by name/mention
   rather than speaking generically.
+  Lower priority than respond_when_addressed: if the current message also
+  directly addresses MULCA with a question or request, select that instead
+  -- the imbalance can simply wait for a later message, it does not need to
+  be handled in the same turn as a direct question. This matters more here
+  than in text: silence after a spoken question reads as MULCA ignoring
+  the person, not just as a message that hasn't been answered yet.
 trigger_threshold:
   variable: voice_gini_index
   min: 0.3
@@ -21,8 +27,8 @@ trigger_variables:
 # rather than one shared with text: the voice channel's roster and spoken
 # turn counts are their own separate thing from the text channel's, so this
 # strategy is the only place a spoken turn may still trigger an unsolicited
-# (not-addressed) intervention -- see VOICE_ALLOWED_STRATEGY_IDS-replacing
-# Strategy.modalities in cognition/policy.py.
+# (not-addressed) intervention -- see Strategy.modalities in
+# cognition/strategies.py and its veto in cognition/policy.py.
 prompt_template: |
   Participation in the voice call is currently unbalanced. {prompt_fragment}
   Gently invite the quietest participant to share their view, without singling

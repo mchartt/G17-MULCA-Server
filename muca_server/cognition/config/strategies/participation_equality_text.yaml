@@ -6,6 +6,10 @@ trigger_description: >
   in text. participant_message_counts and participant_shares tell you who
   specifically, so you can invite the quietest participant by name/mention
   rather than speaking generically.
+  Lower priority than respond_when_addressed: if the current message also
+  directly addresses MULCA with a question or request, select that instead
+  -- the imbalance can simply wait for a later message, it does not need to
+  be handled in the same turn as a direct question.
 trigger_threshold:
   variable: gini_index
   min: 0.3
