@@ -17,9 +17,10 @@ from uuid import UUID
 
 from .forced_intervention import check_forced_intervention
 from .memory.in_memory import InMemoryEpisodicStore, InMemorySnapshotStore
-from .memory.ports import EpisodicStore, SnapshotStore
+from .memory.ports import Embedder, EpisodicStore, SnapshotStore
 from .memory.records import EpisodicRecord, MemorySnapshot, StoredUtterance
 from .ports import ConversationPort, InterventionSignal, Summarizer, Utterance
+from .query_extraction import extract_query
 from .strategies import StrategyStore
 from .trigger_variables import compute_trigger_variables
 from .working_memory import WorkingMemory
@@ -40,6 +41,11 @@ RETRIEVAL_LIMIT = 50
 # transcript() to stop independently re-capping at a smaller, unrelated 20.
 MANAGEMENT_CYCLE_INTERVAL = 24
 TURN_TIMEOUT_SECONDS = 30.0
+
+# "remember" retrieves a few specific, relevant facts, not a wide recent
+# window like provide_summary's RETRIEVAL_LIMIT -- a handful of the most
+# similar turns is more useful here than fifty chronological ones.
+SIMILARITY_RETRIEVAL_LIMIT = 8
 
 
 class CoalaPolicy:
@@ -63,8 +69,10 @@ class CoalaPolicy:
         ]
         | None = None,
         summarizer: Summarizer | None = None,
+        embedder: Embedder | None = None,
         management_cycle_interval: int = MANAGEMENT_CYCLE_INTERVAL,
         retrieval_limit: int = RETRIEVAL_LIMIT,
+        similarity_retrieval_limit: int = SIMILARITY_RETRIEVAL_LIMIT,
         turn_timeout_seconds: float = TURN_TIMEOUT_SECONDS,
     ) -> None:
         self._strategies = strategy_store
@@ -79,8 +87,10 @@ class CoalaPolicy:
         # precedence over episodic_store/snapshot_store above when given.
         self._store_factory = store_factory
         self._summarizer = summarizer
+        self._embedder = embedder
         self._management_cycle_interval = management_cycle_interval
         self._retrieval_limit = retrieval_limit
+        self._similarity_retrieval_limit = similarity_retrieval_limit
         self._turn_timeout_seconds = turn_timeout_seconds
 
         self._port: ConversationPort | None = None
@@ -124,8 +134,13 @@ class CoalaPolicy:
         if self._store_factory is not None:
             if getattr(port, "is_ephemeral", False):
                 # No conversation id from the client: nothing to continue
-                # later, so nothing is written to disk for it either.
-                self._episodic_store = InMemoryEpisodicStore()
+                # later, so nothing is written to disk for it either. Still
+                # gets an embedder, so "remember" works the same as it
+                # would for a persisted conversation, just not across a
+                # restart.
+                self._episodic_store = InMemoryEpisodicStore(
+                    embedder=self._embedder,
+                )
                 self._snapshot_store = InMemorySnapshotStore()
             else:
                 self._episodic_store, self._snapshot_store = (
@@ -438,7 +453,14 @@ class CoalaPolicy:
             await self._finish_turn(path=path, strategy_id=None)
             return
 
-        if needs_history or strategy_id == "provide_summary":
+        if strategy_id == "remember":
+            query = (
+                extract_query(self._pending_utterance.content)
+                if self._pending_utterance is not None
+                else ""
+            )
+            await self._retrieve_similar(wm, port, query)
+        elif needs_history or strategy_id == "provide_summary":
             await self._retrieve(wm, port)
 
         strategy = self._strategies.get(strategy_id)
@@ -606,6 +628,59 @@ class CoalaPolicy:
 
         wm.set_retrieved_context(
             "\n".join(lines) or "(no prior conversation found)",
+        )
+
+    async def _retrieve_similar(
+        self,
+        wm: WorkingMemory,
+        port: ConversationPort,
+        query: str,
+    ) -> None:
+        """
+        "remember"'s own retrieval: a few specific facts ranked by
+        relevance to `query`, not a chronological window -- see
+        _retrieve above for that. `query` is the extracted topic
+        (query_extraction.extract_query), not the whole triggering
+        message, so similarity search isn't diluted by its own wrapper
+        phrasing ("tell me something about").
+        """
+
+        store, conversation_id = self._retrieval_source(port)
+        if store is None:
+            wm.set_retrieved_context("(no prior conversation found)")
+            return
+
+        # A failed or misconfigured search is reported to the main agent
+        # as "couldn't check", not left to crash the whole turn -- the
+        # intervention agent's event loop has no other handling for an
+        # exception raised this deep, so the turn would otherwise just
+        # silently never get a reply at all.
+        try:
+            records = await store.search_similar(
+                conversation_id,
+                query,
+                limit=self._similarity_retrieval_limit,
+            )
+        except Exception:
+            logger.warning(
+                "%s: search_similar failed for 'remember'",
+                wm.conversation_id,
+                exc_info=True,
+            )
+            wm.set_retrieved_context(
+                "(couldn't search memory right now -- say so, don't guess)",
+            )
+            return
+
+        lines = [
+            f"{record.speaker}: {record.content}"
+            for record in records
+            if record.content
+        ]
+
+        wm.set_retrieved_context(
+            "\n".join(lines)
+            or f"(nothing found related to {query!r})",
         )
 
     def _retrieval_source(

@@ -373,6 +373,102 @@ async def test_provide_summary_retrieves_text_and_voice_turns_together():
     assert "Ada: \n" not in retrieved
 
 
+class FakeEmbedder:
+    """
+    Deterministic, no real API calls: a bag-of-words vector over a small
+    fixed vocabulary, just enough to meaningfully rank similarity.
+    """
+
+    VOCAB = ["coffee", "tea", "budget", "deadline", "timeline"]
+
+    async def embed(self, text: str) -> list[float]:
+        lowered = text.lower()
+        return [float(lowered.count(word)) for word in self.VOCAB]
+
+
+async def test_remember_searches_by_the_extracted_query_not_the_whole_message():
+    episodic = InMemoryEpisodicStore(embedder=FakeEmbedder())
+    await episodic.log(
+        EpisodicRecord(
+            timestamp=0,
+            conversation_id="conv-1",
+            intervention_path="none",
+            speaker="Ada",
+            content="we should finalize the budget by Friday",
+        )
+    )
+    await episodic.log(
+        EpisodicRecord(
+            timestamp=1,
+            conversation_id="conv-1",
+            intervention_path="none",
+            speaker="Grace",
+            content="I picked up a better coffee machine for the office",
+        )
+    )
+
+    strategies = StrategyStore(
+        {
+            "remember": Strategy(
+                id="remember",
+                trigger_description="",
+                prompt_template="Recall. {prompt_fragment}",
+                modalities=frozenset({"text", "audio"}),
+            ),
+        }
+    )
+    policy = CoalaPolicy(strategy_store=strategies, episodic_store=episodic)
+    port = FakePort()
+    await policy.start(port)
+    # The wrapper phrase ("please tell me something about") must not
+    # dilute what gets embedded and searched -- only "coffee" should, so
+    # the coffee record should rank above the budget one (there's no
+    # relevance threshold, so with this few records both still appear --
+    # see test_remember_says_so_when_nothing_is_logged_yet).
+    await policy.on_utterance(
+        make_utterance(content="please tell me something about coffee")
+    )
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="remember", prompt_fragment=""),
+    )
+
+    retrieved = port.instructions[0]
+    assert retrieved.index("coffee machine") < retrieved.index("budget")
+
+
+async def test_remember_says_so_when_nothing_is_logged_yet():
+    # search_similar ranks whatever candidates exist rather than applying
+    # a minimum-relevance threshold -- "nothing found" is honest only
+    # when the conversation has no logged content at all yet, not merely
+    # a poor match. See cognition/policy.py's _retrieve_similar.
+    episodic = InMemoryEpisodicStore(embedder=FakeEmbedder())
+
+    strategies = StrategyStore(
+        {
+            "remember": Strategy(
+                id="remember",
+                trigger_description="",
+                prompt_template="Recall. {prompt_fragment}",
+                modalities=frozenset({"text", "audio"}),
+            ),
+        }
+    )
+    policy = CoalaPolicy(strategy_store=strategies, episodic_store=episodic)
+    port = FakePort()
+    await policy.start(port)
+    await policy.on_utterance(
+        make_utterance(content="tell me something about the vacation policy")
+    )
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="remember", prompt_fragment=""),
+    )
+
+    assert "nothing found" in port.instructions[0]
+    assert "vacation policy" in port.instructions[0]
+
+
 async def test_a_private_conversations_turns_are_logged_too():
     """
     A DM's own episodic log is an audit record now, not a memory source --
@@ -1022,6 +1118,41 @@ async def test_a_session_nobody_named_keeps_its_memory_in_process_only():
 
     assert requested == []
     assert isinstance(policy._episodic_store, InMemoryEpisodicStore)
+
+
+async def test_an_ephemeral_sessions_in_process_store_still_gets_an_embedder():
+    """
+    Found live: an ephemeral session's throwaway InMemoryEpisodicStore was
+    built with no embedder at all, so 'remember' raised instead of
+    degrading -- caught by the try/except in _retrieve_similar, but it
+    shouldn't have needed to reach there in the first place for a
+    perfectly configured server.
+    """
+
+    strategies = StrategyStore(
+        {
+            "remember": Strategy(
+                id="remember",
+                trigger_description="",
+                prompt_template="Recall. {prompt_fragment}",
+                modalities=frozenset({"text", "audio"}),
+            ),
+        }
+    )
+    policy = CoalaPolicy(
+        strategy_store=strategies,
+        store_factory=lambda conversation_id: (None, None),
+        embedder=FakeEmbedder(),
+    )
+    port = EphemeralPort(conversation_id="a-random-uuid")
+    await policy.start(port)
+    await policy.on_utterance(make_utterance(content="tell me about coffee"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="remember", prompt_fragment=""),
+    )
+
+    assert "couldn't search memory" not in port.instructions[0]
 
 
 async def test_closing_logs_a_turn_whose_reply_never_arrived():

@@ -8,21 +8,26 @@ held open for the process lifetime: simpler, and safe under SQLite's own
 file-level locking at the write volume this project has (one row per turn,
 not a high-throughput log).
 
-RAG extension point, not built here: retrieval today is purely
-recency-window (recall_recent), the same limitation the in-memory store
-has. Closing that gap needs no schema change to this table -- a future
-embeddings/FTS side-table can key off episodic_log's autoincrement `id`,
-and EpisodicStore.search() (or similar) can be added to the port without
-touching recall_recent() or any of its callers.
+search_similar() is the RAG extension point this module's docstring used
+to flag as "not built here": a side table (episodic_embedding) keyed off
+episodic_log's autoincrement id, exactly as anticipated -- recall_recent()
+and its callers are untouched.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path
 
 import aiosqlite
+import numpy as np
+
+from .ports import Embedder
+from .similarity import rank_by_similarity
+
+logger = logging.getLogger(__name__)
 
 _UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9_-]")
 
@@ -60,6 +65,14 @@ CREATE TABLE IF NOT EXISTS episodic_log (
 CREATE INDEX IF NOT EXISTS idx_episodic_log_conversation
     ON episodic_log (conversation_id, timestamp);
 
+CREATE TABLE IF NOT EXISTS episodic_embedding (
+    episodic_log_id INTEGER PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    embedding BLOB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_episodic_embedding_conversation
+    ON episodic_embedding (conversation_id);
+
 CREATE TABLE IF NOT EXISTS memory_snapshot (
     conversation_id TEXT PRIMARY KEY,
     history_summary TEXT NOT NULL DEFAULT '',
@@ -93,16 +106,33 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         await db.commit()
 
 
+def _pack_embedding(vector: list[float]) -> bytes:
+    return np.asarray(vector, dtype=np.float32).tobytes()
+
+
+def _unpack_embedding(blob: bytes) -> np.ndarray:
+    # Not .tolist(): rank_by_similarity stacks these directly, and
+    # converting to a Python list here only to convert back to numpy
+    # there measured ~25x slower at scale for no benefit.
+    return np.frombuffer(blob, dtype=np.float32)
+
+
 class SqliteEpisodicStore:
     """Satisfies memory.ports.EpisodicStore against a SQLite file."""
 
-    def __init__(self, db_path: str | Path) -> None:
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        embedder: Embedder | None = None,
+    ) -> None:
         self._db_path = str(db_path)
+        self._embedder = embedder
 
     async def log(self, record: EpisodicRecord) -> None:
         async with aiosqlite.connect(self._db_path) as db:
             await _ensure_schema(db)
-            await db.execute(
+            cursor = await db.execute(
                 """
                 INSERT INTO episodic_log (
                     timestamp, conversation_id, intervention_path, speaker,
@@ -126,7 +156,104 @@ class SqliteEpisodicStore:
                     record.participant_roles_summary,
                 ),
             )
+            episodic_log_id = cursor.lastrowid
             await db.commit()
+
+        if self._embedder is None or not record.content:
+            return
+
+        # Embedded outside the connection above (and in a fresh one
+        # below): holding a SQLite connection open across a network call
+        # would sit on the file lock for however long that call takes.
+        try:
+            embedding = await self._embedder.embed(record.content)
+        except Exception:
+            logger.warning(
+                "Could not embed a logged turn for %s; it won't be "
+                "findable by 'remember' until re-embedded",
+                record.conversation_id,
+                exc_info=True,
+            )
+            return
+
+        async with aiosqlite.connect(self._db_path) as db:
+            await _ensure_schema(db)
+            await db.execute(
+                """
+                INSERT INTO episodic_embedding (
+                    episodic_log_id, conversation_id, embedding
+                ) VALUES (?, ?, ?)
+                """,
+                (
+                    episodic_log_id,
+                    record.conversation_id,
+                    _pack_embedding(embedding),
+                ),
+            )
+            await db.commit()
+
+    async def search_similar(
+        self,
+        conversation_id: str,
+        query: str,
+        *,
+        limit: int,
+    ) -> list[EpisodicRecord]:
+        if self._embedder is None:
+            raise RuntimeError(
+                "SqliteEpisodicStore has no embedder configured; "
+                "search_similar needs one"
+            )
+
+        async with aiosqlite.connect(self._db_path) as db:
+            await _ensure_schema(db)
+            cursor = await db.execute(
+                """
+                SELECT episodic_log_id, embedding FROM episodic_embedding
+                WHERE conversation_id = ?
+                """,
+                (conversation_id,),
+            )
+            rows = await cursor.fetchall()
+
+        if not rows:
+            return []
+
+        query_vector = await self._embedder.embed(query)
+        candidate_ids = [row[0] for row in rows]
+        candidate_vectors = [_unpack_embedding(row[1]) for row in rows]
+
+        ranked = rank_by_similarity(query_vector, candidate_vectors)
+        top_ids = [candidate_ids[i] for i in ranked[:limit]]
+
+        placeholders = ",".join("?" * len(top_ids))
+        async with aiosqlite.connect(self._db_path) as db:
+            await _ensure_schema(db)
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                f"SELECT * FROM episodic_log WHERE id IN ({placeholders})",
+                top_ids,
+            )
+            by_id = {row["id"]: row for row in await cursor.fetchall()}
+
+        # top_ids' order (most similar first), not by_id's arbitrary one.
+        return [
+            EpisodicRecord(
+                timestamp=by_id[i]["timestamp"],
+                conversation_id=by_id[i]["conversation_id"],
+                intervention_path=by_id[i]["intervention_path"],
+                speaker=by_id[i]["speaker"],
+                content=by_id[i]["content"],
+                modality=by_id[i]["modality"],
+                trigger_variables=json.loads(by_id[i]["trigger_variables"]),
+                strategy_id=by_id[i]["strategy_id"],
+                prompt_fragment=by_id[i]["prompt_fragment"],
+                assistant_output=by_id[i]["assistant_output"],
+                history_summary=by_id[i]["history_summary"],
+                participant_roles_summary=by_id[i]["participant_roles_summary"],
+            )
+            for i in top_ids
+        ]
 
     async def recall_recent(
         self,

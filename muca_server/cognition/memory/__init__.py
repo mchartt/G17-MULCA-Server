@@ -1,5 +1,5 @@
 from .in_memory import InMemoryEpisodicStore, InMemorySnapshotStore
-from .ports import EpisodicStore, SnapshotStore
+from .ports import Embedder, EpisodicStore, SnapshotStore
 from .records import (
     EpisodicRecord,
     InterventionPath,
@@ -15,6 +15,7 @@ from .records import (
 # Import it directly: from muca_server.cognition.memory.sqlite import ...
 
 __all__ = [
+    "Embedder",
     "EpisodicRecord",
     "EpisodicStore",
     "InMemoryEpisodicStore",

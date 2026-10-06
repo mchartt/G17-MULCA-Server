@@ -1,0 +1,16 @@
+id: remember
+modalities: [text, audio]
+trigger_description: >
+  Someone asks you to recall a specific past fact, topic, or detail -- e.g.
+  "tell me something about the budget", "what do you know about Ada's
+  proposal", "do you remember anything about the deadline" -- not a general
+  recap of the whole conversation (that's provide_summary instead).
+# Deliberately no cooldown_messages, same reasoning as
+# respond_when_addressed: this fires only in direct response to being
+# asked, so a back-and-forth asking about several different things needs
+# it to be able to fire on consecutive messages.
+trigger_variables: []
+prompt_template: |
+  Someone asked you to recall something specific. {prompt_fragment}
+  Use the retrieved context below. If it doesn't actually answer what
+  they asked, say so plainly rather than guessing or making something up.

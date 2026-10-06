@@ -1,19 +1,31 @@
 from __future__ import annotations
 
+from .ports import Embedder
 from .records import EpisodicRecord, MemorySnapshot
+from .similarity import rank_by_similarity
 
 
 class InMemoryEpisodicStore:
     """Remembers for as long as the process runs."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, embedder: Embedder | None = None) -> None:
         self._records: dict[str, list[EpisodicRecord]] = {}
+        # Parallel to _records, one entry each -- None for a record with
+        # no embedder configured or nothing to embed (empty content, e.g.
+        # a management_cycle row), so the two lists always line up by index.
+        self._embeddings: dict[str, list[list[float] | None]] = {}
+        self._embedder = embedder
 
     async def log(self, record: EpisodicRecord) -> None:
         self._records.setdefault(
             record.conversation_id,
             [],
         ).append(record)
+
+        embedding = None
+        if self._embedder is not None and record.content:
+            embedding = await self._embedder.embed(record.content)
+        self._embeddings.setdefault(record.conversation_id, []).append(embedding)
 
     async def recall_recent(
         self,
@@ -30,6 +42,38 @@ class InMemoryEpisodicStore:
         ]
 
         return records[-limit:]
+
+    async def search_similar(
+        self,
+        conversation_id: str,
+        query: str,
+        *,
+        limit: int,
+    ) -> list[EpisodicRecord]:
+        if self._embedder is None:
+            raise RuntimeError(
+                "InMemoryEpisodicStore has no embedder configured; "
+                "search_similar needs one"
+            )
+
+        records = self._records.get(conversation_id, [])
+        embeddings = self._embeddings.get(conversation_id, [])
+
+        candidates = [
+            (record, embedding)
+            for record, embedding in zip(records, embeddings)
+            if embedding is not None
+        ]
+        if not candidates:
+            return []
+
+        query_vector = await self._embedder.embed(query)
+        ranked = rank_by_similarity(
+            query_vector,
+            [embedding for _, embedding in candidates],
+        )
+
+        return [candidates[i][0] for i in ranked[:limit]]
 
 
 class InMemorySnapshotStore:

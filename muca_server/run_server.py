@@ -21,7 +21,7 @@ from openai import AsyncOpenAI
 
 from .agents import MainAgentOptions
 from .agents.conversation import DEFAULT_SILENCE_TIMEOUT_MS
-from .agents.openai import ChatCompletionsSummarizer, OpenAIAgentFactory
+from .agents.openai import ChatCompletionsSummarizer, OpenAIAgentFactory, OpenAIEmbedder
 from .cognition import CoalaPolicy
 from .cognition.loader import load_persona, load_strategy_store, load_task
 from .cognition.memory.sqlite import (
@@ -39,6 +39,7 @@ ACTIVE_STRATEGY_IDS = [
     "respond_when_addressed",
     "non_offensive",
     "provide_summary",
+    "remember",
 ]
 ASSISTANT_NAME = "MULCA"
 
@@ -79,9 +80,13 @@ def build_app():
     db_dir = os.environ.get("MUCA_DB_DIR", str(DEFAULT_DB_DIR))
     os.makedirs(db_dir, exist_ok=True)
 
+    # Shared across every conversation's store: one client, same as the
+    # main/summarizer agents reuse, not a new one per channel.
+    embedder = OpenAIEmbedder(client)
+
     def store_factory(conversation_id: str):
         path = db_path_for(conversation_id, base_dir=db_dir)
-        return SqliteEpisodicStore(path), SqliteSnapshotStore(path)
+        return SqliteEpisodicStore(path, embedder=embedder), SqliteSnapshotStore(path)
 
     # Without this, the management cycle never runs at
     # all -- CoalaPolicy only calls it when a summarizer is configured, and
@@ -95,6 +100,7 @@ def build_app():
             strategy_store=strategy_store,
             store_factory=store_factory,
             summarizer=summarizer,
+            embedder=embedder,
             assistant_name=ASSISTANT_NAME,
         )
 
