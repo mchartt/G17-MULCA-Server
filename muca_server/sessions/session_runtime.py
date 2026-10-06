@@ -14,6 +14,7 @@ from ..protocol import (
     ErrorMessage,
     parse_incoming_message,
     OutgoingProtocolMessage,
+    SetModelMessage,
     serialize_outgoing_message,
 )
 from .session_components import SessionWorker
@@ -60,6 +61,10 @@ class SessionRuntime:
                 message = parse_incoming_message(raw_message)
             except Exception:
                 message = None
+
+            if isinstance(message, SetModelMessage):
+                await self.run_admin(message)
+                return
 
             if message is None or message.event not in CONNECT_EVENTS:
                 logger.warning(
@@ -113,6 +118,26 @@ class SessionRuntime:
             )
         finally:
             await self.close()
+
+    async def run_admin(self, message: SetModelMessage) -> None:
+        """
+        An admin request sent instead of `connect`: no agents are built, so
+        it still works when the current model can't connect at all.
+        """
+
+        try:
+            await dispatch(message, self.agent_router)
+        except Exception as exc:
+            logger.warning("Session %s: %s refused: %s", self.session_id, message.event, exc)
+            await self.websocket.send_text(
+                serialize_outgoing_message(
+                    ErrorMessage(message=f"{message.event} failed: {exc}"),
+                )
+            )
+            await self.websocket.close(code=1008, reason="Refused")
+            return
+
+        await self.websocket.close(code=1012, reason="Model changed")
 
     async def start(self) -> None:
         self.state.is_connected = True

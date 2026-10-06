@@ -150,3 +150,34 @@ def test_models_in_the_handshake_reach_the_agents_the_session_builds():
             pass
 
     assert factory.models == ["own-main", "own-intervention"]
+
+
+def test_set_model_as_the_first_frame_needs_no_agents(tmp_path):
+    """So an admin can still fix a model that can't connect at all."""
+
+    factory = RecordingFactory()
+    settings = ModelSettings(tmp_path / "c.json", admin_token=TOKEN)
+    client = TestClient(
+        create_app(
+            components_factory=DefaultSessionComponentsFactory(
+                agent_factory=factory,
+                model_settings=settings,
+            ),
+        ),
+    )
+
+    with client.websocket_connect("/") as websocket:
+        websocket.send_json(
+            {"event": "set_model", "adminToken": "wrong", "model": "gpt-new"},
+        )
+        assert websocket.receive_json()["event"] == "error"
+        assert websocket.receive()["code"] == 1008
+
+    with client.websocket_connect("/") as websocket:
+        websocket.send_json(
+            {"event": "set_model", "adminToken": TOKEN, "model": "gpt-new"},
+        )
+        assert websocket.receive()["code"] == 1012
+
+    assert settings.main == "gpt-new"
+    assert factory.models == []

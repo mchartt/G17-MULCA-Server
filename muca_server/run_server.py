@@ -66,6 +66,14 @@ def build_app():
     intervention_persona = load_persona("intervention_default")
     task_knowledge = load_task(TASK_ID)
 
+    # One SQLite file per conversation_id, not one shared file -- e.g. each
+    # of a deployment's Discord channels (channel/instance scoping) gets
+    # its own database. The directory is what's fixed; the
+    # filename is deterministically derived from conversation_id, so there's
+    # nothing per-channel to separately configure here (that lives entirely
+    # in the Discord-specific client, e.g. mulca_discord's instances.yaml --
+    # this file never sees a channel id, only whatever conversation_id it's
+    # handed).
     db_dir = os.environ.get("MUCA_DB_DIR", str(DEFAULT_DB_DIR))
     os.makedirs(db_dir, exist_ok=True)
 
@@ -85,15 +93,6 @@ def build_app():
         task_knowledge=task_knowledge,
         models=model_settings,
     )
-
-    # One SQLite file per conversation_id, not one shared file -- e.g. each
-    # of a deployment's Discord channels (channel/instance scoping) gets
-    # its own database. The directory is what's fixed; the
-    # filename is deterministically derived from conversation_id, so there's
-    # nothing per-channel to separately configure here (that lives entirely
-    # in the Discord-specific client, e.g. mulca_discord's instances.yaml --
-    # this file never sees a channel id, only whatever conversation_id it's
-    # handed).
 
     # Shared across every conversation's store: one client, same as the
     # main/summarizer agents reuse, not a new one per channel.
