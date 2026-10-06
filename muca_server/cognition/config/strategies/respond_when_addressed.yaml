@@ -1,24 +1,26 @@
 id: respond_when_addressed
 modalities: [text, audio]
 trigger_description: >
-  You (MULCA) are the SOLE intended recipient of the message -- not the
-  group. This includes: an explicit Discord @-mention of you; the message
-  naming you by name ("MULCA") in plain text; a follow-up that is clearly
-  and only a reply to your own immediately preceding message (e.g. "could
-  you check that?"), continuing a one-on-one exchange you were just having,
-  even without naming you explicitly; and a question about a specific detail
-  from earlier in the conversation that is directed at you specifically
-  (e.g. "what did I say about X", "did we already decide Y") -- for that
-  last case, also set needs_history so you can answer accurately rather than
-  guessing from what's currently visible to you. Do NOT select this for a
-  message directed at the group, even if it continues a topic you raised,
-  references something you said in passing, or would make sense as an
-  answer to your own question if another participant had asked it instead
-  -- a comment meant for everyone is not addressed to you just because it's
-  on the same subject. In a private DM, there is no other possible audience,
-  so almost any substantive message qualifies -- the only judgment left
-  there is whether the specific message actually warrants a reply right
-  now, not who it's for.
+  Fire ONLY on one of these two explicit cases -- never on an inference
+  from topic, context, or conversational flow:
+  (1) An explicit mention of you -- an actual Discord @-mention, or the
+  message naming you in plain text by name or role ("MULCA", "assistant",
+  "bot", or a similar alias you go by).
+  (2) The message is itself a reply to your own immediately preceding
+  message (not merely on the same subject as something you said) AND it
+  explicitly says "you" or names you again within that reply (e.g. "could
+  you check that?", "are you sure, MULCA?"). A reply to your message that
+  contains neither is NOT enough on its own -- do not infer address from
+  topic continuity, conversational flow, or it "making sense" as a
+  response to you.
+  If the message asks about a specific detail from earlier in the
+  conversation (e.g. "what did I say about X", "did we already decide Y")
+  AND satisfies (1) or (2) above, also set needs_history so you can answer
+  accurately rather than guessing from what's currently visible to you.
+  In a private DM, there is no other possible audience, so almost any
+  substantive message qualifies -- the only judgment left there is whether
+  the specific message actually warrants a reply right now, not who it's
+  for.
   This takes priority over unsolicited strategies (participation_equality_text/
   _voice, keep_on_topic) whenever both would otherwise apply to the same
   message: answer the direct question now. An unequal-participation nudge
