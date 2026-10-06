@@ -41,13 +41,6 @@ RETRIEVAL_LIMIT = 50
 MANAGEMENT_CYCLE_INTERVAL = 24
 TURN_TIMEOUT_SECONDS = 30.0
 
-# A spoken turn may only ever get a strategy it actually solicited --
-# being addressed directly, or asking for a summary -- never an
-# unsolicited one like participation_equality or keep_on_topic. Talking
-# over a live conversation uninvited is far more intrusive than an
-# unsolicited reply reads in text, where it's easy to scan past.
-VOICE_ALLOWED_STRATEGY_IDS = frozenset({"respond_when_addressed", "provide_summary"})
-
 
 class CoalaPolicy:
     """
@@ -215,26 +208,50 @@ class CoalaPolicy:
 
         await self._apply_linked_group_context(wm, port)
 
+        # Text and voice have entirely separate rosters and separate turn
+        # counts -- someone present in the voice call who never types has
+        # no text participation to measure, and vice versa -- so each
+        # modality's gini_index/participant_message_counts is computed from
+        # only that modality's own history and roster, never the other's.
+        # Voice's variables are the same names, "voice_"-prefixed, merged
+        # into one dict so every strategy's catalog-declared trigger
+        # variables (whichever modality they're for) are present on the
+        # one wm.trigger_variables every strategy shares.
         participants = port.participants()
+        voice_participants = port.voice_participants()
+        text_vars = compute_trigger_variables(
+            [u for u in wm.history if u.modality == "text"],
+            assistant_id=self._assistant_id,
+            participants=participants,
+        )
+        voice_vars = compute_trigger_variables(
+            [u for u in wm.history if u.modality == "audio"],
+            assistant_id=self._assistant_id,
+            participants=voice_participants,
+        )
         wm.set_trigger_variables(
-            compute_trigger_variables(
-                wm.history,
-                assistant_id=self._assistant_id,
-                participants=participants,
-            )
+            {
+                **text_vars,
+                **{f"voice_{key}": value for key, value in voice_vars.items()},
+            }
         )
         logger.info(
-            "%s participants=%s gini_index=%s participant_message_counts=%s",
+            "%s participants=%s gini_index=%s participant_message_counts=%s "
+            "voice_participants=%s voice_gini_index=%s "
+            "voice_participant_message_counts=%s",
             wm.conversation_id,
             participants,
             wm.trigger_variables["gini_index"],
             wm.trigger_variables["participant_message_counts"],
+            voice_participants,
+            wm.trigger_variables["voice_gini_index"],
+            wm.trigger_variables["voice_participant_message_counts"],
         )
 
         # The observer only ever sees raw utterance text otherwise (routed
         # straight to its session by Conversation) -- a numeric-threshold
-        # strategy like participation_equality has no way to judge against a
-        # threshold it is never actually told.
+        # strategy like participation_equality_text has no way to judge
+        # against a threshold it is never actually told.
         cooling_down = [
             strategy.id
             for strategy in self._strategies.all()
@@ -246,18 +263,23 @@ class CoalaPolicy:
             else ""
         )
         # This is only a steer for the observer; on_intervention_signal is
-        # what actually enforces VOICE_ALLOWED_STRATEGY_IDS, since the
-        # observer's choice is a request, not a guarantee.
-        voice_note = (
-            " This turn was spoken, not typed: only "
-            f"{sorted(VOICE_ALLOWED_STRATEGY_IDS)} may be selected, "
-            "nothing unsolicited."
-            if utterance.modality == "audio"
+        # what actually enforces Strategy.modalities, since the observer's
+        # choice is a request, not a guarantee.
+        allowed_for_modality = sorted(
+            strategy.id
+            for strategy in self._strategies.all()
+            if utterance.modality in strategy.modalities
+        )
+        all_ids = sorted(strategy.id for strategy in self._strategies.all())
+        modality_note = (
+            f" This turn was {'spoken' if utterance.modality == 'audio' else 'typed'}: "
+            f"only {allowed_for_modality} may be selected."
+            if allowed_for_modality != all_ids
             else ""
         )
         await port.tell_observers(
             "Current trigger variables: "
-            f"{json.dumps(wm.trigger_variables)}.{cooldown_note}{voice_note}"
+            f"{json.dumps(wm.trigger_variables)}.{cooldown_note}{modality_note}"
         )
 
         # A decision -- forced or observer-judged -- is now pending for
@@ -364,34 +386,41 @@ class CoalaPolicy:
             needs_web_search,
         )
 
-        # Hard veto: not a request the model might ignore, the guarantee.
-        if strategy_id is not None:
-            strategy = self._strategies.get(strategy_id)
-            if strategy is not None and wm.strategy_in_cooldown(strategy):
-                logger.info(
-                    "%s vetoed %r: still in cooldown",
-                    wm.conversation_id,
-                    strategy_id,
-                )
-                strategy_id = None
-                prompt_fragment = None
-                needs_history = False
+        # Hard vetoes: not a request the model might ignore, the guarantee.
+        # Both share one strategy lookup; either can clear strategy_id, in
+        # which case the other finds nothing left to veto.
+        strategy = (
+            self._strategies.get(strategy_id)
+            if strategy_id is not None
+            else None
+        )
 
-        # Hard veto, same guarantee as cooldown: a spoken turn may only
-        # ever get a response it actually solicited -- being addressed
-        # directly, or asking for a summary -- never an unsolicited one
-        # (e.g. participation_equality, keep_on_topic). See the voice_note
-        # in on_utterance for why.
-        if (
-            strategy_id is not None
-            and strategy_id not in VOICE_ALLOWED_STRATEGY_IDS
-            and self._pending_utterance is not None
-            and self._pending_utterance.modality == "audio"
-        ):
+        if strategy is not None and wm.strategy_in_cooldown(strategy):
             logger.info(
-                "%s vetoed %r: not allowed for a spoken turn",
+                "%s vetoed %r: still in cooldown",
                 wm.conversation_id,
                 strategy_id,
+            )
+            strategy_id = None
+            prompt_fragment = None
+            needs_history = False
+            strategy = None
+
+        # Same guarantee, for modality: a strategy whose config doesn't
+        # list this turn's modality may never fire for it (e.g.
+        # participation_equality_text for a spoken turn, or
+        # participation_equality_voice for a typed one). See the
+        # modality_note in on_utterance for why.
+        if (
+            strategy is not None
+            and self._pending_utterance is not None
+            and self._pending_utterance.modality not in strategy.modalities
+        ):
+            logger.info(
+                "%s vetoed %r: not allowed for a %s turn",
+                wm.conversation_id,
+                strategy_id,
+                self._pending_utterance.modality,
             )
             strategy_id = None
             prompt_fragment = None

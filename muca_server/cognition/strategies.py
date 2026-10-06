@@ -29,6 +29,15 @@ class Strategy:
     # Enforced deterministically, never left to a model to remember.
     cooldown_messages: int = 0
 
+    # Which modality a turn must have arrived in for this strategy to be
+    # eligible at all -- enforced as a hard veto in
+    # CoalaPolicy.on_intervention_signal, the same deterministic way
+    # cooldown is, not left to the observer to remember. Defaults to text
+    # only: every strategy predates voice and was written assuming a typed
+    # channel, so an existing strategy's YAML silently keeps that behavior
+    # unless it opts into "audio" explicitly.
+    modalities: frozenset[str] = field(default_factory=lambda: frozenset({"text"}))
+
 
 class StrategyStore:
     def __init__(
@@ -63,6 +72,7 @@ class StrategyStore:
                 trigger_variables=data.get("trigger_variables", []),
                 trigger_threshold=data.get("trigger_threshold"),
                 cooldown_messages=data.get("cooldown_messages", 0),
+                modalities=frozenset(data.get("modalities", ["text"])),
             )
             strategies[strategy.id] = strategy
 

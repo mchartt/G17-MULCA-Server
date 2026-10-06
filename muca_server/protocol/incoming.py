@@ -80,6 +80,12 @@ class ParticipantsMessage(IncomingMessage):
     participants: list[Participant] = Field(
         default_factory=list,
     )
+    # Which roster this is: the text channel's, or the voice call's --
+    # tracked completely separately server-side (Conversation keeps one
+    # dict per modality), since who's in one is not reliably who's in the
+    # other. Defaults to "text" so an older/other client that only ever
+    # sent one combined roster keeps behaving exactly as before.
+    modality: Literal["text", "audio"] = "text"
 
 
 class TriggerResponseMessage(TargetedMessage):

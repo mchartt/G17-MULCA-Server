@@ -22,6 +22,7 @@ STRATEGIES = StrategyStore(
             id="respond_when_addressed",
             trigger_description="addressed directly",
             prompt_template="Answer them. {prompt_fragment}",
+            modalities=frozenset({"text", "audio"}),
         ),
     }
 )
@@ -39,6 +40,7 @@ class FakePort:
         self._is_private = is_private
         self._linked_conversation_id = linked_conversation_id
         self._participants: dict[int, str] = {}
+        self._voice_participants: dict[int, str] = {}
         self.instructions: list[str] = []
         self.observer_messages: list[str] = []
 
@@ -56,6 +58,9 @@ class FakePort:
 
     def participants(self) -> dict[int, str]:
         return dict(self._participants)
+
+    def voice_participants(self) -> dict[int, str]:
+        return dict(self._voice_participants)
 
     async def instruct_main_agent(self, directive: str) -> None:
         self.instructions.append(directive)
@@ -215,14 +220,44 @@ async def test_a_typed_turn_is_unaffected_by_the_voice_only_veto():
     assert len(port.instructions) == 1
 
 
+async def test_a_voice_only_strategy_is_vetoed_for_a_typed_turn():
+    strategies = StrategyStore(
+        {
+            "participation_equality_voice": Strategy(
+                id="participation_equality_voice",
+                trigger_description="unequal voice participation",
+                prompt_template="Balance voice participation. {prompt_fragment}",
+                modalities=frozenset({"audio"}),
+            ),
+        }
+    )
+    policy = CoalaPolicy(
+        strategy_store=strategies,
+        episodic_store=InMemoryEpisodicStore(),
+    )
+    port = FakePort()
+    await policy.start(port)
+
+    await policy.on_utterance(make_utterance(modality="text"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="participation_equality_voice",
+            prompt_fragment="invite Bob",
+        ),
+    )
+
+    assert port.instructions == []
+
+
 async def test_a_spoken_turn_tells_observers_only_mentions_apply():
     policy, port = make_policy()
     await policy.start(port)
 
     await policy.on_utterance(make_utterance(modality="audio"))
 
-    assert "provide_summary" in port.observer_messages[-1]
     assert "respond_when_addressed" in port.observer_messages[-1]
+    assert "participation_equality" not in port.observer_messages[-1]
 
 
 async def test_provide_summary_always_retrieves_regardless_of_the_signal():
@@ -311,6 +346,7 @@ async def test_provide_summary_retrieves_text_and_voice_turns_together():
                 id="provide_summary",
                 trigger_description="",
                 prompt_template="Summarize. {prompt_fragment}",
+                modalities=frozenset({"text", "audio"}),
             ),
         }
     )
@@ -437,6 +473,34 @@ async def test_a_present_but_silent_participant_reaches_trigger_variables():
     variables = policy._wm.trigger_variables
     assert variables["participant_message_counts"] == {"Ada": 1, "Grace": 0}
     assert variables["gini_index"] > 0.0
+
+
+async def test_text_and_voice_participation_are_measured_separately():
+    """
+    Text and voice have their own separate rosters and their own separate
+    turn counts: someone present in the voice call who never types (Bob,
+    Eve) has no text participation to measure, and vice versa (Ada, Grace).
+    One shared gini_index/participant_message_counts would conflate two
+    different audiences.
+    """
+
+    policy, port = make_policy()
+    await policy.start(port)
+    port._participants = {1: "Ada", 2: "Grace"}
+    port._voice_participants = {3: "Bob", 4: "Eve"}
+
+    await policy.on_utterance(
+        make_utterance(speaker_id=1, name="Ada", modality="text"),
+    )
+    await policy.on_intervention_signal(object(), None)
+    await policy.on_utterance(
+        make_utterance(speaker_id=3, name="Bob", modality="audio"),
+    )
+    await policy.on_intervention_signal(object(), None)
+
+    variables = policy._wm.trigger_variables
+    assert variables["participant_message_counts"] == {"Ada": 1, "Grace": 0}
+    assert variables["voice_participant_message_counts"] == {"Bob": 1, "Eve": 0}
 
 
 class FakeSummarizer:

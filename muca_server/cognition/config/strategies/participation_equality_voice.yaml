@@ -1,0 +1,29 @@
+id: participation_equality_voice
+modalities: [audio]
+trigger_description: >
+  Participation is unequal among those actually in the voice call -- one or
+  more speakers are getting little space to contribute relative to others
+  present on the call. voice_participant_message_counts and
+  voice_participant_shares tell you who specifically (based on the voice
+  channel's own roster and spoken turns only, not anyone only present in
+  text), so you can invite the quietest voice participant by name/mention
+  rather than speaking generically.
+trigger_threshold:
+  variable: voice_gini_index
+  min: 0.3
+cooldown_messages: 5
+trigger_variables:
+  - voice_gini_index
+  - voice_participant_message_counts
+  - voice_participant_shares
+  - voice_message_count
+# See participation_equality_text.yaml for why this is a separate strategy
+# rather than one shared with text: the voice channel's roster and spoken
+# turn counts are their own separate thing from the text channel's, so this
+# strategy is the only place a spoken turn may still trigger an unsolicited
+# (not-addressed) intervention -- see VOICE_ALLOWED_STRATEGY_IDS-replacing
+# Strategy.modalities in cognition/policy.py.
+prompt_template: |
+  Participation in the voice call is currently unbalanced. {prompt_fragment}
+  Gently invite the quietest participant to share their view, without singling
+  out or criticizing whoever has been talking the most.

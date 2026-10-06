@@ -1,4 +1,5 @@
 id: provide_summary
+modalities: [text, audio]
 trigger_description: >
   Someone is directly asking for a recap or summary of the conversation (e.g.
   "can you summarize what we've talked about", "what have we discussed so

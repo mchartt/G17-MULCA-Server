@@ -34,7 +34,8 @@ from .sessions.session_components_factory import DefaultSessionComponentsFactory
 
 TASK_ID = "general_moderation"
 ACTIVE_STRATEGY_IDS = [
-    "participation_equality",
+    "participation_equality_text",
+    "participation_equality_voice",
     "respond_when_addressed",
     "non_offensive",
     "provide_summary",

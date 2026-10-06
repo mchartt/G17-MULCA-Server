@@ -60,6 +60,15 @@ class ConversationPort(Protocol):
     def participants(self) -> dict[int, str]:
         ...
 
+    def voice_participants(self) -> dict[int, str]:
+        """
+        Who is actually in the voice call, separately from participants()
+        (text channel). Distinct rosters: someone present in text who never
+        joins voice, or vice versa, is only ever counted on the side they're
+        actually present on.
+        """
+        ...
+
     async def instruct_main_agent(self, directive: str) -> None:
         """Tell the main agent to respond, with guidance on why and roughly what."""
         ...

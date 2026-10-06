@@ -34,7 +34,7 @@ Every field name is camelCase. The server ignores fields it doesn't know, so the
 | `connect` / `connect_main_assistant` | `conversationId?`, `isDm=false`, `linkedConversationId?` | Must be the first frame.<br>• `conversationId` names the conversation, so its memory outlives the session. Without it the session is ephemeral: nothing is persisted.<br>• `isDm`: a private conversation is never written to long-term memory.<br>• `linkedConversationId` (DMs only): the group this DM may read the memory of. |
 | `create_auxiliary_agent` | `auxiliaryAgentType` | Adds an observer. Use `intervention_detection` (Unity's `InterventionDetectionAgentOpenAI` is also accepted) to decide when the assistant speaks. The server answers with `agent_guid`, or `error` for an unknown type. |
 | `remove_auxiliary_agent` | `targetAgentGuid` | Removes an observer. |
-| `participants` | `participants: [{id, name}]` | Everyone present, including people who haven't spoken. Send it again whenever it changes. |
+| `participants` | `participants: [{id, name}]`, `modality="text"` | Everyone present, including people who haven't spoken. Send it again whenever it changes. `modality` ("text" or "audio") says which roster this is -- the server keeps text and voice rosters completely separate, since who's in one is not reliably who's in the other. Omit it (or send "text") for a text-channel roster; a voice client must send "audio" explicitly. |
 | `user_text` | `speaker`, `speakerName?`, `text` | One user's whole text message. It is answered in text. |
 | `audio_stream` | `speaker`, `isNotifying`, `playbackTimeMs`, `audio` | One tick of voice. See [Voice](#voice). |
 | `playback_frame` | `audio` | Assistant audio the users just heard, echoed back for the observers. |

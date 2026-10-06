@@ -134,8 +134,13 @@ class Conversation:
         self.turns: list[Turn] = []
         self.main_agent_state = MainAgentState.INACTIVE
 
-        # Everyone present, including those who have not spoken yet.
+        # Everyone present in text, including those who have not spoken yet.
         self._participants: dict[int, str] = {}
+
+        # Everyone present in the voice call, tracked completely separately
+        # from the text roster above -- who's in one is not reliably who's
+        # in the other. See route_participants/voice_participants().
+        self._voice_participants: dict[int, str] = {}
 
         # Deltas of the reply being streamed, until it completes.
         self._assistant_reply: list[str] = []
@@ -205,6 +210,9 @@ class Conversation:
 
     def participants(self) -> dict[int, str]:
         return dict(self._participants)
+
+    def voice_participants(self) -> dict[int, str]:
+        return dict(self._voice_participants)
 
     async def instruct_main_agent(self, directive: str) -> None:
         if self._main_agent is None:
@@ -421,10 +429,14 @@ class Conversation:
         self,
         message: ParticipantsMessage,
     ) -> None:
-        self._participants = {
+        roster = {
             participant.id: participant.name
             for participant in message.participants
         }
+        if message.modality == "audio":
+            self._voice_participants = roster
+        else:
+            self._participants = roster
 
     async def trigger_response(
         self,
@@ -1404,7 +1416,10 @@ class Conversation:
         if user_id == self._main_agent_options.agent_id:
             return self._main_agent_options.name
 
-        return self._participants.get(
+        if user_id in self._participants:
+            return self._participants[user_id]
+
+        return self._voice_participants.get(
             user_id,
             f"User {user_id}",
         )

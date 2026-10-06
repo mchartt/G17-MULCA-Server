@@ -1,0 +1,34 @@
+id: participation_equality_text
+modalities: [text]
+trigger_description: >
+  Participation is unequal in the text channel -- one or more speakers are
+  getting little space to contribute relative to others, among those present
+  in text. participant_message_counts and participant_shares tell you who
+  specifically, so you can invite the quietest participant by name/mention
+  rather than speaking generically.
+trigger_threshold:
+  variable: gini_index
+  min: 0.3
+cooldown_messages: 5
+trigger_variables:
+  - gini_index
+  - participant_message_counts
+  - participant_shares
+  - message_count
+# Only one response approach is implemented for now: inviting a quiet
+# participant. "Interrupt the dominant speaker" is a deliberately deferred
+# alternative -- see BLUEPRINT.md and core/strategies.py's Strategy dataclass
+# if/when a second response mode is added; it would need its own
+# prompt_template variant (or a response_mode the intervention agent picks),
+# not a rewrite of this file's structure.
+#
+# Split from the old single participation_equality into this (text) and
+# participation_equality_voice: text and voice have their own separate
+# participant rosters and separate message counts (someone present in the
+# voice call who never types has no text participation to measure, and vice
+# versa), so one shared gini_index/participant_message_counts would have
+# conflated two different audiences.
+prompt_template: |
+  Participation in the text channel is currently unbalanced. {prompt_fragment}
+  Gently invite the quietest participant to share their view, without singling
+  out or criticizing whoever has been talking the most.

@@ -1,4 +1,5 @@
 id: respond_when_addressed
+modalities: [text, audio]
 trigger_description: >
   Someone's message is directed at you (MULCA). This includes: an explicit
   Discord @-mention of you; the message naming you by name ("MULCA") in
