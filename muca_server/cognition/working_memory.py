@@ -25,7 +25,7 @@ from .strategies import Strategy
 # though message counting itself is correct and identical for both
 # modalities (one increment per completed turn, text or voice, via the one
 # shared on_utterance path). A flat constant, not per-strategy, for now.
-SECONDARY_COOLDOWN_SECONDS = 10.0
+SECONDARY_COOLDOWN_SECONDS = 60.0
 
 
 @dataclass

@@ -35,9 +35,9 @@ def test_a_strategy_leaves_cooldown_after_enough_messages():
     wm.record_action(strategy.id, 10, now=0.0)
     wm.total_message_count = 16
 
-    # now=20: past both the message-count gate and the wall-clock one, so
+    # now=61: past both the message-count gate and the wall-clock one, so
     # this isolates the message-count gate specifically.
-    assert not wm.strategy_in_cooldown(strategy, now=20.0)
+    assert not wm.strategy_in_cooldown(strategy, now=61.0)
 
 
 def test_the_wall_clock_gate_vetoes_even_once_enough_messages_have_passed():
@@ -55,8 +55,8 @@ def test_the_wall_clock_gate_vetoes_even_once_enough_messages_have_passed():
     wm.record_action(strategy.id, 10, now=100.0)
     wm.total_message_count = 11  # Message-count gate alone is satisfied.
 
-    assert wm.strategy_in_cooldown(strategy, now=105.0)  # Only 5s passed.
-    assert not wm.strategy_in_cooldown(strategy, now=111.0)  # 11s passed.
+    assert wm.strategy_in_cooldown(strategy, now=155.0)  # Only 55s passed.
+    assert not wm.strategy_in_cooldown(strategy, now=161.0)  # 61s passed.
 
 
 def test_cooldown_survives_a_history_truncation():
@@ -79,7 +79,7 @@ def test_cooldown_survives_a_history_truncation():
     assert wm.strategy_in_cooldown(strategy, now=20.0)
 
     wm.total_message_count = 16
-    assert not wm.strategy_in_cooldown(strategy, now=20.0)
+    assert not wm.strategy_in_cooldown(strategy, now=61.0)
 
 
 def test_a_forced_context_and_a_selected_strategy_are_mutually_exclusive():
