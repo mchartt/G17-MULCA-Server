@@ -41,6 +41,13 @@ RETRIEVAL_LIMIT = 50
 MANAGEMENT_CYCLE_INTERVAL = 24
 TURN_TIMEOUT_SECONDS = 30.0
 
+# A spoken turn may only ever get a strategy it actually solicited --
+# being addressed directly, or asking for a summary -- never an
+# unsolicited one like participation_equality or keep_on_topic. Talking
+# over a live conversation uninvited is far more intrusive than an
+# unsolicited reply reads in text, where it's easy to scan past.
+VOICE_ALLOWED_STRATEGY_IDS = frozenset({"respond_when_addressed", "provide_summary"})
+
 
 class CoalaPolicy:
     """
@@ -238,9 +245,19 @@ class CoalaPolicy:
             if cooling_down
             else ""
         )
+        # This is only a steer for the observer; on_intervention_signal is
+        # what actually enforces VOICE_ALLOWED_STRATEGY_IDS, since the
+        # observer's choice is a request, not a guarantee.
+        voice_note = (
+            " This turn was spoken, not typed: only "
+            f"{sorted(VOICE_ALLOWED_STRATEGY_IDS)} may be selected, "
+            "nothing unsolicited."
+            if utterance.modality == "audio"
+            else ""
+        )
         await port.tell_observers(
             "Current trigger variables: "
-            f"{json.dumps(wm.trigger_variables)}.{cooldown_note}"
+            f"{json.dumps(wm.trigger_variables)}.{cooldown_note}{voice_note}"
         )
 
         # A decision -- forced or observer-judged -- is now pending for
@@ -359,6 +376,26 @@ class CoalaPolicy:
                 strategy_id = None
                 prompt_fragment = None
                 needs_history = False
+
+        # Hard veto, same guarantee as cooldown: a spoken turn may only
+        # ever get a response it actually solicited -- being addressed
+        # directly, or asking for a summary -- never an unsolicited one
+        # (e.g. participation_equality, keep_on_topic). See the voice_note
+        # in on_utterance for why.
+        if (
+            strategy_id is not None
+            and strategy_id not in VOICE_ALLOWED_STRATEGY_IDS
+            and self._pending_utterance is not None
+            and self._pending_utterance.modality == "audio"
+        ):
+            logger.info(
+                "%s vetoed %r: not allowed for a spoken turn",
+                wm.conversation_id,
+                strategy_id,
+            )
+            strategy_id = None
+            prompt_fragment = None
+            needs_history = False
 
         path = "none"
         if strategy_id is not None:

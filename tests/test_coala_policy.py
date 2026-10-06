@@ -166,6 +166,65 @@ async def test_a_strategy_in_cooldown_is_vetoed():
     assert len(port.instructions) == 1
 
 
+async def test_a_spoken_turn_only_ever_gets_respond_when_addressed():
+    policy, port = make_policy()
+    await policy.start(port)
+
+    await policy.on_utterance(make_utterance(modality="audio"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="participation_equality",
+            prompt_fragment="invite Grace",
+        ),
+    )
+
+    assert port.instructions == []
+
+
+async def test_a_spoken_turns_mention_based_strategy_is_unaffected():
+    policy, port = make_policy()
+    await policy.start(port)
+
+    await policy.on_utterance(make_utterance(modality="audio"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="respond_when_addressed",
+            prompt_fragment="they asked a direct question",
+        ),
+    )
+
+    assert len(port.instructions) == 1
+    assert "Answer them." in port.instructions[0]
+
+
+async def test_a_typed_turn_is_unaffected_by_the_voice_only_veto():
+    policy, port = make_policy()
+    await policy.start(port)
+
+    await policy.on_utterance(make_utterance(modality="text"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="participation_equality",
+            prompt_fragment="invite Grace",
+        ),
+    )
+
+    assert len(port.instructions) == 1
+
+
+async def test_a_spoken_turn_tells_observers_only_mentions_apply():
+    policy, port = make_policy()
+    await policy.start(port)
+
+    await policy.on_utterance(make_utterance(modality="audio"))
+
+    assert "provide_summary" in port.observer_messages[-1]
+    assert "respond_when_addressed" in port.observer_messages[-1]
+
+
 async def test_provide_summary_always_retrieves_regardless_of_the_signal():
     episodic = InMemoryEpisodicStore()
     await episodic.log(
