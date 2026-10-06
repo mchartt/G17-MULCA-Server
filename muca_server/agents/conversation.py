@@ -227,6 +227,13 @@ class Conversation:
         if self._main_agent is None:
             return
 
+        logger.info(
+            "%s asking the main agent for a %s reply (%d-char directive)",
+            self._conversation_id,
+            self._turn_modality or "default",
+            len(directive),
+        )
+
         # Answer in the medium the turn arrived in: a text message gets a
         # text reply, a spoken turn a spoken one.
         await self._main_agent.trigger_response(
@@ -305,6 +312,15 @@ class Conversation:
             return
 
         self._closed = True
+        logger.info(
+            "%s conversation closed, cost $%.4f",
+            self._conversation_id,
+            sum(
+                agent.cost_usd
+                for agent in [self._main_agent, *self._auxiliary_agents.values()]
+                if agent is not None
+            ),
+        )
 
         # Already closed (memory saved) when a lost provider connection
         # ended this session; saving again now, possibly after the client's
@@ -551,6 +567,7 @@ class Conversation:
         )
         agent.on_decision = self._handle_intervention_signal
         agent.on_connection_lost = self._handle_agent_connection_lost
+        agent.log_label = self._conversation_id
 
         await agent.connect()
 
@@ -644,6 +661,12 @@ class Conversation:
         """
 
         self._turn_modality = "text"
+        logger.info(
+            "%s text turn from %s (%d chars)",
+            self._conversation_id,
+            message.speaker,
+            len(message.text),
+        )
 
         if message.speaker_name:
             self._participants[message.speaker] = message.speaker_name
@@ -696,6 +719,12 @@ class Conversation:
         self._turn_modality = "audio"
 
         transcript = await self._collect_transcript(speaker)
+        logger.info(
+            "%s voice turn from %s (%d-char transcript)",
+            self._conversation_id,
+            speaker,
+            len(transcript),
+        )
         # debug, not info: this is diagnostic detail for investigating the
         # turn/cooldown machinery, not something worth seeing on every
         # single spoken turn by default -- set MUCA_LOG_LEVEL=DEBUG to see
@@ -1005,7 +1034,14 @@ class Conversation:
     def _ask_observers_to_consider(self, speaker: int) -> None:
         """Somebody finished speaking: let the observers decide to step in."""
 
-        for agent in self._listening_to_user(speaker):
+        observers = self._listening_to_user(speaker)
+        logger.info(
+            "%s asking %d observer(s) to judge %s's turn",
+            self._conversation_id,
+            len(observers),
+            speaker,
+        )
+        for agent in observers:
             self._spawn(agent.trigger_response())
 
     # ------------------------------------------------------------------
@@ -1332,6 +1368,7 @@ class Conversation:
                 self._handle_agent_connection_lost
             )
 
+        self._main_agent.log_label = self._conversation_id
         await self._main_agent.connect()
         self._state.active_agent = self._main_agent.name
 

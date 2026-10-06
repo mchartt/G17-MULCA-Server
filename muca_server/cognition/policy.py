@@ -117,8 +117,9 @@ class CoalaPolicy:
         self._pending_episodic_record: EpisodicRecord | None = None
 
         # Whether this session's main agent has already been sent the
-        # group's own history_summary/participant_roles_summary once since
-        # connecting. Group-only: once sent, the live session already has
+        # recent verbatim tail and the group's own history_summary/
+        # participant_roles_summary once since connecting. The summary is
+        # group-only: once sent, the live session already has
         # everything that summary covers (it was there when it was said),
         # so resending it every turn is pure waste, not safety -- unlike a
         # DM's linked read of a group it was never part of, which has no
@@ -126,7 +127,7 @@ class CoalaPolicy:
         # False at construction and never reset mid-session on purpose: a
         # reconnect builds a fresh CoalaPolicy via policy_factory, so a new
         # session starts this at False again without any explicit reset.
-        self._group_summary_sent = False
+        self._backfill_sent = False
 
     async def start(self, port: ConversationPort) -> None:
         self._port = port
@@ -845,9 +846,9 @@ class CoalaPolicy:
         # already has everything it covers, so it's only sent once, right
         # after connecting -- every turn after that would just be re-telling
         # the model something it was already there for.
-        include_summary = port.is_private or not self._group_summary_sent
-        if include_summary and not port.is_private:
-            self._group_summary_sent = True
+        include_summary = port.is_private or not self._backfill_sent
+        include_recent = not self._backfill_sent
+        self._backfill_sent = True
 
         summary_block = (
             (
@@ -862,12 +863,12 @@ class CoalaPolicy:
 
         # General, not DM-specific: covers what the live session doesn't --
         # e.g. after a restart, wm.history is restored from a snapshot but a
-        # freshly-connected session has never actually seen it. For an
-        # uninterrupted session this duplicates what the model already has
-        # live, which is harmless, just slightly redundant.
+        # freshly-connected session has never actually seen it. Only once:
+        # after that the live session hears every message itself, and
+        # resending up to 47 messages with every reply was a major cost.
         recent_block = (
             f"Recent messages in this conversation, verbatim:\n{wm.transcript()}\n\n"
-            if wm.history
+            if wm.history and include_recent
             else ""
         )
 

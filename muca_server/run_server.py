@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 import uvicorn
@@ -153,9 +154,27 @@ def main() -> None:
     # [voice-turn]-tagged diagnostic detail. Set MUCA_LOG_LEVEL=INFO
     # explicitly for a quiet run (e.g. scripted/live-verification runs that
     # don't need per-tick detail).
+    #
+    # Also written to daily files, 14 days kept, under MUCA_LOG_DIR (by
+    # default beside the databases, so on the deployment's data volume).
+    load_dotenv()
+    log_dir = Path(
+        os.environ.get("MUCA_LOG_DIR")
+        or Path(os.environ.get("MUCA_DB_DIR", str(DEFAULT_DB_DIR))) / "logs"
+    )
+    log_dir.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level="INFO",
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=[
+            logging.StreamHandler(),
+            TimedRotatingFileHandler(
+                log_dir / "muca-server.log",
+                when="midnight",
+                backupCount=14,
+                encoding="utf-8",
+            ),
+        ],
     )
     logging.getLogger("muca_server").setLevel(
         os.environ.get("MUCA_LOG_LEVEL", "DEBUG"),

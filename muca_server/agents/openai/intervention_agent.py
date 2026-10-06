@@ -24,12 +24,18 @@ from .main_agent import (
     debug_provider_ttl,
     encode_for_provider,
     error_code,
+    log_usage,
+    truncation,
 )
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "gpt-realtime"
+DEFAULT_MODEL = "gpt-realtime-2.1-mini"
 TOOL_NAME = "signal_intervention"
+
+# It responds on every turn, so its context is what is billed most often;
+# it only needs the recent conversation to judge the latest message.
+INTERVENTION_TOKEN_LIMIT = 8_000
 
 
 class InterventionAgentOpenAI(AuxiliaryAgent):
@@ -81,6 +87,7 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
                 "instructions": self._build_instructions(),
                 "tools": [self._tool_definition()],
                 "tool_choice": "auto",
+                "truncation": truncation(INTERVENTION_TOKEN_LIMIT),
                 # It hears the conversation's audio too (the Unity
                 # original's intervention agent does), and VAD commits that
                 # audio into its context -- but it only ever judges when the
@@ -100,12 +107,22 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
                 },
             }
         )
+        logger.info(
+            "%s intervention agent connected (%s)",
+            self.log_label,
+            self._model,
+        )
 
         self._receive_task = asyncio.create_task(
             self._receive_loop(),
         )
 
     async def _disconnect(self) -> None:
+        logger.info(
+            "%s intervention agent disconnected, cost $%.4f",
+            self.log_label,
+            self.cost_usd,
+        )
         if self._receive_task is not None:
             self._receive_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -252,6 +269,7 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
             return
 
         if event.type == "response.done":
+            log_usage(self, self._model, event.response)
             self._response_active = False
             signal, self._pending_signal = (
                 self._pending_signal,

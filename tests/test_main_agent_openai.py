@@ -1,13 +1,14 @@
 import base64
 import struct
 
+import pytest
 from openai.types.realtime.realtime_error_event import RealtimeErrorEvent
 from openai.types.realtime.response_audio_delta_event import ResponseAudioDeltaEvent
 from openai.types.realtime.response_done_event import ResponseDoneEvent
 from openai.types.realtime.response_text_delta_event import ResponseTextDeltaEvent
 
 from muca_server.agents.main_agent import MainAgentEvent
-from muca_server.agents.openai.main_agent import MainAgentOpenAI
+from muca_server.agents.openai.main_agent import MainAgentOpenAI, log_usage
 from muca_server.agents.options import MainAgentOptions
 
 
@@ -23,9 +24,13 @@ class FakeItems:
     def __init__(self, calls: list) -> None:
         self._calls = calls
         self.truncated: list[dict] = []
+        self.deleted: list[str] = []
 
     async def create(self, *, item: dict) -> None:
         self._calls.append(item)
+
+    async def delete(self, *, item_id: str) -> None:
+        self.deleted.append(item_id)
 
     async def truncate(self, **kwargs) -> None:
         self.truncated.append(kwargs)
@@ -210,16 +215,53 @@ async def test_trigger_response_pushes_per_turn_content_as_an_item_not_session_i
         add_to_conversation=True,
     )
 
-    assert agent._connection.item_calls == [
-        {
-            "type": "message",
-            "role": "system",
-            "content": [
-                {"type": "input_text", "text": "Current directive:\nSay hello."},
-            ],
-        }
-    ]
+    [item] = agent._connection.item_calls
+    assert item["id"].startswith("directive_") and len(item["id"]) <= 32
+    assert {key: value for key, value in item.items() if key != "id"} == {
+        "type": "message",
+        "role": "system",
+        "content": [
+            {"type": "input_text", "text": "Current directive:\nSay hello."},
+        ],
+    }
     assert agent._connection.response.created == 1
+    assert agent._connection.conversation.item.deleted == []
+
+
+async def test_only_the_latest_directive_stays_in_the_session():
+    agent = make_agent()
+    agent._connection = FakeConnection()
+
+    for text in ("First.", "Second."):
+        await agent._trigger_response(
+            max_tokens=None,
+            instructions=text,
+            add_to_conversation=True,
+        )
+
+    first, second = agent._connection.item_calls
+    assert agent._connection.conversation.item.deleted == [first["id"]]
+    assert second["id"] != first["id"]
+
+
+def test_usage_is_priced_per_modality_and_added_to_the_session_total():
+    agent = make_agent(model="gpt-realtime-2.1-mini")
+    usage = _Obj(
+        input_token_details=_Obj(
+            text_tokens=1_000_000,
+            audio_tokens=1_000_000,
+            cached_tokens_details=_Obj(text_tokens=500_000, audio_tokens=0),
+        ),
+        output_token_details=_Obj(text_tokens=0, audio_tokens=1_000_000),
+    )
+
+    cost = log_usage(agent, "gpt-realtime-2.1-mini", _Obj(usage=usage))
+
+    # 0.5M text at $0.60, 0.5M cached text at $0.06, 1M audio at $10,
+    # 1M audio out at $20.
+    assert cost == pytest.approx(0.3 + 0.03 + 10 + 20)
+    assert agent.cost_usd == pytest.approx(cost)
+    assert log_usage(agent, "gpt-realtime-2.1-mini", _Obj(usage=None)) == 0
 
 
 async def test_trigger_response_pushes_nothing_when_there_is_no_new_content():
@@ -454,6 +496,7 @@ def test_the_session_detects_and_transcribes_speech_but_never_answers_alone():
 
     assert turn_detection["create_response"] is False
     assert turn_detection["interrupt_response"] is False
+    assert config["truncation"]["token_limits"]["post_instructions"] == 16_000
     assert config["audio"]["input"]["transcription"]["model"]
     assert config["audio"]["input"]["format"] == {
         "type": "audio/pcm",

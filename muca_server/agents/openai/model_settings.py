@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import logging
 from contextlib import suppress
 from pathlib import Path
 from weakref import WeakSet
@@ -15,6 +16,8 @@ from weakref import WeakSet
 from ...protocol import EndSession, SetModelMessage
 from .intervention_agent import DEFAULT_MODEL as DEFAULT_INTERVENTION_MODEL
 from .main_agent import DEFAULT_REALTIME_MODEL
+
+logger = logging.getLogger(__name__)
 
 
 class ModelSettings:
@@ -30,6 +33,13 @@ class ModelSettings:
             saved = json.loads(path.read_text())
             self.main = saved.get("main", self.main)
             self.intervention = saved.get("intervention", self.intervention)
+
+        logger.info(
+            "Realtime models: main=%s, intervention=%s (from %s)",
+            self.main,
+            self.intervention,
+            f"saved settings in {path}" if path.exists() else "defaults",
+        )
 
     def watch(self, outbound_queue: asyncio.Queue) -> None:
         self._queues.add(outbound_queue)
@@ -47,6 +57,11 @@ class ModelSettings:
 
         self._path.write_text(
             json.dumps({"main": self.main, "intervention": self.intervention}),
+        )
+        logger.info(
+            "Realtime models changed: main=%s, intervention=%s",
+            self.main,
+            self.intervention,
         )
 
         # Clients reopen on 1012, building new agents with the new model.

@@ -11,6 +11,7 @@ import json
 import logging
 import os
 from contextlib import suppress
+from uuid import uuid4
 
 from openai import AsyncOpenAI
 
@@ -21,11 +22,31 @@ from ..options import AgentCapabilities, MainAgentOptions
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_REALTIME_MODEL = "gpt-realtime"
+DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1-mini"
 SUMMARY_MODEL = "gpt-4o"
 TRANSCRIPTION_MODEL = "gpt-4o-transcribe"
 PROVIDER_SAMPLE_RATE = 24_000
 MAX_OUTPUT_TOKENS = 4096
+
+# Every response bills the whole session context again, so it is capped:
+# past the limit the oldest items are dropped, down to 80% of it so the
+# next turns still hit the prompt cache instead of truncating every turn.
+MAIN_TOKEN_LIMIT = 16_000
+
+# Per 1M tokens: text in, cached text in, audio in, cached audio in, text
+# out, audio out. Only for the cost estimate in the logs.
+PRICES_PER_MILLION = {
+    "gpt-realtime": (4.0, 0.4, 32.0, 0.4, 16.0, 64.0),
+    "gpt-realtime-2.1-mini": (0.6, 0.06, 10.0, 0.3, 2.4, 20.0),
+}
+
+
+def truncation(token_limit: int) -> dict:
+    return {
+        "type": "retention_ratio",
+        "retention_ratio": 0.8,
+        "token_limits": {"post_instructions": token_limit},
+    }
 
 # Errors that only mean a request raced the provider's own state (e.g. a
 # cancel arriving just after the response finished): nothing to report.
@@ -117,6 +138,9 @@ class MainAgentOpenAI(MainAgent):
         self._assistant_item_id: str | None = None
         self._assistant_audio_ms = 0
 
+        # The last per-turn directive item, deleted before the next is sent.
+        self._directive_item_id: str | None = None
+
     def _build_instructions(self) -> str:
         return f"{self._persona}\n\nTask context:\n{self._task_knowledge}"
 
@@ -132,6 +156,7 @@ class MainAgentOpenAI(MainAgent):
             "type": "realtime",
             "output_modalities": ["audio"],
             "instructions": self._build_instructions(),
+            "truncation": truncation(MAIN_TOKEN_LIMIT),
             "audio": {
                 "input": {
                     "format": {
@@ -171,12 +196,18 @@ class MainAgentOpenAI(MainAgent):
             session=self._session_config(),
         )
         self.capabilities = AgentCapabilities(vad=True, interrupt=False)
+        logger.info("%s main agent connected (%s)", self.log_label, self._model)
 
         self._receive_task = asyncio.create_task(
             self._receive_loop(),
         )
 
     async def _disconnect(self) -> None:
+        logger.info(
+            "%s main agent disconnected, cost $%.4f",
+            self.log_label,
+            self.cost_usd,
+        )
         if self._receive_task is not None:
             self._receive_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -230,10 +261,18 @@ class MainAgentOpenAI(MainAgent):
         # session.update there would replace (not merge with) the
         # persona/task sent once at connect. This is CoalaPolicy
         # ._render_prompt's per-turn output (summary/recent-tail/directive
-        # etc); empty when nothing new needs saying this turn.
+        # etc); empty when nothing new needs saying this turn. Only the
+        # latest one is kept: left in, every directive (each with its own
+        # recent transcript) would be billed again on every later response.
         if instructions:
+            if self._directive_item_id is not None:
+                await self._connection.conversation.item.delete(
+                    item_id=self._directive_item_id,
+                )
+            self._directive_item_id = f"directive_{uuid4().hex[:20]}"
             await self._connection.conversation.item.create(
                 item={
+                    "id": self._directive_item_id,
                     "type": "message",
                     "role": "system",
                     "content": [
@@ -416,6 +455,7 @@ class MainAgentOpenAI(MainAgent):
                 )
 
             case "response.done":
+                log_usage(self, self._model, event.response)
                 status = getattr(event.response, "status", None)
                 # response.output_text.done/response.output_audio_transcript
                 # .done also fire, but response.done is the one signal
@@ -475,6 +515,53 @@ def error_code(error) -> str | None:
         return error.get("code")
 
     return getattr(error, "code", None)
+
+
+def log_usage(agent, model: str, response) -> float:
+    """
+    Log one response's tokens and estimated cost, and add the cost to the
+    agent's running total. Returns the cost.
+    """
+
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return 0.0
+
+    def count(obj, name: str) -> int:
+        return getattr(obj, name, None) or 0
+
+    details = getattr(usage, "input_token_details", None)
+    cached = getattr(details, "cached_tokens_details", None)
+    output = getattr(usage, "output_token_details", None)
+    tokens = (
+        count(details, "text_tokens") - count(cached, "text_tokens"),
+        count(cached, "text_tokens"),
+        count(details, "audio_tokens") - count(cached, "audio_tokens"),
+        count(cached, "audio_tokens"),
+        count(output, "text_tokens"),
+        count(output, "audio_tokens"),
+    )
+
+    prices = PRICES_PER_MILLION.get(model)
+    cost = (
+        sum(n * price for n, price in zip(tokens, prices)) / 1_000_000
+        if prices
+        else 0.0
+    )
+    agent.cost_usd += cost
+
+    logger.info(
+        "%s %s usage (%s): in text=%d+%d cached, audio=%d+%d cached; "
+        "out text=%d, audio=%d; cost $%.4f%s, session $%.4f",
+        agent.log_label,
+        type(agent).__name__,
+        model,
+        *tokens,
+        cost,
+        "" if prices else " (unknown model price)",
+        agent.cost_usd,
+    )
+    return cost
 
 
 def encode_for_provider(chunk: AudioChunk) -> str:
