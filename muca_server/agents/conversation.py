@@ -32,6 +32,7 @@ from ..protocol import (
     ParticipantsMessage,
     PlaybackFrameMessage,
     RemoveAuxiliaryAgentMessage,
+    SetModelMessage,
     StateUpdateMessage,
     TextMessage,
     TriggerResponseMessage,
@@ -47,6 +48,7 @@ from .turn import Turn
 
 if TYPE_CHECKING:
     from ..sessions.session_state import SessionState
+    from .openai.model_settings import ModelSettings
 
 logger = logging.getLogger(__name__)
 
@@ -113,9 +115,16 @@ class Conversation:
         agent_factory: AgentFactory | None = None,
         policy: CognitionPolicy | None = None,
         silence_timeout_ms: int = DEFAULT_SILENCE_TIMEOUT_MS,
+        model_settings: ModelSettings | None = None,
     ) -> None:
         self._state = state
         self._outbound_queue = outbound_queue
+        self._model_settings = model_settings
+        if model_settings is not None:
+            model_settings.watch(outbound_queue)
+        # This session's own models, from the handshake; empty means the
+        # server's.
+        self._intervention_model = ""
         self._main_agent_options = main_agent_options
         self._agent_factory = (
             agent_factory or DefaultAgentFactory()
@@ -477,6 +486,13 @@ class Conversation:
 
             self._is_private = message.is_dm
             self._linked_conversation_id = message.linked_conversation_id
+            self._intervention_model = message.intervention_model
+            if message.main_model:
+                self._main_agent_options = (
+                    self._main_agent_options.model_copy(
+                        update={"model": message.main_model},
+                    )
+                )
 
             await self._connect_main_agent()
             return
@@ -489,6 +505,13 @@ class Conversation:
         self._state.connected_agents.add(
             message.target_agent_guid,
         )
+
+    async def set_model(self, message: SetModelMessage) -> None:
+        if self._model_settings is None:
+            raise RuntimeError("Model switching is not enabled")
+
+        # Ends every live session, this one included.
+        self._model_settings.apply(message)
 
     async def disconnect_agent(
         self,
@@ -520,6 +543,7 @@ class Conversation:
             # is unambiguously addressed to it.
             is_dm=self._is_private,
         )
+        options.model = self._intervention_model
 
         agent = self._agent_factory.build_auxiliary(options)
         agent.on_message = self._auxiliary_message_handler(

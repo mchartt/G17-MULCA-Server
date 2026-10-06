@@ -17,6 +17,7 @@ from ..options import (
 )
 from .intervention_agent import InterventionAgentOpenAI
 from .main_agent import MainAgentOpenAI
+from .model_settings import ModelSettings
 
 
 class OpenAIAgentFactory:
@@ -30,8 +31,10 @@ class OpenAIAgentFactory:
         main_persona: str,
         intervention_persona: str,
         task_knowledge: str,
+        models: ModelSettings,
     ) -> None:
         self._client = client
+        self._models = models
         self._strategies = strategies
         self._main_persona = main_persona
         self._intervention_persona = intervention_persona
@@ -46,6 +49,7 @@ class OpenAIAgentFactory:
             client=self._client,
             persona=self._main_persona,
             task_knowledge=self._task_knowledge,
+            model=options.model or self._models.main,
         )
 
     def build_auxiliary(
@@ -59,6 +63,7 @@ class OpenAIAgentFactory:
                 strategies=self._strategies,
                 persona=self._intervention_persona,
                 task_knowledge=self._task_knowledge,
+                model=options.model or self._models.intervention,
                 # Per-session, not per-deployment: one factory instance is
                 # shared across every conversation, group and DM alike.
                 is_dm=options.is_dm,

@@ -1,9 +1,15 @@
+from __future__ import annotations
+
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from .session_components import SessionComponents, SessionContext, SessionWorker
 from ..agents import AgentFactory, Conversation, MainAgentOptions
 from ..agents.conversation import DEFAULT_SILENCE_TIMEOUT_MS
 from ..cognition import CognitionPolicy
+
+if TYPE_CHECKING:
+    from ..agents.openai.model_settings import ModelSettings
 
 PolicyFactory = Callable[[SessionContext], CognitionPolicy]
 
@@ -23,7 +29,9 @@ class DefaultSessionComponentsFactory:
         policy_factory: PolicyFactory | None = None,
         main_agent_options: MainAgentOptions | None = None,
         silence_timeout_ms: int = DEFAULT_SILENCE_TIMEOUT_MS,
+        model_settings: ModelSettings | None = None,
     ) -> None:
+        self.model_settings = model_settings
         self.agent_factory = agent_factory
         self.policy_factory = policy_factory
         self.main_agent_options = (
@@ -64,6 +72,7 @@ class DefaultSessionComponentsFactory:
             agent_factory=self.agent_factory,
             policy=policy,
             silence_timeout_ms=self.silence_timeout_ms,
+            model_settings=self.model_settings,
         )
 
     async def create_workers(

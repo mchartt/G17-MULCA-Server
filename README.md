@@ -62,6 +62,7 @@ python -m venv .venv
 | `OPENAI_API_KEY` | — (required) | Read from the environment or a `.env` file. |
 | `MUCA_SERVER_HOST` / `MUCA_SERVER_PORT` | `0.0.0.0` / `8000` | |
 | `MUCA_DB_DIR` | `data/` beside the package | One SQLite file per `conversationId`. |
+| `MUCA_ADMIN_TOKEN` | unset | Shared secret for the `set_model` message, which changes the realtime model at runtime. Unset disables it. The choice is kept in `_runtime_config.json` in `MUCA_DB_DIR`. |
 | `MUCA_SILENCE_TIMEOUT_MS` | `400` | How long without audio frames counts as silence. |
 | `MUCA_LOG_LEVEL` | `DEBUG` | Only the `muca_server` logger tree -- the root (and third-party libraries like httpx/openai) always stays at `INFO`. Set to `INFO` for a quiet run; the `[voice-turn]`-tagged lines (every tick/event in the turn/barge-in machinery) are `debug`-level and otherwise flood normal operation. |
 | `MUCA_DEBUG_PROVIDER_TTL_SECONDS` | unset | Testing only: end every provider connection after this many seconds. |

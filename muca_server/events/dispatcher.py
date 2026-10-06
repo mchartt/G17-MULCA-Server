@@ -15,6 +15,7 @@ from ..protocol import (
     PlaybackFrameMessage,
     RawProviderMessage,
     RemoveAuxiliaryAgentMessage,
+    SetModelMessage,
     TextMessage,
     TriggerResponseMessage,
     UserTextMessage,
@@ -89,6 +90,13 @@ class AgentRouterProtocol(Protocol):
     ) -> None:
         ...
 
+    async def set_model(
+        self,
+        message: SetModelMessage,
+    ) -> None:
+        """Admin: change the realtime model for every conversation."""
+        ...
+
     async def trigger_response(
         self,
         message: TriggerResponseMessage,
@@ -149,6 +157,9 @@ async def dispatch(
 
         case RemoveAuxiliaryAgentMessage():
             await agent_router.remove_auxiliary_agent(message)
+
+        case SetModelMessage():
+            await agent_router.set_model(message)
 
         case DisconnectMessage():
             await agent_router.disconnect_agent(message)
