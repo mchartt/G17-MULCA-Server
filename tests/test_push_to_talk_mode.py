@@ -31,14 +31,32 @@ STRATEGIES = StrategyStore(
     }
 )
 
+STRATEGIES_WITH_ALWAYS_REPLY = StrategyStore(
+    {
+        "respond_when_addressed": Strategy(
+            id="respond_when_addressed",
+            trigger_description="addressed directly",
+            prompt_template="Answer them. {prompt_fragment}",
+            modalities=frozenset({"text", "audio"}),
+        ),
+        "always_reply": Strategy(
+            id="always_reply",
+            trigger_description="push_to_talk fallback",
+            prompt_template="Respond directly. {prompt_fragment}",
+            modalities=frozenset({"audio"}),
+        ),
+    }
+)
+
 VOICE = AudioChunk(data=b"\x00\x00\x00\x3f" * 240).to_base64()
 
 
 class FakeInterventionAgent(AuxiliaryAgent):
-    """An observer that always signals the same strategy, and counts
-    how often it was actually asked to judge vs. just handed raw audio."""
+    """An observer that always signals the same (fixed) decision, and
+    counts how often it was actually asked to judge vs. just handed raw
+    audio. `signal=None` means it declines ("do nothing")."""
 
-    signal = InterventionSignal(
+    signal: InterventionSignal | None = InterventionSignal(
         strategy_id="respond_when_addressed",
         prompt_fragment="they asked a direct question",
     )
@@ -80,17 +98,24 @@ class ScriptedMainAgent(MainAgent):
         await self._stream_text("ok", is_final=True)
 
 
+class DecliningInterventionAgent(FakeInterventionAgent):
+    """Always signals None -- the intervention agent's own "do nothing"."""
+
+    signal = None
+
+
 class FixedAgentFactory:
-    def __init__(self) -> None:
+    def __init__(self, *, auxiliary_cls: type = FakeInterventionAgent) -> None:
         self.main: ScriptedMainAgent | None = None
         self.auxiliary: FakeInterventionAgent | None = None
+        self._auxiliary_cls = auxiliary_cls
 
     def build_main(self, options):
         self.main = ScriptedMainAgent(options=options)
         return self.main
 
     def build_auxiliary(self, options):
-        self.auxiliary = FakeInterventionAgent(options=options)
+        self.auxiliary = self._auxiliary_cls(options=options)
         return self.auxiliary
 
 
@@ -119,21 +144,28 @@ def audio(speaker: int):
     )
 
 
-def utterance(text: str = "hello") -> Utterance:
+def utterance(text: str = "hello", *, always_reply: bool = False) -> Utterance:
     return Utterance(
         speaker_id=1,
         speaker_name="Ada",
         content=text,
         timestamp_ms=0,
         modality="audio",
+        always_reply=always_reply,
     )
 
 
-async def make_conversation(*, listening_mode: str = "push_to_talk", ptt_silence_ms: int = 50):
+async def make_conversation(
+    *,
+    listening_mode: str = "push_to_talk",
+    ptt_silence_ms: int = 50,
+    strategies: StrategyStore = STRATEGIES,
+    auxiliary_cls: type = FakeInterventionAgent,
+):
     state = SessionState(session_id=uuid4())
     outbound: asyncio.Queue = asyncio.Queue()
-    factory = FixedAgentFactory()
-    policy = CoalaPolicy(strategy_store=STRATEGIES)
+    factory = FixedAgentFactory(auxiliary_cls=auxiliary_cls)
+    policy = CoalaPolicy(strategy_store=strategies)
 
     conversation = Conversation(
         state=state,
@@ -247,6 +279,45 @@ async def test_a_per_link_handshake_override_wins_over_the_servers_own_mode():
     await conversation.wait_until_idle()
 
     assert factory.auxiliary.asked == 0  # closed window: never asked
+
+
+async def test_a_declined_turn_inside_a_window_falls_back_to_always_reply():
+    # The intervention agent itself chose "do nothing" -- push_to_talk's
+    # guarantee overrides that, same as a hard veto, rather than letting
+    # an open window ever produce silence.
+    conversation, factory = await make_conversation(
+        strategies=STRATEGIES_WITH_ALWAYS_REPLY,
+        auxiliary_cls=DecliningInterventionAgent,
+    )
+
+    await conversation.arm_listening(arm())
+    await conversation._judge(utterance("define the thing", always_reply=True))
+    await conversation.wait_until_idle()
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert factory.auxiliary.asked == 1
+    assert factory.main.instructions
+    assert "Respond directly" in factory.main.instructions[0]
+
+
+async def test_always_reply_never_fires_outside_push_to_talk():
+    # Ambient mode never sets always_reply on an utterance in the first
+    # place (conversation.py), but on_intervention_signal's own guard
+    # should refuse to fire it even if something did ask for it.
+    conversation, factory = await make_conversation(
+        listening_mode="ambient",
+        strategies=STRATEGIES_WITH_ALWAYS_REPLY,
+        auxiliary_cls=DecliningInterventionAgent,
+    )
+
+    await conversation._judge(utterance("define the thing", always_reply=False))
+    await conversation.wait_until_idle()
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert factory.auxiliary.asked == 1
+    assert not factory.main.instructions  # declined, and nothing forced it
 
 
 async def test_ambient_mode_is_unaffected():

@@ -1,0 +1,23 @@
+id: always_reply
+modalities: [audio]
+trigger_description: >
+  push_to_talk mode only: the user explicitly pressed a button to open a
+  listening window before speaking, so unlike every other strategy, there
+  is no "was this addressed to me" question to answer and no "do nothing"
+  option -- whatever they just said during this window is always directed
+  at you. Prefer a more specific strategy when one clearly applies
+  (provide_summary for a recap request, remember for recalling a specific
+  past fact) -- otherwise fire this one. Respond helpfully and directly to
+  what was just said, the same way you would if directly asked.
+  If the message asks about a specific detail from earlier in the
+  conversation, also set needs_history so you can answer accurately rather
+  than guessing from what's currently visible to you.
+# Deliberately no cooldown_messages: a listening window is a short,
+# solicited back-and-forth (the user pressed the button), not something
+# that should feel throttled turn to turn the way an unsolicited nudge
+# would.
+trigger_variables: []
+prompt_template: |
+  The user pressed to talk to you directly. {prompt_fragment}
+  Respond directly and helpfully to what they just said -- be concise
+  unless the question warrants more detail.

@@ -92,12 +92,17 @@ def build_app():
         # and is dropped rather than left active with nothing watching for
         # it most of the time. The solicited strategies (respond_when_
         # addressed, provide_summary, remember) can still fire inside an
-        # open window, same as always.
+        # open window, same as always; always_reply is this mode's own
+        # fallback floor for when none of those more specific ones apply
+        # -- CoalaPolicy.on_intervention_signal forces it rather than
+        # letting "do nothing" be a real outcome inside an open window
+        # (speaking at all only happens because the user pressed the
+        # button, so there is no "was this addressed to me" question).
         active_strategy_ids = [
             strategy_id
             for strategy_id in ACTIVE_STRATEGY_IDS
             if strategy_id != "non_offensive"
-        ]
+        ] + ["always_reply"]
 
     # This is the server-wide default only -- a link can still override it
     # per-conversation via ConnectAgentMessage.listening_mode (/mulca link

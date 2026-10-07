@@ -870,6 +870,10 @@ class Conversation:
                 content=transcript,
                 timestamp_ms=ended_at,
                 modality="audio",
+                always_reply=(
+                    self._listening_mode == "push_to_talk"
+                    and self._listening_window_open
+                ),
             )
         )
 
