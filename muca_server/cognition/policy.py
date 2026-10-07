@@ -177,11 +177,20 @@ class CoalaPolicy:
             assistant_id=self._assistant_id,
         )
 
-        if self._snapshot_store is not None and not port.is_private:
+        if self._snapshot_store is not None:
             snapshot = await self._snapshot_store.load(
                 port.conversation_id,
             )
+            # A DM's conversation_id is one specific participant's, never
+            # shared -- full_context_sent_at carries no conversation
+            # content at all (just a timestamp), so restoring only this
+            # one field is safe even though DMs otherwise aren't written
+            # to long-term memory. Without this, the "once per hour" gate
+            # would silently reset on every reconnect, since a fresh
+            # CoalaPolicy is built each time (session_components_factory).
             if snapshot is not None:
+                self._full_context_sent_at = snapshot.full_context_sent_at
+            if snapshot is not None and not port.is_private:
                 wm.history_summary = snapshot.history_summary
                 wm.participant_roles_summary = (
                     snapshot.participant_roles_summary
@@ -213,8 +222,20 @@ class CoalaPolicy:
             self._wm is None
             or self._snapshot_store is None
             or self._port is None
-            or self._port.is_private
         ):
+            return
+
+        if self._port.is_private:
+            # DMs are never written to long-term memory otherwise (no
+            # history/summary persisted) -- full_context_sent_at is the
+            # one exception, since it carries no conversation content at
+            # all, just a timestamp, and keeps the "once per hour" gate
+            # keyed on this one participant's own conversation_id across
+            # a reconnect instead of resetting every time.
+            await self._snapshot_store.save(
+                self._port.conversation_id,
+                MemorySnapshot(full_context_sent_at=self._full_context_sent_at),
+            )
             return
 
         await self._snapshot_store.save(
@@ -232,6 +253,7 @@ class CoalaPolicy:
                 updated_at=time.time(),
                 recent_actions=dict(self._wm.recent_actions),
                 recent_action_at=dict(self._wm.recent_action_at),
+                full_context_sent_at=self._full_context_sent_at,
             ),
         )
 

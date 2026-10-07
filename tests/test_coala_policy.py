@@ -946,6 +946,52 @@ async def test_a_dms_linked_summary_is_resent_after_the_interval_elapses(monkeyp
     assert "The team discussed the deadline." in port.instructions[1]
 
 
+async def test_a_dms_full_context_gate_survives_a_reconnect():
+    """
+    Found live: CoalaPolicy is rebuilt fresh on every (re)connect
+    (session_components_factory.policy_factory), so without persisting
+    full_context_sent_at, a DM that merely reconnected -- not actually an
+    hour later -- would get the full-context resend again immediately,
+    keyed on "this connection" rather than durably on this one
+    participant's own conversation_id.
+    """
+
+    store_factory, port = make_dm_policy()
+    _, group_snapshot_store = store_factory("instance:team-alpha")
+    await group_snapshot_store.save(
+        "instance:team-alpha",
+        MemorySnapshot(history_summary="The team discussed the deadline."),
+    )
+
+    first = CoalaPolicy(strategy_store=STRATEGIES, store_factory=store_factory)
+    await first.start(port)
+    await first.on_utterance(make_utterance(content="first message"))
+    await first.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
+    )
+    await first.on_assistant_output("ok", interrupted=False)
+    await first.close()
+
+    # A fresh CoalaPolicy, same DM conversation_id -- standing in for a
+    # reconnect seconds later, not an hour later.
+    second_port = FakePort(
+        conversation_id=port.conversation_id,
+        is_private=True,
+        linked_conversation_id="instance:team-alpha",
+    )
+    second = CoalaPolicy(strategy_store=STRATEGIES, store_factory=store_factory)
+    await second.start(second_port)
+    await second.on_utterance(make_utterance(content="second message"))
+    await second.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
+    )
+
+    assert "The team discussed the deadline." in port.instructions[0]
+    assert "The team discussed the deadline." not in second_port.instructions[0]
+
+
 async def test_a_groups_snapshot_saves_before_the_first_management_cycle():
     # The bug this covers: "Mats says X in the group, then immediately DMs
     # about X" failing because nothing had been saved yet -- a snapshot only

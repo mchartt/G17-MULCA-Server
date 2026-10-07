@@ -106,3 +106,12 @@ class MemorySnapshot(BaseModel):
     # that a reconnect was even the cause.
     recent_actions: dict[str, int] = Field(default_factory=dict)
     recent_action_at: dict[str, float] = Field(default_factory=dict)
+
+    # CoalaPolicy._full_context_sent_at -- same reconnect-survival problem
+    # as the cooldown fields above, for the same reason: a fresh
+    # CoalaPolicy is built on every reconnect, so this gate (keyed on this
+    # conversation_id -- one specific DM participant, not "any DM") would
+    # otherwise reset to None every time, resending a group's summary once
+    # per reconnect instead of truly once, or ignoring a DM's own
+    # just-sent timestamp if it happened to reconnect within the hour.
+    full_context_sent_at: float | None = None

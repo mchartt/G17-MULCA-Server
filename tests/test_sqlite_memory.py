@@ -126,6 +126,7 @@ async def test_snapshot_save_and_load_round_trips_every_field(tmp_path):
         updated_at=999.5,
         recent_actions={"participation_equality_text": 12},
         recent_action_at={"participation_equality_text": 1000.25},
+        full_context_sent_at=1000.25,
     )
 
     await store.save("c1", snapshot)
@@ -164,6 +165,7 @@ async def test_a_snapshot_file_from_before_cooldown_columns_existed_still_loads(
 
     assert loaded.total_message_count == 5
     assert loaded.recent_actions == {}
+    assert loaded.full_context_sent_at is None
     assert loaded.recent_action_at == {}
 
 

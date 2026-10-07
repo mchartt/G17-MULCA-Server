@@ -81,7 +81,8 @@ CREATE TABLE IF NOT EXISTS memory_snapshot (
     total_message_count INTEGER NOT NULL DEFAULT 0,
     updated_at REAL NOT NULL DEFAULT 0,
     recent_actions TEXT NOT NULL DEFAULT '{}',
-    recent_action_at TEXT NOT NULL DEFAULT '{}'
+    recent_action_at TEXT NOT NULL DEFAULT '{}',
+    full_context_sent_at REAL
 );
 """
 
@@ -118,6 +119,12 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         await db.execute(
             "ALTER TABLE memory_snapshot ADD COLUMN recent_action_at "
             "TEXT NOT NULL DEFAULT '{}'"
+        )
+        await db.commit()
+
+    if "full_context_sent_at" not in snapshot_columns:
+        await db.execute(
+            "ALTER TABLE memory_snapshot ADD COLUMN full_context_sent_at REAL"
         )
         await db.commit()
 
@@ -347,6 +354,7 @@ class SqliteSnapshotStore:
             updated_at=row["updated_at"],
             recent_actions=json.loads(row["recent_actions"]),
             recent_action_at=json.loads(row["recent_action_at"]),
+            full_context_sent_at=row["full_context_sent_at"],
         )
 
     async def save(
@@ -361,8 +369,8 @@ class SqliteSnapshotStore:
                 INSERT INTO memory_snapshot (
                     conversation_id, history_summary, participant_roles_summary,
                     history_tail, total_message_count, updated_at,
-                    recent_actions, recent_action_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    recent_actions, recent_action_at, full_context_sent_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(conversation_id) DO UPDATE SET
                     history_summary = excluded.history_summary,
                     participant_roles_summary = excluded.participant_roles_summary,
@@ -370,7 +378,8 @@ class SqliteSnapshotStore:
                     total_message_count = excluded.total_message_count,
                     updated_at = excluded.updated_at,
                     recent_actions = excluded.recent_actions,
-                    recent_action_at = excluded.recent_action_at
+                    recent_action_at = excluded.recent_action_at,
+                    full_context_sent_at = excluded.full_context_sent_at
                 """,
                 (
                     conversation_id,
@@ -383,6 +392,7 @@ class SqliteSnapshotStore:
                     snapshot.updated_at,
                     json.dumps(snapshot.recent_actions),
                     json.dumps(snapshot.recent_action_at),
+                    snapshot.full_context_sent_at,
                 ),
             )
             await db.commit()
