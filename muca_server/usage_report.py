@@ -25,8 +25,6 @@ from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-import httpx
-
 logger = logging.getLogger(__name__)
 
 # The session making the current provider calls: its instance label, and
@@ -278,6 +276,10 @@ class UsageTracker:
         # 20-bot per-instance breakdown could exceed that.
         if len(text) > 1900:
             text = text[:1900] + "\n... (truncated)"
+        # Only here: httpx comes with the openai extra, and this module is
+        # imported by conversation.py, which a client (MULCA) imports too.
+        import httpx
+
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(
