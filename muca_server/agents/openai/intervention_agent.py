@@ -17,6 +17,7 @@ from ...cognition.ports import InterventionSignal
 from ...cognition.strategies import StrategyStore
 from ..auxiliary_agent import AuxiliaryAgent
 from ..options import AuxiliaryAgentOptions
+from ...usage_report import UsageTracker
 from .main_agent import (
     DEBUG_PROVIDER_TTL_ENV_VAR,
     IGNORABLE_ERROR_CODES,
@@ -57,6 +58,7 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
         task_knowledge: str,
         is_dm: bool = False,
         model: str = DEFAULT_MODEL,
+        usage_tracker: UsageTracker | None = None,
     ) -> None:
         super().__init__(options=options)
 
@@ -66,6 +68,7 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
         self._task_knowledge = task_knowledge
         self._is_dm = is_dm
         self._model = model
+        self._usage_tracker = usage_tracker
 
         self._connection_manager = None
         self._connection = None
@@ -112,6 +115,10 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
             self.log_label,
             self._model,
         )
+        if self._usage_tracker is not None:
+            self._usage_tracker.record_connect(
+                "intervention", self.instance_label or self.log_label
+            )
 
         self._receive_task = asyncio.create_task(
             self._receive_loop(),

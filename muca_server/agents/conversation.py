@@ -136,6 +136,10 @@ class Conversation:
         self._has_conversation_id = False
         self._is_private = False
         self._linked_conversation_id: str | None = None
+        # Which bot/team this session's cost should be attributed to in
+        # usage_report.py; falls back to conversation_id if the client never
+        # sent one (see ConnectAgentMessage.bot_name).
+        self._instance_label = self._conversation_id
 
         self._main_agent: MainAgent | None = None
         self._auxiliary_agents: dict[UUID, AuxiliaryAgent] = {}
@@ -500,6 +504,7 @@ class Conversation:
                 self._conversation_id = message.conversation_id
                 self._has_conversation_id = True
 
+            self._instance_label = message.bot_name or self._conversation_id
             self._is_private = message.is_dm
             self._linked_conversation_id = message.linked_conversation_id
             self._intervention_model = message.intervention_model
@@ -568,6 +573,7 @@ class Conversation:
         agent.on_decision = self._handle_intervention_signal
         agent.on_connection_lost = self._handle_agent_connection_lost
         agent.log_label = self._conversation_id
+        agent.instance_label = self._instance_label
 
         await agent.connect()
 
@@ -1413,6 +1419,7 @@ class Conversation:
             )
 
         self._main_agent.log_label = self._conversation_id
+        self._main_agent.instance_label = self._instance_label
         await self._main_agent.connect()
         self._state.active_agent = self._main_agent.name
 

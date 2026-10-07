@@ -24,6 +24,7 @@ from .agents import MainAgentOptions
 from .agents.conversation import DEFAULT_SILENCE_TIMEOUT_MS
 from .agents.openai import ChatCompletionsSummarizer, OpenAIAgentFactory, OpenAIEmbedder
 from .agents.openai.model_settings import ModelSettings
+from .usage_report import UsageTracker
 from .cognition import CoalaPolicy
 from .cognition.loader import load_persona, load_strategy_store, load_task
 from .cognition.memory.sqlite import (
@@ -86,6 +87,24 @@ def build_app():
         admin_token=os.environ.get("MUCA_ADMIN_TOKEN"),
     )
 
+    # This process's own running spend -- the real deployment's one and
+    # only MUCA-Server (see usage_report.py's module docstring), so this is
+    # already the deployment-wide total, broken down by agent type and by
+    # instance (bot/team). MUCA_COST_ALERT_WEBHOOK_URL/
+    # _THRESHOLD_STEP_USD are both optional -- unset either and usage is
+    # still tracked and persisted, just never posted anywhere.
+    threshold_step_env = os.environ.get(
+        "MUCA_COST_ALERT_THRESHOLD_STEP_USD", ""
+    ).strip()
+    usage_tracker = UsageTracker(
+        Path(db_dir) / "_usage_report.json",
+        server_name=os.environ.get("MUCA_SERVER_NAME"),
+        webhook_url=os.environ.get("MUCA_COST_ALERT_WEBHOOK_URL"),
+        threshold_step_usd=(
+            float(threshold_step_env) if threshold_step_env else None
+        ),
+    )
+
     agent_factory = OpenAIAgentFactory(
         client=client,
         strategies=strategy_store,
@@ -93,6 +112,7 @@ def build_app():
         intervention_persona=intervention_persona,
         task_knowledge=task_knowledge,
         models=model_settings,
+        usage_tracker=usage_tracker,
     )
 
     # Shared across every conversation's store: one client, same as the
