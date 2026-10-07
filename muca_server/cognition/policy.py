@@ -47,6 +47,16 @@ TURN_TIMEOUT_SECONDS = 30.0
 # similar turns is more useful here than fifty chronological ones.
 SIMILARITY_RETRIEVAL_LIMIT = 8
 
+# How often a DM's mirrored read of its linked group (summary + raw tail,
+# both foreign content the DM's own live session was never part of) gets
+# re-sent. Found live: this used to go out on every single triggered DM
+# reply, unconditionally -- real, recurring cost for an active DM, not a
+# one-time thing the way a group's own summary is. An hour is a judgment
+# call, not measured: frequent enough that the linked group's state can't
+# have drifted far, infrequent enough that an active back-and-forth DM
+# isn't resending it every reply.
+DM_FULL_CONTEXT_INTERVAL_SECONDS = 3600.0
+
 
 class CoalaPolicy:
     """
@@ -117,16 +127,31 @@ class CoalaPolicy:
         self._pending_episodic_record: EpisodicRecord | None = None
 
         # Whether this session's main agent has already been sent the
-        # group's own history_summary/participant_roles_summary once since
-        # connecting. Group-only: once sent, the live session already has
-        # everything that summary covers (it was there when it was said),
-        # so resending it every turn is pure waste, not safety -- unlike a
-        # DM's linked read of a group it was never part of, which has no
-        # other way to get that content and must keep refreshing live.
-        # False at construction and never reset mid-session on purpose: a
-        # reconnect builds a fresh CoalaPolicy via policy_factory, so a new
-        # session starts this at False again without any explicit reset.
-        self._group_summary_sent = False
+        # Gates summary_block/linked_tail_block in _render_prompt -- the
+        # "foreign" content (a group's own summary, or a DM's mirrored read
+        # of its linked group) the live session has no other way to learn,
+        # since it isn't present in the session's own native turn-by-turn
+        # memory. For a group this is sent once, ever, since the live
+        # session already has everything its own summary covers (it was
+        # there when it was said) -- only checked for None, never reset.
+        # For a DM it's genuinely foreign (a different conversation this
+        # session was never part of) and re-checked against
+        # DM_FULL_CONTEXT_INTERVAL_SECONDS instead of only-once. None at
+        # construction and never reset mid-session on purpose: a reconnect
+        # builds a fresh CoalaPolicy via policy_factory, so a new session
+        # starts this at None again without any explicit reset.
+        self._full_context_sent_at: float | None = None
+
+        # Gates recent_block -- this conversation's OWN recent turns,
+        # verbatim. Pure redundancy once the live session has natively seen
+        # them (which happens as they're said, same as any other turn), so
+        # sent once per connection only, to cover the one case the live
+        # session genuinely doesn't have it: freshly reconnected, wm.history
+        # restored from a snapshot the new session was never actually live
+        # for. Not time-gated like the DM case above -- whether the live
+        # session has this natively is purely a function of connection
+        # lifetime, not wall-clock time elapsed.
+        self._own_tail_sent = False
 
     async def start(self, port: ConversationPort) -> None:
         self._port = port
@@ -536,12 +561,41 @@ class CoalaPolicy:
             self._turn_done.set()
 
     def observer_catchup_text(self) -> str:
-        if self._wm is None or not self._wm.history:
+        """
+        The whole picture for an observer that was never live for any of
+        this -- both the compressed summary of everything before the
+        current tail, and the tail itself verbatim. Found live: this used
+        to send only the raw tail, silently dropping everything a
+        management cycle had already compressed away -- a reconnecting
+        observer had zero knowledge of anything further back than its
+        last ~management_cycle_interval messages, unlike the main agent,
+        which always gets both.
+        """
+
+        if self._wm is None:
             return ""
+
+        wm = self._wm
+        if not wm.history and not wm.history_summary:
+            return ""
+
+        summary_part = (
+            "Summary of the conversation so far:\n"
+            f"{wm.history_summary}\n\n"
+            "Participants and roles observed so far:\n"
+            f"{wm.participant_roles_summary or '(none yet)'}\n\n"
+            if wm.history_summary
+            else ""
+        )
+        tail_part = (
+            f"Recent messages, verbatim:\n{wm.transcript()}"
+            if wm.history
+            else ""
+        )
 
         return (
             "Catching you up on this conversation's history, which you "
-            "were not connected for:\n" + self._wm.transcript()
+            f"were not connected for:\n{summary_part}{tail_part}"
         )
 
     async def on_untranscribed_turn(
@@ -838,16 +892,25 @@ class CoalaPolicy:
         overwrite -- see MainAgentOpenAI._trigger_response.
         """
 
-        # A DM always needs this live -- it's mirroring a *different*
-        # conversation's summary (_apply_linked_group_context), which this
-        # session was never part of and has no other way to learn about. A
+        # A DM mirrors a *different* conversation's summary
+        # (_apply_linked_group_context), which this session was never part
+        # of and has no other way to learn about -- genuinely foreign
+        # content, re-checked against an interval rather than sent once. A
         # group's own summary is different: once sent, the live session
-        # already has everything it covers, so it's only sent once, right
-        # after connecting -- every turn after that would just be re-telling
-        # the model something it was already there for.
-        include_summary = port.is_private or not self._group_summary_sent
-        if include_summary and not port.is_private:
-            self._group_summary_sent = True
+        # already has everything it covers, so it's only sent once, ever
+        # -- every turn after that would just be re-telling the model
+        # something it was already there for.
+        now = time.time()
+        if port.is_private:
+            needs_full_context = (
+                self._full_context_sent_at is None
+                or now - self._full_context_sent_at
+                > DM_FULL_CONTEXT_INTERVAL_SECONDS
+            )
+        else:
+            needs_full_context = self._full_context_sent_at is None
+        if needs_full_context:
+            self._full_context_sent_at = now
 
         summary_block = (
             (
@@ -856,18 +919,26 @@ class CoalaPolicy:
                 "Participants and roles observed so far:\n"
                 f"{wm.participant_roles_summary or '(none yet)'}\n\n"
             )
-            if include_summary
+            if needs_full_context
             else ""
         )
 
         # General, not DM-specific: covers what the live session doesn't --
         # e.g. after a restart, wm.history is restored from a snapshot but a
-        # freshly-connected session has never actually seen it. For an
-        # uninterrupted session this duplicates what the model already has
-        # live, which is harmless, just slightly redundant.
+        # freshly-connected session has never actually seen it. Sent once
+        # per connection only (not time-gated, unlike summary_block's DM
+        # case above): whether the live session has this natively is purely
+        # a function of connection lifetime, not wall-clock time elapsed,
+        # so re-sending it mid-session on every triggered reply was pure
+        # waste -- found live, this was going out on every single triggered
+        # reply, not just after a reconnect.
+        send_own_tail = not self._own_tail_sent and bool(wm.history)
+        if send_own_tail:
+            self._own_tail_sent = True
+
         recent_block = (
             f"Recent messages in this conversation, verbatim:\n{wm.transcript()}\n\n"
-            if wm.history
+            if send_own_tail
             else ""
         )
 
@@ -876,7 +947,10 @@ class CoalaPolicy:
         # tail, covering what its own next management cycle would summarize
         # but hasn't yet, since that group's snapshot may be more current
         # than history_summary above (saved every turn, not just every
-        # management_cycle_interval messages).
+        # management_cycle_interval messages). Gated the same as
+        # summary_block above: it's the same "foreign content" category,
+        # from the same linked group, so it goes stale/gets refreshed on
+        # the same schedule.
         linked_tail_block = (
             "Recent messages in the linked group conversation, verbatim:\n"
             + "\n".join(
@@ -884,7 +958,7 @@ class CoalaPolicy:
                 for utterance in wm.linked_history_tail
             )
             + "\n\n"
-            if wm.linked_history_tail
+            if needs_full_context and wm.linked_history_tail
             else ""
         )
 
