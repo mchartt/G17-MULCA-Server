@@ -99,6 +99,18 @@ def build_app():
             if strategy_id != "non_offensive"
         ]
 
+    # This is the server-wide default only -- a link can still override it
+    # per-conversation via ConnectAgentMessage.listening_mode (/mulca link
+    # mode:...). Logged because it's read once at startup from the
+    # environment: a running process never picks up a later .env edit.
+    logger.info(
+        "Default listening mode: %s%s",
+        listening_mode,
+        f" (window auto-closes after {os.environ.get(PTT_SILENCE_MS_ENV_VAR, DEFAULT_PTT_SILENCE_MS)}ms silence)"
+        if listening_mode == "push_to_talk"
+        else "",
+    )
+
     client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
     strategy_store = load_strategy_store(active_strategy_ids)
     main_persona = load_persona("main_default")
