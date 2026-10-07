@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from .session_components import SessionComponents, SessionContext, SessionWorker
 from ..agents import AgentFactory, Conversation, MainAgentOptions
-from ..agents.conversation import DEFAULT_SILENCE_TIMEOUT_MS
+from ..agents.conversation import DEFAULT_PTT_SILENCE_MS, DEFAULT_SILENCE_TIMEOUT_MS
 from ..cognition import CognitionPolicy
 
 if TYPE_CHECKING:
@@ -32,6 +32,8 @@ class DefaultSessionComponentsFactory:
         silence_timeout_ms: int = DEFAULT_SILENCE_TIMEOUT_MS,
         model_settings: ModelSettings | None = None,
         usage_tracker: UsageTracker | None = None,
+        listening_mode: Literal["ambient", "push_to_talk"] = "ambient",
+        ptt_silence_ms: int = DEFAULT_PTT_SILENCE_MS,
     ) -> None:
         self.model_settings = model_settings
         self.usage_tracker = usage_tracker
@@ -41,6 +43,8 @@ class DefaultSessionComponentsFactory:
             main_agent_options or MainAgentOptions()
         )
         self.silence_timeout_ms = silence_timeout_ms
+        self.listening_mode = listening_mode
+        self.ptt_silence_ms = ptt_silence_ms
 
     async def create(
         self,
@@ -77,6 +81,8 @@ class DefaultSessionComponentsFactory:
             silence_timeout_ms=self.silence_timeout_ms,
             model_settings=self.model_settings,
             usage_tracker=self.usage_tracker,
+            listening_mode=self.listening_mode,
+            ptt_silence_ms=self.ptt_silence_ms,
         )
 
     async def create_workers(

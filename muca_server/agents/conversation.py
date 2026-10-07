@@ -6,7 +6,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 from ..audio import AudioChunk
@@ -21,6 +21,7 @@ from ..cognition.ports import (
 from ..protocol import (
     AgentGuidMessage,
     AgentMessage,
+    ArmListeningMessage,
     AssistantTextMessage,
     AudioStreamMessage,
     ConnectAgentMessage,
@@ -65,6 +66,12 @@ DEFAULT_SILENCE_TIMEOUT_MS = 400
 
 # How often the conversation re-reads the clock (silence, playback drain).
 TICK_MS = 100
+
+# push_to_talk mode only: how long a listening window stays open after the
+# last judged turn before it auto-closes -- a judgment call, unrelated to
+# DEFAULT_SILENCE_TIMEOUT_MS above (that one is about the client's audio
+# frame cadence, not about how long to keep the window open between turns).
+DEFAULT_PTT_SILENCE_MS = 5_000
 
 # How long a closed spoken turn waits for its transcript to come back.
 TRANSCRIPT_WAIT_SECONDS = 3.0
@@ -119,11 +126,20 @@ class Conversation:
         silence_timeout_ms: int = DEFAULT_SILENCE_TIMEOUT_MS,
         model_settings: ModelSettings | None = None,
         usage_tracker: UsageTracker | None = None,
+        listening_mode: Literal["ambient", "push_to_talk"] = "ambient",
+        ptt_silence_ms: int = DEFAULT_PTT_SILENCE_MS,
     ) -> None:
         self._state = state
         self._outbound_queue = outbound_queue
         self._model_settings = model_settings
         self._usage_tracker = usage_tracker
+        # push_to_talk only: see the module-level note above
+        # DEFAULT_PTT_SILENCE_MS for what this mode does and does not
+        # change. Ambient (the default) is entirely unaffected by these.
+        self._listening_mode = listening_mode
+        self._ptt_silence_ms = ptt_silence_ms
+        self._listening_window_open = False
+        self._listening_window_timer: asyncio.Task[None] | None = None
         if model_settings is not None:
             model_settings.watch(outbound_queue)
         # This session's own models, from the handshake; empty means the
@@ -406,9 +422,18 @@ class Conversation:
             if self._main_agent is not None:
                 await self._main_agent.send_audio_chunk(chunk)
 
-            for agent in list(self._auxiliary_agents.values()):
-                if agent.listens_to_user(message.speaker):
-                    await agent.send_audio_chunk(chunk)
+            # push_to_talk: the intervention agent never hears raw audio at
+            # all, only the already-transcribed text _take_voice_turn sends
+            # it -- the whole point of this mode is that it never judges
+            # from an "impression" of audio it passively heard, only from a
+            # literal transcript. The main agent above is unaffected: it
+            # still needs audio for turn-taking/VAD -- see the "NOT
+            # CURRENTLY WIRED IN" note in transcription_agent.py for why
+            # that part isn't also changed yet.
+            if self._listening_mode == "ambient":
+                for agent in list(self._auxiliary_agents.values()):
+                    if agent.listens_to_user(message.speaker):
+                        await agent.send_audio_chunk(chunk)
 
         await self._read_speaker(
             message.speaker
@@ -512,6 +537,8 @@ class Conversation:
             self._is_private = message.is_dm
             self._linked_conversation_id = message.linked_conversation_id
             self._intervention_model = message.intervention_model
+            if message.listening_mode is not None:
+                self._listening_mode = message.listening_mode
             if message.main_model:
                 self._main_agent_options = (
                     self._main_agent_options.model_copy(
@@ -547,6 +574,46 @@ class Conversation:
             admin_token=message.admin_token,
             webhook_url=message.webhook_url,
             threshold_usd=message.threshold_usd,
+        )
+
+    async def arm_listening(self, message: ArmListeningMessage) -> None:
+        """
+        push_to_talk mode: a participant pressed the button. A no-op in
+        ambient mode -- every turn is already judged there.
+        """
+
+        if self._listening_mode != "push_to_talk":
+            return
+
+        opened = not self._listening_window_open
+        self._listening_window_open = True
+        self._restart_listening_timer()
+        if opened:
+            logger.info(
+                "%s listening window opened (press)",
+                self._conversation_id,
+            )
+
+    def _restart_listening_timer(self) -> None:
+        if self._listening_window_timer is not None:
+            self._listening_window_timer.cancel()
+
+        task = asyncio.create_task(self._close_listening_window_after_silence())
+        self._listening_window_timer = task
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _close_listening_window_after_silence(self) -> None:
+        try:
+            await asyncio.sleep(self._ptt_silence_ms / 1000)
+        except asyncio.CancelledError:
+            return
+
+        self._listening_window_open = False
+        logger.info(
+            "%s listening window closed (%dms silence)",
+            self._conversation_id,
+            self._ptt_silence_ms,
         )
 
     async def disconnect_agent(
@@ -808,6 +875,26 @@ class Conversation:
 
     async def _judge(self, utterance: Utterance) -> None:
         consult_observers = await self._policy.on_utterance(utterance)
+
+        # push_to_talk: outside an open window, resolve exactly like
+        # "nobody is listening" below -- the utterance still updates wm
+        # history/the episodic log via on_intervention_signal, it just never
+        # actually reaches the intervention agent to be judged. Inside an
+        # open window, judged turns restart the window's own silence timer
+        # (speaking again resets how long the window stays open). Voice
+        # only: this is a voice-UX concept (the cost/accuracy problem it
+        # fixes was continuous audio judgment), so a text message or DM on
+        # a push_to_talk link is judged normally, same as always.
+        if (
+            consult_observers
+            and self._listening_mode == "push_to_talk"
+            and utterance.modality == "audio"
+        ):
+            if self._listening_window_open:
+                self._restart_listening_timer()
+            else:
+                await self._policy.on_intervention_signal(NO_OBSERVER, None)
+                consult_observers = False
 
         if consult_observers:
             if self._listening_to_user(utterance.speaker_id):

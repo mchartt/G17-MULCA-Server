@@ -5,6 +5,7 @@ from typing import Protocol
 from enum import StrEnum
 
 from ..protocol import (
+    ArmListeningMessage,
     AudioStreamMessage,
     ConnectAgentMessage,
     CreateAuxiliaryAgentMessage,
@@ -105,6 +106,13 @@ class AgentRouterProtocol(Protocol):
         """Admin: change this server's cost-alert webhook/threshold."""
         ...
 
+    async def arm_listening(
+        self,
+        message: ArmListeningMessage,
+    ) -> None:
+        """push_to_talk mode: a participant pressed the button."""
+        ...
+
     async def trigger_response(
         self,
         message: TriggerResponseMessage,
@@ -171,6 +179,9 @@ async def dispatch(
 
         case SetCostAlertMessage():
             await agent_router.set_cost_alert(message)
+
+        case ArmListeningMessage():
+            await agent_router.arm_listening(message)
 
         case DisconnectMessage():
             await agent_router.disconnect_agent(message)

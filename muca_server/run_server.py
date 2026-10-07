@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
 from .agents import MainAgentOptions
-from .agents.conversation import DEFAULT_SILENCE_TIMEOUT_MS
+from .agents.conversation import DEFAULT_PTT_SILENCE_MS, DEFAULT_SILENCE_TIMEOUT_MS
 from .agents.openai import ChatCompletionsSummarizer, OpenAIAgentFactory, OpenAIEmbedder
 from .agents.openai.model_settings import ModelSettings
 from .usage_report import UsageTracker
@@ -59,6 +59,13 @@ ACTIVE_STRATEGY_IDS = [
 ]
 ASSISTANT_NAME = "MULCA"
 
+# "ambient" (default): every turn is judged, as above. "push_to_talk": the
+# intervention agent is only consulted inside a window opened by
+# ArmListeningMessage (conversation.py's arm_listening/_judge) -- it never
+# hears raw audio at all in that mode, only the main agent's transcript.
+LISTENING_MODE_ENV_VAR = "MUCA_LISTENING_MODE"
+PTT_SILENCE_MS_ENV_VAR = "MUCA_PTT_SILENCE_MS"
+
 # Anchored to this package's own location, not the current working
 # directory -- a relative default here would mean restarting the server
 # from a different shell/cwd silently creates a second, empty database
@@ -71,8 +78,29 @@ DEFAULT_DB_DIR = Path(__file__).resolve().parent.parent / "data"
 def build_app():
     load_dotenv()
 
+    listening_mode = os.environ.get(LISTENING_MODE_ENV_VAR, "ambient")
+    if listening_mode not in ("ambient", "push_to_talk"):
+        raise ValueError(
+            f"{LISTENING_MODE_ENV_VAR} must be 'ambient' or 'push_to_talk', "
+            f"got {listening_mode!r}"
+        )
+
+    active_strategy_ids = ACTIVE_STRATEGY_IDS
+    if listening_mode == "push_to_talk":
+        # No continuous judgment happens in this mode, so there is no
+        # ambient moderation to speak of -- non_offensive is purely that,
+        # and is dropped rather than left active with nothing watching for
+        # it most of the time. The solicited strategies (respond_when_
+        # addressed, provide_summary, remember) can still fire inside an
+        # open window, same as always.
+        active_strategy_ids = [
+            strategy_id
+            for strategy_id in ACTIVE_STRATEGY_IDS
+            if strategy_id != "non_offensive"
+        ]
+
     client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    strategy_store = load_strategy_store(ACTIVE_STRATEGY_IDS)
+    strategy_store = load_strategy_store(active_strategy_ids)
     main_persona = load_persona("main_default")
     intervention_persona = load_persona("intervention_default")
     task_knowledge = load_task(TASK_ID)
@@ -184,6 +212,10 @@ def build_app():
                 "MUCA_SILENCE_TIMEOUT_MS",
                 DEFAULT_SILENCE_TIMEOUT_MS,
             )
+        ),
+        listening_mode=listening_mode,
+        ptt_silence_ms=int(
+            os.environ.get(PTT_SILENCE_MS_ENV_VAR, DEFAULT_PTT_SILENCE_MS)
         ),
     )
 

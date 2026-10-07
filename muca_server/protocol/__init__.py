@@ -1,6 +1,7 @@
 from .control import EndSession
 from .incoming import (
     CONNECT_EVENTS,
+    ArmListeningMessage,
     AudioStreamMessage,
     ConnectAgentMessage,
     CreateAuxiliaryAgentMessage,
@@ -35,6 +36,7 @@ from .outgoing import (
 __all__ = [
     "CONNECT_EVENTS",
     "AgentGuidMessage",
+    "ArmListeningMessage",
     "AgentMessage",
     "AssistantTextMessage",
     "AudioStreamMessage",
