@@ -32,6 +32,11 @@ class RealtimeAgent:
         # cancelling when nothing is active, it does not treat it as a no-op.
         self._response_active = False
 
+        # For the logs: which conversation this agent serves, and what its
+        # responses have cost so far (estimated, in USD).
+        self.log_label = ""
+        self.cost_usd = 0.0
+
         # Raw provider messages, exactly as they arrive.
         self.on_message: MessageHandler | None = None
 

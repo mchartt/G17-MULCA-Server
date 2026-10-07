@@ -32,6 +32,7 @@ from ..protocol import (
     ParticipantsMessage,
     PlaybackFrameMessage,
     RemoveAuxiliaryAgentMessage,
+    SetModelMessage,
     StateUpdateMessage,
     TextMessage,
     TriggerResponseMessage,
@@ -47,6 +48,7 @@ from .turn import Turn
 
 if TYPE_CHECKING:
     from ..sessions.session_state import SessionState
+    from .openai.model_settings import ModelSettings
 
 logger = logging.getLogger(__name__)
 
@@ -113,9 +115,16 @@ class Conversation:
         agent_factory: AgentFactory | None = None,
         policy: CognitionPolicy | None = None,
         silence_timeout_ms: int = DEFAULT_SILENCE_TIMEOUT_MS,
+        model_settings: ModelSettings | None = None,
     ) -> None:
         self._state = state
         self._outbound_queue = outbound_queue
+        self._model_settings = model_settings
+        if model_settings is not None:
+            model_settings.watch(outbound_queue)
+        # This session's own models, from the handshake; empty means the
+        # server's.
+        self._intervention_model = ""
         self._main_agent_options = main_agent_options
         self._agent_factory = (
             agent_factory or DefaultAgentFactory()
@@ -218,6 +227,13 @@ class Conversation:
         if self._main_agent is None:
             return
 
+        logger.info(
+            "%s asking the main agent for a %s reply (%d-char directive)",
+            self._conversation_id,
+            self._turn_modality or "default",
+            len(directive),
+        )
+
         # Answer in the medium the turn arrived in: a text message gets a
         # text reply, a spoken turn a spoken one.
         await self._main_agent.trigger_response(
@@ -296,6 +312,15 @@ class Conversation:
             return
 
         self._closed = True
+        logger.info(
+            "%s conversation closed, cost $%.4f",
+            self._conversation_id,
+            sum(
+                agent.cost_usd
+                for agent in [self._main_agent, *self._auxiliary_agents.values()]
+                if agent is not None
+            ),
+        )
 
         # Already closed (memory saved) when a lost provider connection
         # ended this session; saving again now, possibly after the client's
@@ -477,6 +502,13 @@ class Conversation:
 
             self._is_private = message.is_dm
             self._linked_conversation_id = message.linked_conversation_id
+            self._intervention_model = message.intervention_model
+            if message.main_model:
+                self._main_agent_options = (
+                    self._main_agent_options.model_copy(
+                        update={"model": message.main_model},
+                    )
+                )
 
             await self._connect_main_agent()
             return
@@ -489,6 +521,13 @@ class Conversation:
         self._state.connected_agents.add(
             message.target_agent_guid,
         )
+
+    async def set_model(self, message: SetModelMessage) -> None:
+        if self._model_settings is None:
+            raise RuntimeError("Model switching is not enabled")
+
+        # Ends every live session, this one included.
+        self._model_settings.apply(message)
 
     async def disconnect_agent(
         self,
@@ -520,6 +559,7 @@ class Conversation:
             # is unambiguously addressed to it.
             is_dm=self._is_private,
         )
+        options.model = self._intervention_model
 
         agent = self._agent_factory.build_auxiliary(options)
         agent.on_message = self._auxiliary_message_handler(
@@ -527,6 +567,7 @@ class Conversation:
         )
         agent.on_decision = self._handle_intervention_signal
         agent.on_connection_lost = self._handle_agent_connection_lost
+        agent.log_label = self._conversation_id
 
         await agent.connect()
 
@@ -620,6 +661,12 @@ class Conversation:
         """
 
         self._turn_modality = "text"
+        logger.info(
+            "%s text turn from %s (%d chars)",
+            self._conversation_id,
+            message.speaker,
+            len(message.text),
+        )
 
         if message.speaker_name:
             self._participants[message.speaker] = message.speaker_name
@@ -672,6 +719,12 @@ class Conversation:
         self._turn_modality = "audio"
 
         transcript = await self._collect_transcript(speaker)
+        logger.info(
+            "%s voice turn from %s (%d-char transcript)",
+            self._conversation_id,
+            speaker,
+            len(transcript),
+        )
         # debug, not info: this is diagnostic detail for investigating the
         # turn/cooldown machinery, not something worth seeing on every
         # single spoken turn by default -- set MUCA_LOG_LEVEL=DEBUG to see
@@ -981,7 +1034,14 @@ class Conversation:
     def _ask_observers_to_consider(self, speaker: int) -> None:
         """Somebody finished speaking: let the observers decide to step in."""
 
-        for agent in self._listening_to_user(speaker):
+        observers = self._listening_to_user(speaker)
+        logger.info(
+            "%s asking %d observer(s) to judge %s's turn",
+            self._conversation_id,
+            len(observers),
+            speaker,
+        )
+        for agent in observers:
             self._spawn(agent.trigger_response())
 
     # ------------------------------------------------------------------
@@ -1308,6 +1368,7 @@ class Conversation:
                 self._handle_agent_connection_lost
             )
 
+        self._main_agent.log_label = self._conversation_id
         await self._main_agent.connect()
         self._state.active_agent = self._main_agent.name
 

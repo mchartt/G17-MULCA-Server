@@ -857,6 +857,11 @@ async def test_a_groups_own_summary_is_sent_once_then_not_again():
     assert "Previously, the team discussed the deadline." in port.instructions[0]
     assert "Previously, the team discussed the deadline." not in port.instructions[1]
 
+    # The live session hears every message itself after connecting, so the
+    # verbatim tail is not resent (and billed again) with every reply.
+    assert "Recent messages in this conversation" in port.instructions[0]
+    assert "Recent messages in this conversation" not in port.instructions[1]
+
 
 def make_dm_policy():
     stores: dict[str, tuple] = {}

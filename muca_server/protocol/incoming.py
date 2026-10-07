@@ -124,6 +124,28 @@ class ConnectAgentMessage(TargetedMessage):
         alias="linkedConversationId",
     )
 
+    # Realtime models this session uses instead of the server's, e.g. a
+    # model chosen for one bot. Empty means the server's setting.
+    main_model: str = Field(default="", alias="mainModel")
+    intervention_model: str = Field(default="", alias="interventionModel")
+
+
+class SetModelMessage(IncomingMessage):
+    """
+    Admin: change the server's realtime model for every conversation.
+
+    Every live session is then ended with 1012, so clients reopen on it.
+    """
+
+    event: Literal["set_model"]
+    admin_token: str = Field(alias="adminToken")
+    model: str
+    # Also change the intervention agent's model, not only the main agent's.
+    include_intervention: bool = Field(
+        default=False,
+        alias="includeIntervention",
+    )
+
 
 class DisconnectMessage(TargetedMessage):
     event: Literal["disconnect"]
@@ -149,7 +171,8 @@ IncomingProtocolMessage = Annotated[
     | ConnectAgentMessage
     | DisconnectMessage
     | CreateAuxiliaryAgentMessage
-    | RemoveAuxiliaryAgentMessage,
+    | RemoveAuxiliaryAgentMessage
+    | SetModelMessage,
     Field(discriminator="event"),
 ]
 

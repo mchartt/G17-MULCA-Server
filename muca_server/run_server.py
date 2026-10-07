@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 import uvicorn
@@ -22,6 +23,7 @@ from openai import AsyncOpenAI
 from .agents import MainAgentOptions
 from .agents.conversation import DEFAULT_SILENCE_TIMEOUT_MS
 from .agents.openai import ChatCompletionsSummarizer, OpenAIAgentFactory, OpenAIEmbedder
+from .agents.openai.model_settings import ModelSettings
 from .cognition import CoalaPolicy
 from .cognition.loader import load_persona, load_strategy_store, load_task
 from .cognition.memory.sqlite import (
@@ -65,21 +67,6 @@ def build_app():
     intervention_persona = load_persona("intervention_default")
     task_knowledge = load_task(TASK_ID)
 
-    agent_factory_kwargs = {}
-    if os.environ.get("MUCA_MAIN_MODEL"):
-        agent_factory_kwargs["main_model"] = os.environ["MUCA_MAIN_MODEL"]
-    if os.environ.get("MUCA_INTERVENTION_MODEL"):
-        agent_factory_kwargs["intervention_model"] = os.environ["MUCA_INTERVENTION_MODEL"]
-
-    agent_factory = OpenAIAgentFactory(
-        client=client,
-        strategies=strategy_store,
-        main_persona=main_persona,
-        intervention_persona=intervention_persona,
-        task_knowledge=task_knowledge,
-        **agent_factory_kwargs,
-    )
-
     # One SQLite file per conversation_id, not one shared file -- e.g. each
     # of a deployment's Discord channels (channel/instance scoping) gets
     # its own database. The directory is what's fixed; the
@@ -90,6 +77,23 @@ def build_app():
     # handed).
     db_dir = os.environ.get("MUCA_DB_DIR", str(DEFAULT_DB_DIR))
     os.makedirs(db_dir, exist_ok=True)
+
+    # The realtime models, which an admin can change at runtime when
+    # MUCA_ADMIN_TOKEN is set. The leading underscore keeps the file apart
+    # from the per-conversation databases.
+    model_settings = ModelSettings(
+        Path(db_dir) / "_runtime_config.json",
+        admin_token=os.environ.get("MUCA_ADMIN_TOKEN"),
+    )
+
+    agent_factory = OpenAIAgentFactory(
+        client=client,
+        strategies=strategy_store,
+        main_persona=main_persona,
+        intervention_persona=intervention_persona,
+        task_knowledge=task_knowledge,
+        models=model_settings,
+    )
 
     # Shared across every conversation's store: one client, same as the
     # main/summarizer agents reuse, not a new one per channel.
@@ -124,6 +128,7 @@ def build_app():
         # turn-tracking markers ("MAIN ASSISTANT (...) started speaking")
         # would say "ASSISTANT" instead of "MULCA".
         main_agent_options=MainAgentOptions(name=ASSISTANT_NAME),
+        model_settings=model_settings,
         silence_timeout_ms=int(
             os.environ.get(
                 "MUCA_SILENCE_TIMEOUT_MS",
@@ -149,9 +154,27 @@ def main() -> None:
     # [voice-turn]-tagged diagnostic detail. Set MUCA_LOG_LEVEL=INFO
     # explicitly for a quiet run (e.g. scripted/live-verification runs that
     # don't need per-tick detail).
+    #
+    # Also written to daily files, 14 days kept, under MUCA_LOG_DIR (by
+    # default beside the databases, so on the deployment's data volume).
+    load_dotenv()
+    log_dir = Path(
+        os.environ.get("MUCA_LOG_DIR")
+        or Path(os.environ.get("MUCA_DB_DIR", str(DEFAULT_DB_DIR))) / "logs"
+    )
+    log_dir.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level="INFO",
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=[
+            logging.StreamHandler(),
+            TimedRotatingFileHandler(
+                log_dir / "muca-server.log",
+                when="midnight",
+                backupCount=14,
+                encoding="utf-8",
+            ),
+        ],
     )
     logging.getLogger("muca_server").setLevel(
         os.environ.get("MUCA_LOG_LEVEL", "DEBUG"),

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import time
 from contextlib import suppress
 from uuid import UUID
 
@@ -14,6 +16,7 @@ from ..protocol import (
     ErrorMessage,
     parse_incoming_message,
     OutgoingProtocolMessage,
+    SetModelMessage,
     serialize_outgoing_message,
 )
 from .session_components import SessionWorker
@@ -24,6 +27,11 @@ logger = logging.getLogger(__name__)
 CLIENT_AUTHENTICATION_TIMEOUT = 5
 
 class SessionRuntime:
+    # Sessions with agents built, across the whole server. Each one holds
+    # two OpenAI Realtime connections (main and intervention agent).
+    active_sessions = 0
+    max_sessions = int(os.environ.get("MUCA_MAX_SESSIONS", "50"))
+
     def __init__(
         self,
         *,
@@ -45,6 +53,7 @@ class SessionRuntime:
 
         self._tasks: list[asyncio.Task[None]] = []
         self._closed = False
+        self._counted_since: float | None = None
 
     async def run(self) -> None:
         try:
@@ -61,6 +70,10 @@ class SessionRuntime:
             except Exception:
                 message = None
 
+            if isinstance(message, SetModelMessage):
+                await self.run_admin(message)
+                return
+
             if message is None or message.event not in CONNECT_EVENTS:
                 logger.warning(
                     "Session %s failed identification, closing websocket",
@@ -72,6 +85,28 @@ class SessionRuntime:
                 )
                 return
             else:
+                if SessionRuntime.active_sessions >= SessionRuntime.max_sessions:
+                    logger.warning(
+                        "Session %s refused for %s: %d/%d sessions active",
+                        self.session_id,
+                        getattr(message, "conversation_id", None),
+                        SessionRuntime.active_sessions,
+                        SessionRuntime.max_sessions,
+                    )
+                    await self.websocket.close(code=1013, reason="Server busy")
+                    return
+
+                SessionRuntime.active_sessions += 1
+                self._counted_since = time.monotonic()
+                logger.info(
+                    "Session %s opened for %s (dm=%s), active=%d/%d",
+                    self.session_id,
+                    getattr(message, "conversation_id", None),
+                    getattr(message, "is_dm", False),
+                    SessionRuntime.active_sessions,
+                    SessionRuntime.max_sessions,
+                )
+
                 # Apply the handshake's identity (conversation_id, is_dm)
                 # before the session's components start, so working memory
                 # is created under the right scope/privacy from the first
@@ -113,6 +148,26 @@ class SessionRuntime:
             )
         finally:
             await self.close()
+
+    async def run_admin(self, message: SetModelMessage) -> None:
+        """
+        An admin request sent instead of `connect`: no agents are built, so
+        it still works when the current model can't connect at all.
+        """
+
+        try:
+            await dispatch(message, self.agent_router)
+        except Exception as exc:
+            logger.warning("Session %s: %s refused: %s", self.session_id, message.event, exc)
+            await self.websocket.send_text(
+                serialize_outgoing_message(
+                    ErrorMessage(message=f"{message.event} failed: {exc}"),
+                )
+            )
+            await self.websocket.close(code=1008, reason="Refused")
+            return
+
+        await self.websocket.close(code=1012, reason="Model changed")
 
     async def start(self) -> None:
         self.state.is_connected = True
@@ -230,6 +285,16 @@ class SessionRuntime:
 
         self._closed = True
         self.state.is_connected = False
+
+        if self._counted_since is not None:
+            SessionRuntime.active_sessions -= 1
+            logger.info(
+                "Session %s closed after %.0fs, active=%d/%d",
+                self.session_id,
+                time.monotonic() - self._counted_since,
+                SessionRuntime.active_sessions,
+                SessionRuntime.max_sessions,
+            )
 
         for worker in reversed(self.workers):
             with suppress(Exception):
