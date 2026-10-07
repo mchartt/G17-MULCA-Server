@@ -13,6 +13,9 @@ dependencies = [
     "pydantic>=2.11,<3",
     "pyyaml>=6,<7",
     "numpy>=1.26,<3",
+    # The course schedule's Europe/Rome date; slim images and Windows have
+    # no time zone data of their own.
+    "tzdata",
 ]
 
 [project.optional-dependencies]
@@ -47,7 +50,7 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-"muca_server.cognition" = ["config/**/*.yaml"]
+"muca_server.cognition" = ["config/**/*.yaml", "config/**/*.md"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

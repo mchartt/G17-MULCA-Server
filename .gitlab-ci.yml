@@ -1,6 +1,5 @@
-# Builds the Docker image into this project's GitLab container registry.
-# The GitHub repo is mirrored on GitLab ("CI/CD for external repository"),
-# so every push to GitHub runs this there.
+# Builds the Docker image into this project's GitLab container registry, on
+# every push to GitLab (git push gitlab <branch>).
 #
 # Each build is tagged with its commit (what a deploy should name) and with
 # its branch (always the branch's newest build).
@@ -10,6 +9,11 @@ build-image:
     - docker:27-dind
   variables:
     DOCKER_TLS_CERTDIR: "/certs"
+    # This job's own registry login. Where dind can't start, the runner's
+    # host daemon is shared, and a shared login can be overwritten by a
+    # concurrent job (e.g. MULCA's) with a token this project can't use --
+    # the likely cause of a push refused right after a successful login.
+    DOCKER_CONFIG: "$CI_PROJECT_DIR/.docker"
   rules:
     - if: $CI_COMMIT_BRANCH
   before_script:

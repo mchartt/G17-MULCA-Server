@@ -12,3 +12,4 @@ scripts
 *.egg-info
 *.db
 *.db-journal
+.docker
