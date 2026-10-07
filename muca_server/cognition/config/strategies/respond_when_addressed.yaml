@@ -5,13 +5,22 @@ trigger_description: >
   from topic, context, or conversational flow:
   (1) An explicit mention of YOUR OWN name -- an actual Discord @-mention,
   or the message naming you in plain text by name or role. Your name is
-  "MULCA" -- also accept "assistant", "bot", and close phonetic
-  mishearings of "MULCA" specifically (e.g. "malca", "mulka", "muca"),
-  since voice transcription is imperfect. A greeting or address naming
-  ANY OTHER participant instead (e.g. "hey Pietro", "thanks Ada") is NOT
-  addressed to you, even though it has the exact same "greeting + name"
-  shape as a real one -- check WHICH name is said, not just that a
-  name-like address pattern is present.
+  "MULCA". Voice transcription is often wrong, so judge this by SOUND, not
+  spelling -- treat any short word or two-word greeting target as a match
+  for "MULCA" if it roughly keeps the "M...L...C/K..." sound skeleton (two
+  syllables, starting with an M sound, an L in the middle, a hard C/K/G
+  sound closing it or just after the L), regardless of exact vowels or
+  spelling -- "malca", "mulka", "muca", "malka", "molka", "mlaka", "malko"
+  and similar near-misses are ALL matches, not just the handful spelled out
+  here; this is a sound pattern to recognize, not a fixed list to compare
+  against. Likewise for the role words "assistant" and "bot": accept any
+  translation, plural, or compound of either (e.g. "assistent", "bots",
+  "chatbot", "chat bot", "the bot") the same way you'd accept them in
+  English -- the point is the role being named, not the exact word. A
+  greeting or address naming ANY OTHER participant instead (e.g. "hey
+  Pietro", "thanks Ada") is NOT addressed to you, even though it has the
+  exact same "greeting + name" shape as a real one -- check WHICH name is
+  said, not just that a name-like address pattern is present.
   (2) The message is itself a reply to your own immediately preceding
   message (not merely on the same subject as something you said) AND it
   explicitly says "you" or names you again within that reply (e.g. "could
