@@ -195,7 +195,11 @@ async def test_arming_opens_a_window_that_lets_judgment_through():
     conversation, factory = await make_conversation()
 
     await conversation.arm_listening(arm())
-    await conversation._judge(utterance())
+    # always_reply=True: the real caller is _take_voice_turn, which
+    # snapshots window state itself before calling _judge (see its own
+    # comment) -- this test calls _judge directly, so it has to pass the
+    # same snapshot a real in-window turn would have had.
+    await conversation._judge(utterance(always_reply=True))
     await conversation.wait_until_idle()
     for _ in range(5):
         await asyncio.sleep(0)
@@ -220,7 +224,8 @@ async def test_a_judged_turn_inside_the_window_restarts_its_timer():
 
     await conversation.arm_listening(arm())
     await asyncio.sleep(0.03)
-    await conversation._judge(utterance())  # should restart the 40ms timer
+    # always_reply=True: see the comment in the test above.
+    await conversation._judge(utterance(always_reply=True))  # restarts the 40ms timer
     await conversation.wait_until_idle()
 
     await asyncio.sleep(0.03)

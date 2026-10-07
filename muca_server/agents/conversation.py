@@ -806,6 +806,18 @@ class Conversation:
 
         self._turn_modality = "audio"
 
+        # Snapshot now, before the slow transcript wait below -- not after
+        # it. Found live: pressing /listen while a just-finished utterance's
+        # transcript was still being collected made that utterance (spoken
+        # *before* the press) count as inside the window by the time
+        # _judge() finally ran for it, since that check used to happen only
+        # after this wait. This keeps the window's open/closed state tied
+        # to when the turn actually ended, not to whatever the server's
+        # processing lag happened to be.
+        in_open_window = (
+            self._listening_mode == "push_to_talk" and self._listening_window_open
+        )
+
         transcript = await self._collect_transcript(speaker)
         logger.info(
             "%s voice turn from %s (%d-char transcript)",
@@ -870,10 +882,7 @@ class Conversation:
                 content=transcript,
                 timestamp_ms=ended_at,
                 modality="audio",
-                always_reply=(
-                    self._listening_mode == "push_to_talk"
-                    and self._listening_window_open
-                ),
+                always_reply=in_open_window,
             )
         )
 
@@ -889,12 +898,20 @@ class Conversation:
         # only: this is a voice-UX concept (the cost/accuracy problem it
         # fixes was continuous audio judgment), so a text message or DM on
         # a push_to_talk link is judged normally, same as always.
+        #
+        # utterance.always_reply (not self._listening_window_open directly)
+        # is the source of truth here -- it was snapshotted in
+        # _take_voice_turn before the slow transcript-collection wait, not
+        # after. Re-reading live state here would let a /listen press that
+        # happens *during* that wait retroactively count an
+        # already-finished utterance as inside the window, even though it
+        # was said before the press -- confirmed live.
         if (
             consult_observers
             and self._listening_mode == "push_to_talk"
             and utterance.modality == "audio"
         ):
-            if self._listening_window_open:
+            if utterance.always_reply:
                 self._restart_listening_timer()
             else:
                 await self._policy.on_intervention_signal(NO_OBSERVER, None)
