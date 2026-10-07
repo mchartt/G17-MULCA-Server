@@ -11,8 +11,13 @@ from muca_server.sessions import DefaultSessionComponentsFactory
 
 
 class ReplyingMainAgent(MainAgent):
+    session_updates: list[dict] = []
+
     async def _trigger_response(self, **kwargs) -> None:
         await self._stream_text("ok", is_final=True)
+
+    async def _update_session(self, session) -> None:
+        ReplyingMainAgent.session_updates.append(session)
 
 
 class BrokenAuxiliaryAgent(AuxiliaryAgent):
@@ -117,6 +122,34 @@ def test_a_unity_provider_passthrough_frame_is_tolerated():
 
         assert receive_until(websocket, "assistant_text")["text"] == "ok"
         websocket.send_json({"event": "disconnect"})
+
+
+def test_a_clients_session_update_reaches_the_main_agent():
+    """dea-multiuser's way: connect, then its own session.update frames."""
+
+    ReplyingMainAgent.session_updates = []
+
+    with make_client().websocket_connect("/") as websocket:
+        websocket.send_json({"event": "connect_main_assistant"})
+        websocket.send_json(
+            {"type": "session.update", "session": {"instructions": "You are Foxy."}},
+        )
+        # Only the main agent takes one.
+        websocket.send_json(
+            {
+                "type": "session.update",
+                "targetAgentGuid": "00000000-0000-0000-0000-000000000001",
+                "session": {"instructions": "You are an observer."},
+            },
+        )
+        websocket.send_json(
+            {"event": "user_text", "speaker": 1, "text": "hello"},
+        )
+
+        assert receive_until(websocket, "assistant_text")["text"] == "ok"
+        websocket.send_json({"event": "disconnect"})
+
+    assert ReplyingMainAgent.session_updates == [{"instructions": "You are Foxy."}]
 
 
 def test_a_disconnect_closes_the_conversation_once():

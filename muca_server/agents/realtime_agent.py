@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 from ..audio import AudioChunk
 
@@ -69,6 +70,11 @@ class RealtimeAgent:
 
     async def send_anything(self, json_payload: str) -> None:
         await self._send_anything(json_payload)
+
+    async def update_session(self, session: dict[str, Any]) -> None:
+        """A client's session.update; each provider applies what it can."""
+
+        await self._update_session(session)
 
     async def send_text(
         self,
@@ -161,6 +167,9 @@ class RealtimeAgent:
 
     async def _send_anything(self, json_payload: str) -> None:
         logger.debug("No provider configured, dropping payload")
+
+    async def _update_session(self, session: dict[str, Any]) -> None:
+        logger.debug("No provider configured, dropping session update")
 
     async def _send_text(self, text: str, *, role: str) -> None:
         logger.debug(

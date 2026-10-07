@@ -15,7 +15,6 @@ import time
 from collections.abc import Callable
 from uuid import UUID
 
-from .course_schedule import next_deliverables, today_in
 from .forced_intervention import check_forced_intervention
 from .memory.in_memory import InMemoryEpisodicStore, InMemorySnapshotStore
 from .memory.ports import Embedder, EpisodicStore, SnapshotStore
@@ -85,12 +84,8 @@ class CoalaPolicy:
         retrieval_limit: int = RETRIEVAL_LIMIT,
         similarity_retrieval_limit: int = SIMILARITY_RETRIEVAL_LIMIT,
         turn_timeout_seconds: float = TURN_TIMEOUT_SECONDS,
-        schedule: dict | None = None,
     ) -> None:
         self._strategies = strategy_store
-        # The course's project schedule (course_schedule.py): every reply is
-        # told today's date and each group's next deliverable.
-        self._schedule = schedule
         self._assistant_id = assistant_id
         self._assistant_name = assistant_name
         self._episodic_store = episodic_store
@@ -995,17 +990,6 @@ class CoalaPolicy:
             else ""
         )
 
-        # Per reply, not at connect: a session can outlive the day it began.
-        # Part of the per-turn directive, which the next reply replaces.
-        if self._schedule is not None:
-            today = today_in(self._schedule)
-            schedule_block = (
-                f"Today is {today:%A} {today.day} {today:%B %Y}. "
-                f"{next_deliverables(self._schedule, today)}\n\n"
-            )
-        else:
-            schedule_block = ""
-
         directive_label = (
             "High-level guidance from a lightweight judgment step -- this "
             "is the rationale and rough target, not literal wording. Use "
@@ -1019,7 +1003,6 @@ class CoalaPolicy:
             f"{recent_block}"
             f"{linked_tail_block}"
             f"{retrieved_block}"
-            f"{schedule_block}"
             f"{directive_label}\n"
             f"{directive or 'Respond naturally as the ongoing conversation warrants.'}"
         )
