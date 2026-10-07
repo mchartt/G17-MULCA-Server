@@ -166,7 +166,24 @@ class MainAgentOpenAI(MainAgent):
                         "type": "audio/pcm",
                         "rate": PROVIDER_SAMPLE_RATE,
                     },
-                    "transcription": {"model": TRANSCRIPTION_MODEL},
+                    "transcription": {
+                        "model": TRANSCRIPTION_MODEL,
+                        # No "language" pin -- it only takes one ISO code,
+                        # and this deployment's speakers switch between
+                        # English and Italian, sometimes mid-conversation;
+                        # forcing either one would hurt whichever isn't
+                        # picked. "prompt" is non-exclusive vocabulary bias
+                        # instead: both languages are expected, and the
+                        # assistant's own name is worth transcribing
+                        # correctly rather than as a phonetic near-miss.
+                        "prompt": (
+                            f"The conversation is in English or Italian, "
+                            f"sometimes switching between the two. One "
+                            f"participant is an AI assistant named "
+                            f"{self.name}, often addressed by that name, "
+                            f'"assistant", or "bot".'
+                        ),
+                    },
                     "turn_detection": {
                         "type": "server_vad",
                         "create_response": False,
