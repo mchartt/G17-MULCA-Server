@@ -37,6 +37,10 @@ class RealtimeAgent:
         self.log_label = ""
         self.cost_usd = 0.0
 
+        # Which bot/team to attribute usage_report.py's cost to; falls back
+        # to log_label (the conversation_id) if a client never set one.
+        self.instance_label = ""
+
         # Raw provider messages, exactly as they arrive.
         self.on_message: MessageHandler | None = None
 

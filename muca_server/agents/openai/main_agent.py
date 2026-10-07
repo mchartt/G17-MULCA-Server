@@ -19,6 +19,7 @@ from ...audio import AudioChunk
 from ...audio.pcm import float32_to_pcm16, pcm16_to_float32, resample_float32
 from ..main_agent import MainAgent, MainAgentEvent
 from ..options import AgentCapabilities, MainAgentOptions
+from ...usage_report import UsageTracker
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,7 @@ class MainAgentOpenAI(MainAgent):
         persona: str = "",
         task_knowledge: str = "",
         model: str = DEFAULT_REALTIME_MODEL,
+        usage_tracker: UsageTracker | None = None,
     ) -> None:
         super().__init__(options=options)
 
@@ -126,6 +128,7 @@ class MainAgentOpenAI(MainAgent):
         self._persona = persona
         self._task_knowledge = task_knowledge
         self._model = model
+        self._usage_tracker = usage_tracker
 
         self._connection_manager = None
         self._connection = None
@@ -197,6 +200,10 @@ class MainAgentOpenAI(MainAgent):
         )
         self.capabilities = AgentCapabilities(vad=True, interrupt=False)
         logger.info("%s main agent connected (%s)", self.log_label, self._model)
+        if self._usage_tracker is not None:
+            self._usage_tracker.record_connect(
+                "main", self.instance_label or self.log_label
+            )
 
         self._receive_task = asyncio.create_task(
             self._receive_loop(),
@@ -429,6 +436,12 @@ class MainAgentOpenAI(MainAgent):
                     sample_rate=PROVIDER_SAMPLE_RATE,
                 )
                 self._assistant_audio_ms += chunk.duration_ms
+                if self._usage_tracker is not None:
+                    self._usage_tracker.record_audio_ms(
+                        "main",
+                        self.instance_label or self.log_label,
+                        chunk.duration_ms,
+                    )
 
                 # The first audio of a response is when the assistant starts
                 # to speak (MainAgentOpenAi.cs); the conversation then waits
@@ -561,6 +574,14 @@ def log_usage(agent, model: str, response) -> float:
         "" if prices else " (unknown model price)",
         agent.cost_usd,
     )
+
+    tracker = getattr(agent, "_usage_tracker", None)
+    if tracker is not None:
+        agent_type = "main" if "Main" in type(agent).__name__ else "intervention"
+        instance = getattr(agent, "instance_label", "") or agent.log_label
+        tracker.record_usage(agent_type, instance, tokens, cost)
+        asyncio.create_task(tracker.maybe_alert())
+
     return cost
 
 

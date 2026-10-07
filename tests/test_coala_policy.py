@@ -803,6 +803,33 @@ async def test_the_prompt_includes_this_conversation_verbatim_not_just_the_summa
     assert "the number is 6" in port.instructions[0]
 
 
+async def test_the_verbatim_tail_is_not_resent_on_a_later_triggered_reply():
+    """
+    Found live: the recent-messages tail was going out on every single
+    triggered reply, not just the first after a (re)connect -- pure
+    redundancy once the live session has natively seen those turns itself.
+    """
+
+    policy, port = make_policy()
+    await policy.start(port)
+
+    await policy.on_utterance(make_utterance(content="the number is 6"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
+    )
+    await policy.on_assistant_output("ok", interrupted=False)
+
+    await policy.on_utterance(make_utterance(content="the number is 7"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
+    )
+
+    assert "the number is 6" in port.instructions[0]
+    assert "Recent messages in this conversation" not in port.instructions[1]
+
+
 async def test_a_groups_own_summary_is_sent_once_then_not_again():
     """
     A group's own live session already has everything its summary covers
@@ -865,13 +892,7 @@ async def test_every_reply_is_told_today_and_the_next_deliverable():
         assert "Group A: the moon landing plan, at the tutoring on Mon 7 Jan 2999" in prompt
 
 
-async def test_a_dms_linked_summary_is_sent_every_turn_not_just_once():
-    """
-    Unlike a group's own summary, a DM's session was never part of the
-    linked group's conversation -- there is no live fallback, so this must
-    keep refreshing every turn, not just the first.
-    """
-
+def make_dm_policy():
     stores: dict[str, tuple] = {}
 
     def store_factory(conversation_id):
@@ -880,20 +901,31 @@ async def test_a_dms_linked_summary_is_sent_every_turn_not_just_once():
             (InMemoryEpisodicStore(), InMemorySnapshotStore()),
         )
 
+    return store_factory, FakePort(
+        conversation_id="dm:1",
+        is_private=True,
+        linked_conversation_id="instance:team-alpha",
+    )
+
+
+async def test_a_dms_linked_summary_is_not_resent_within_the_hour():
+    """
+    Found live: this used to go out on every single triggered DM reply,
+    unconditionally -- real, recurring cost for an active back-and-forth
+    DM, not a one-time thing the way a group's own summary is. Now gated
+    to DM_FULL_CONTEXT_INTERVAL_SECONDS, same as the group case just with
+    a real interval instead of "forever" -- see the next test for the
+    other side of that gate.
+    """
+
+    store_factory, port = make_dm_policy()
     _, group_snapshot_store = store_factory("instance:team-alpha")
     await group_snapshot_store.save(
         "instance:team-alpha",
         MemorySnapshot(history_summary="The team discussed the deadline."),
     )
 
-    policy, port = make_policy(
-        store_factory=store_factory,
-        port=FakePort(
-            conversation_id="dm:1",
-            is_private=True,
-            linked_conversation_id="instance:team-alpha",
-        ),
-    )
+    policy = CoalaPolicy(strategy_store=STRATEGIES, store_factory=store_factory)
     await policy.start(port)
 
     await policy.on_utterance(make_utterance(content="first message"))
@@ -910,7 +942,88 @@ async def test_a_dms_linked_summary_is_sent_every_turn_not_just_once():
     )
 
     assert "The team discussed the deadline." in port.instructions[0]
+    assert "The team discussed the deadline." not in port.instructions[1]
+
+
+async def test_a_dms_linked_summary_is_resent_after_the_interval_elapses(monkeypatch):
+    import muca_server.cognition.policy as policy_module
+
+    store_factory, port = make_dm_policy()
+    _, group_snapshot_store = store_factory("instance:team-alpha")
+    await group_snapshot_store.save(
+        "instance:team-alpha",
+        MemorySnapshot(history_summary="The team discussed the deadline."),
+    )
+
+    policy = CoalaPolicy(strategy_store=STRATEGIES, store_factory=store_factory)
+    await policy.start(port)
+
+    clock = [1_000_000.0]
+    monkeypatch.setattr(policy_module.time, "time", lambda: clock[0])
+
+    await policy.on_utterance(make_utterance(content="first message"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
+    )
+    await policy.on_assistant_output("ok", interrupted=False)
+
+    clock[0] += policy_module.DM_FULL_CONTEXT_INTERVAL_SECONDS + 1
+
+    await policy.on_utterance(make_utterance(content="second message"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
+    )
+
+    assert "The team discussed the deadline." in port.instructions[0]
     assert "The team discussed the deadline." in port.instructions[1]
+
+
+async def test_a_dms_full_context_gate_survives_a_reconnect():
+    """
+    Found live: CoalaPolicy is rebuilt fresh on every (re)connect
+    (session_components_factory.policy_factory), so without persisting
+    full_context_sent_at, a DM that merely reconnected -- not actually an
+    hour later -- would get the full-context resend again immediately,
+    keyed on "this connection" rather than durably on this one
+    participant's own conversation_id.
+    """
+
+    store_factory, port = make_dm_policy()
+    _, group_snapshot_store = store_factory("instance:team-alpha")
+    await group_snapshot_store.save(
+        "instance:team-alpha",
+        MemorySnapshot(history_summary="The team discussed the deadline."),
+    )
+
+    first = CoalaPolicy(strategy_store=STRATEGIES, store_factory=store_factory)
+    await first.start(port)
+    await first.on_utterance(make_utterance(content="first message"))
+    await first.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
+    )
+    await first.on_assistant_output("ok", interrupted=False)
+    await first.close()
+
+    # A fresh CoalaPolicy, same DM conversation_id -- standing in for a
+    # reconnect seconds later, not an hour later.
+    second_port = FakePort(
+        conversation_id=port.conversation_id,
+        is_private=True,
+        linked_conversation_id="instance:team-alpha",
+    )
+    second = CoalaPolicy(strategy_store=STRATEGIES, store_factory=store_factory)
+    await second.start(second_port)
+    await second.on_utterance(make_utterance(content="second message"))
+    await second.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
+    )
+
+    assert "The team discussed the deadline." in port.instructions[0]
+    assert "The team discussed the deadline." not in second_port.instructions[0]
 
 
 async def test_a_groups_snapshot_saves_before_the_first_management_cycle():
@@ -1097,9 +1210,26 @@ async def test_observer_catchup_text_carries_restored_history():
     catchup = policy.observer_catchup_text()
 
     assert "the deadline is friday" in catchup
-    # Raw history, never the compressed summary -- an observer only ever
-    # reads wm.history/trigger variables directly, same as every other turn.
-    assert "Summary of the conversation" not in catchup
+
+
+async def test_observer_catchup_text_also_carries_the_compressed_summary():
+    """
+    Found live: this used to send only the raw tail, silently dropping
+    everything a management cycle had already compressed away -- a
+    reconnecting observer had zero knowledge of anything further back than
+    its last ~management_cycle_interval messages, unlike the main agent,
+    which always gets both the summary and the tail.
+    """
+
+    policy, port = make_policy()
+    await policy.start(port)
+    policy._wm.history_summary = "Previously, the team discussed the deadline."
+    await policy.on_utterance(make_utterance(content="let's also fix the budget"))
+
+    catchup = policy.observer_catchup_text()
+
+    assert "Previously, the team discussed the deadline." in catchup
+    assert "let's also fix the budget" in catchup
 
 
 async def test_an_untranscribed_turn_is_logged_without_touching_wm():

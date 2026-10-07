@@ -9,6 +9,7 @@ import asyncio
 import hmac
 import json
 import logging
+import os
 from contextlib import suppress
 from pathlib import Path
 from weakref import WeakSet
@@ -22,8 +23,16 @@ logger = logging.getLogger(__name__)
 
 class ModelSettings:
     def __init__(self, path: Path, admin_token: str | None = None) -> None:
-        self.main = DEFAULT_REALTIME_MODEL
-        self.intervention = DEFAULT_INTERVENTION_MODEL
+        # Precedence, lowest to highest: the hardcoded default, then
+        # MUCA_MAIN_MODEL/MUCA_INTERVENTION_MODEL (e.g. for a one-off test
+        # deployment comparing pricing/quality against gpt-realtime-mini,
+        # without touching an admin-set value), then whatever's actually
+        # saved on disk (an admin's explicit choice via `apply()` should
+        # outlive both of those across a restart).
+        self.main = os.environ.get("MUCA_MAIN_MODEL", DEFAULT_REALTIME_MODEL)
+        self.intervention = os.environ.get(
+            "MUCA_INTERVENTION_MODEL", DEFAULT_INTERVENTION_MODEL
+        )
         self._path = path
         self._admin_token = admin_token
         # Every live session's outbound queue, so a change can end them all.

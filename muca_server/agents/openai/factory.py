@@ -15,6 +15,7 @@ from ..options import (
     AuxiliaryAgentOptions,
     MainAgentOptions,
 )
+from ...usage_report import UsageTracker
 from .intervention_agent import InterventionAgentOpenAI
 from .main_agent import MainAgentOpenAI
 from .model_settings import ModelSettings
@@ -32,6 +33,7 @@ class OpenAIAgentFactory:
         intervention_persona: str,
         task_knowledge: str,
         models: ModelSettings,
+        usage_tracker: UsageTracker | None = None,
         main_knowledge: str = "",
     ) -> None:
         self._client = client
@@ -43,6 +45,7 @@ class OpenAIAgentFactory:
         self._main_persona = main_persona
         self._intervention_persona = intervention_persona
         self._task_knowledge = task_knowledge
+        self._usage_tracker = usage_tracker
 
     def build_main(
         self,
@@ -58,6 +61,7 @@ class OpenAIAgentFactory:
                 else self._task_knowledge
             ),
             model=options.model or self._models.main,
+            usage_tracker=self._usage_tracker,
         )
 
     def build_auxiliary(
@@ -75,6 +79,7 @@ class OpenAIAgentFactory:
                 # Per-session, not per-deployment: one factory instance is
                 # shared across every conversation, group and DM alike.
                 is_dm=options.is_dm,
+                usage_tracker=self._usage_tracker,
             )
 
         return AuxiliaryAgent(options=options)

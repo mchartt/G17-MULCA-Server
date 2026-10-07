@@ -136,6 +136,10 @@ class Conversation:
         self._has_conversation_id = False
         self._is_private = False
         self._linked_conversation_id: str | None = None
+        # Which bot/team this session's cost should be attributed to in
+        # usage_report.py; falls back to conversation_id if the client never
+        # sent one (see ConnectAgentMessage.bot_name).
+        self._instance_label = self._conversation_id
 
         self._main_agent: MainAgent | None = None
         self._auxiliary_agents: dict[UUID, AuxiliaryAgent] = {}
@@ -500,6 +504,7 @@ class Conversation:
                 self._conversation_id = message.conversation_id
                 self._has_conversation_id = True
 
+            self._instance_label = message.bot_name or self._conversation_id
             self._is_private = message.is_dm
             self._linked_conversation_id = message.linked_conversation_id
             self._intervention_model = message.intervention_model
@@ -568,6 +573,7 @@ class Conversation:
         agent.on_decision = self._handle_intervention_signal
         agent.on_connection_lost = self._handle_agent_connection_lost
         agent.log_label = self._conversation_id
+        agent.instance_label = self._instance_label
 
         await agent.connect()
 
@@ -736,10 +742,11 @@ class Conversation:
             transcript,
         )
         if not transcript:
-            # Nothing understood (noise, or transcription failed): the
-            # observers can still judge from what they heard. Logged too --
-            # every other outcome (including "decided not to act") gets an
-            # audit row; this one shouldn't be the silent exception.
+            # Nothing understood (noise, or transcription failed) --
+            # explicitly told, rather than asking the observers to judge
+            # blind from nothing but whatever they made of the raw audio
+            # themselves. Found live: without this, ordinary room noise
+            # (even someone typing) was getting judged as worth replying to.
             logger.debug(
                 "No transcript for %s's turn, asking observers anyway",
                 self._username(speaker),
@@ -749,8 +756,30 @@ class Conversation:
                 self._username(speaker),
                 ended_at,
             )
+            await self._tell_observers(
+                f"{self._username(speaker)}'s turn had no clear transcript "
+                "(likely noise, not speech) -- nothing intelligible was "
+                "said, so there is nothing to react to."
+            )
             self._ask_observers_to_consider(speaker)
             return
+
+        # Found live: unlike a text message (_take_text_turn, above), a
+        # voice turn's transcript was never actually forwarded to the
+        # observers as explicit text -- they only ever "heard" the raw
+        # audio live and saw the small trigger-variables note. Applying a
+        # strict lexical rule (e.g. respond_when_addressed's "contains the
+        # literal word 'you'") reliably needs the literal transcript to
+        # check against, not a reconstruction from memory of raw audio --
+        # confirmed live: identical content judged correctly over text but
+        # not over voice. Same ordering invariant as _take_text_turn: this
+        # must reach observers before _judge -> on_utterance's
+        # trigger-variables note, so they see (utterance, then variables),
+        # never the reverse.
+        spoken = f"{self._username(speaker)}: {transcript}"
+        for agent in list(self._auxiliary_agents.values()):
+            if agent.listens_to_user(speaker):
+                await agent.send_text(spoken, role="user")
 
         await self._judge(
             Utterance(
@@ -1225,11 +1254,27 @@ class Conversation:
 
         self._assistant_turn_ending = True
 
-        await self._tell_observers(
-            f"MAIN ASSISTANT ({self._main_agent.name}) stopped speaking but "
-            "it did not finish saying what it wanted to say because it was "
-            "interrupted."
-        )
+        # This fires whenever the user starts talking while the assistant's
+        # reply is still audible on the client, even if generation (and
+        # _handle_main_agent_text's is_final text, already sent to
+        # observers) completed first -- a reply is usually fully generated
+        # long before it finishes playing (see stop_speaking's comment on
+        # the same gap). Telling observers it "did not finish" in that case
+        # is simply false, and it was observed misleading the intervention
+        # agent's own judgment of whether the next message is a reply to
+        # MULCA's (already-complete) immediately preceding message.
+        if self._assistant_generation_done:
+            await self._tell_observers(
+                f"MAIN ASSISTANT ({self._main_agent.name}) stopped speaking "
+                "(its reply had already finished generating; the user just "
+                "started talking again before playback had fully drained)."
+            )
+        else:
+            await self._tell_observers(
+                f"MAIN ASSISTANT ({self._main_agent.name}) stopped speaking "
+                "but it did not finish saying what it wanted to say because "
+                "it was interrupted."
+            )
 
         if not self._main_agent.capabilities.interrupt:
             await self._main_agent.stop_speaking()
@@ -1288,13 +1333,18 @@ class Conversation:
             # Observers otherwise only ever hear that MULCA spoke (the
             # generic "started/stopped speaking" notices below), never what
             # it actually said -- a blind spot found while auditing history
-            # symmetry between the main and intervention agents. A spoken
-            # reply they have already heard, through playback frames.
-            if (
-                reply
-                and modality == "text"
-                and self._main_agent is not None
-            ):
+            # symmetry between the main and intervention agents. This used to
+            # be gated on modality == "text", but a voice-modality response's
+            # spoken words stream in as modality == "audio" (the
+            # response.output_audio_transcript.delta branch in
+            # main_agent.py), so that gate silently dropped MULCA's own
+            # voice replies from every observer's transcript -- the
+            # intervention agent never had a literal "MULCA: ..." to judge a
+            # reply against in voice mode (e.g. respond_when_addressed's
+            # "reply to your own immediately preceding message" case), even
+            # though it has already heard the audio itself through playback
+            # frames.
+            if reply and self._main_agent is not None:
                 spoken = f"{self._main_agent.name}: {reply}"
                 for agent in list(self._auxiliary_agents.values()):
                     if agent.listen_to_assistant:
@@ -1369,6 +1419,7 @@ class Conversation:
             )
 
         self._main_agent.log_label = self._conversation_id
+        self._main_agent.instance_label = self._instance_label
         await self._main_agent.connect()
         self._state.active_agent = self._main_agent.name
 

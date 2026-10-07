@@ -129,6 +129,14 @@ class ConnectAgentMessage(TargetedMessage):
     main_model: str = Field(default="", alias="mainModel")
     intervention_model: str = Field(default="", alias="interventionModel")
 
+    # Which bot/team this session belongs to (e.g. "MULCA-group3"), purely
+    # for cost-report attribution (usage_report.py) -- conversation_id alone
+    # ("channel:<id>") never reveals that on its own, since one deployment
+    # runs many bots against this one shared server. Empty for a client that
+    # doesn't send it (an older client, a non-Discord one): usage then falls
+    # back to attributing by conversation_id instead.
+    bot_name: str = Field(default="", alias="botName")
+
 
 class SetModelMessage(IncomingMessage):
     """
