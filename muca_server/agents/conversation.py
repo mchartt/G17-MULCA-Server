@@ -578,21 +578,37 @@ class Conversation:
 
     async def arm_listening(self, message: ArmListeningMessage) -> None:
         """
-        push_to_talk mode: a participant pressed the button. A no-op in
+        push_to_talk mode: a participant pressed the button -- a toggle,
+        same button for "start talking" and "stop talking". A no-op in
         ambient mode -- every turn is already judged there.
+
+        The server is the sole source of truth for which of the two a
+        given press means: the button itself carries no state (every
+        press sends the exact same message), so the client never has to
+        track or guess whether a window is currently open, including
+        across the auto-close-on-silence timer the client can't see.
         """
 
         if self._listening_mode != "push_to_talk":
             return
 
-        opened = not self._listening_window_open
-        self._listening_window_open = True
-        self._restart_listening_timer()
-        if opened:
+        if self._listening_window_open:
+            if self._listening_window_timer is not None:
+                self._listening_window_timer.cancel()
+                self._listening_window_timer = None
+            self._listening_window_open = False
             logger.info(
-                "%s listening window opened (press)",
+                "%s listening window closed (press)",
                 self._conversation_id,
             )
+            return
+
+        self._listening_window_open = True
+        self._restart_listening_timer()
+        logger.info(
+            "%s listening window opened (press)",
+            self._conversation_id,
+        )
 
     def _restart_listening_timer(self) -> None:
         if self._listening_window_timer is not None:

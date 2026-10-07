@@ -208,6 +208,24 @@ async def test_arming_opens_a_window_that_lets_judgment_through():
     assert factory.main.instructions
 
 
+async def test_a_second_press_closes_the_window_immediately():
+    # The button carries no state of its own -- every press sends the
+    # same message, and the server (not the client) decides whether that
+    # means "open" or "close" based on its own current state.
+    conversation, _ = await make_conversation(ptt_silence_ms=5_000)
+
+    await conversation.arm_listening(arm())
+    assert conversation._listening_window_open is True
+
+    await conversation.arm_listening(arm())
+    assert conversation._listening_window_open is False
+
+    # The pending 5s silence-timer from the first press must not still
+    # fire later and flip this back open (or log a stale "closed").
+    await asyncio.sleep(0.05)
+    assert conversation._listening_window_open is False
+
+
 async def test_the_window_closes_itself_after_silence():
     conversation, _ = await make_conversation(ptt_silence_ms=20)
 
