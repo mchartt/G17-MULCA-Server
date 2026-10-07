@@ -155,6 +155,21 @@ class SetModelMessage(IncomingMessage):
     )
 
 
+class SetCostAlertMessage(IncomingMessage):
+    """
+    Admin: change this MUCA-Server's cost-alert webhook/threshold.
+
+    Unlike set_model, no live session needs to restart for this -- it only
+    affects where/when usage_report.py posts, not anything a connected
+    agent is doing. Either field left unset keeps that setting as it was.
+    """
+
+    event: Literal["set_cost_alert"]
+    admin_token: str = Field(alias="adminToken")
+    webhook_url: str | None = Field(default=None, alias="webhookUrl")
+    threshold_usd: float | None = Field(default=None, alias="thresholdUsd")
+
+
 class DisconnectMessage(TargetedMessage):
     event: Literal["disconnect"]
 
@@ -180,7 +195,8 @@ IncomingProtocolMessage = Annotated[
     | DisconnectMessage
     | CreateAuxiliaryAgentMessage
     | RemoveAuxiliaryAgentMessage
-    | SetModelMessage,
+    | SetModelMessage
+    | SetCostAlertMessage,
     Field(discriminator="event"),
 ]
 

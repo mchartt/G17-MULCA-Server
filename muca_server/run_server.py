@@ -114,8 +114,11 @@ def build_app():
     # only MUCA-Server (see usage_report.py's module docstring), so this is
     # already the deployment-wide total, broken down by agent type and by
     # instance (bot/team). MUCA_COST_ALERT_WEBHOOK_URL/
-    # _THRESHOLD_STEP_USD are both optional -- unset either and usage is
-    # still tracked and persisted, just never posted anywhere.
+    # _THRESHOLD_STEP_USD are both optional starting points -- unset either
+    # and usage is still tracked and persisted, just never posted anywhere.
+    # An admin can also set/change both live, with no restart or Swarmpit
+    # edit, via /mulca costalert (the set_cost_alert message), gated on the
+    # same MUCA_ADMIN_TOKEN as /mulca model.
     threshold_step_env = os.environ.get(
         "MUCA_COST_ALERT_THRESHOLD_STEP_USD", ""
     ).strip()
@@ -126,6 +129,7 @@ def build_app():
         threshold_step_usd=(
             float(threshold_step_env) if threshold_step_env else None
         ),
+        admin_token=os.environ.get("MUCA_ADMIN_TOKEN"),
     )
 
     agent_factory = OpenAIAgentFactory(
@@ -174,6 +178,7 @@ def build_app():
         # would say "ASSISTANT" instead of "MULCA".
         main_agent_options=MainAgentOptions(name=ASSISTANT_NAME),
         model_settings=model_settings,
+        usage_tracker=usage_tracker,
         silence_timeout_ms=int(
             os.environ.get(
                 "MUCA_SILENCE_TIMEOUT_MS",

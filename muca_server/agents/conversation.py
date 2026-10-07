@@ -32,6 +32,7 @@ from ..protocol import (
     ParticipantsMessage,
     PlaybackFrameMessage,
     RemoveAuxiliaryAgentMessage,
+    SetCostAlertMessage,
     SetModelMessage,
     StateUpdateMessage,
     TextMessage,
@@ -48,6 +49,7 @@ from .turn import Turn
 
 if TYPE_CHECKING:
     from ..sessions.session_state import SessionState
+    from ..usage_report import UsageTracker
     from .openai.model_settings import ModelSettings
 
 logger = logging.getLogger(__name__)
@@ -116,10 +118,12 @@ class Conversation:
         policy: CognitionPolicy | None = None,
         silence_timeout_ms: int = DEFAULT_SILENCE_TIMEOUT_MS,
         model_settings: ModelSettings | None = None,
+        usage_tracker: UsageTracker | None = None,
     ) -> None:
         self._state = state
         self._outbound_queue = outbound_queue
         self._model_settings = model_settings
+        self._usage_tracker = usage_tracker
         if model_settings is not None:
             model_settings.watch(outbound_queue)
         # This session's own models, from the handshake; empty means the
@@ -533,6 +537,17 @@ class Conversation:
 
         # Ends every live session, this one included.
         self._model_settings.apply(message)
+
+    async def set_cost_alert(self, message: SetCostAlertMessage) -> None:
+        if self._usage_tracker is None:
+            raise RuntimeError("Usage tracking is not enabled")
+
+        # Unlike set_model, nothing here needs any session to restart.
+        self._usage_tracker.apply(
+            admin_token=message.admin_token,
+            webhook_url=message.webhook_url,
+            threshold_usd=message.threshold_usd,
+        )
 
     async def disconnect_agent(
         self,

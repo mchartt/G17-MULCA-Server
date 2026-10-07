@@ -15,6 +15,7 @@ cross-server aggregation to do.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import math
@@ -57,11 +58,18 @@ class UsageTracker:
         server_name: str | None = None,
         webhook_url: str | None = None,
         threshold_step_usd: float | None = None,
+        admin_token: str | None = None,
     ) -> None:
         self._path = path
         self.server_name = server_name or socket.gethostname()
+        # Precedence, lowest to highest: the hardcoded default (None), then
+        # the env-var-derived constructor args above, then whatever's
+        # actually saved on disk -- an admin's explicit /mulca costalert
+        # choice should outlive both of those across a restart, same as
+        # ModelSettings.
         self._webhook_url = webhook_url
         self._threshold_step = threshold_step_usd
+        self._admin_token = admin_token
         self._agents: dict[str, AgentTotals] = {}
         self._instances: dict[str, InstanceTotals] = {}
         self._alerted_threshold = 0.0
@@ -70,6 +78,10 @@ class UsageTracker:
         if path.exists():
             saved = json.loads(path.read_text())
             self._alerted_threshold = saved.get("alerted_threshold", 0.0)
+            self._webhook_url = saved.get("webhook_url", self._webhook_url)
+            self._threshold_step = saved.get(
+                "threshold_step_usd", self._threshold_step
+            )
             for agent_type, values in saved.get("agents", {}).items():
                 self._agents[agent_type] = AgentTotals(**values)
             for instance, values in saved.get("instances", {}).items():
@@ -141,6 +153,8 @@ class UsageTracker:
             json.dumps(
                 {
                     "alerted_threshold": self._alerted_threshold,
+                    "webhook_url": self._webhook_url,
+                    "threshold_step_usd": self._threshold_step,
                     "agents": {
                         agent_type: asdict(totals)
                         for agent_type, totals in self._agents.items()
@@ -151,6 +165,38 @@ class UsageTracker:
                     },
                 }
             )
+        )
+
+    def apply(
+        self,
+        *,
+        admin_token: str,
+        webhook_url: str | None = None,
+        threshold_usd: float | None = None,
+    ) -> None:
+        """
+        Admin: change the webhook URL and/or $ step, live, no restart
+        needed -- unlike set_model, nothing a connected agent is doing
+        depends on these. Persisted, so it survives this process's own
+        restart too.
+        """
+
+        if not self._admin_token or not hmac.compare_digest(
+            admin_token.encode(),
+            self._admin_token.encode(),
+        ):
+            raise PermissionError("Invalid admin token")
+
+        if webhook_url is not None:
+            self._webhook_url = webhook_url
+        if threshold_usd is not None:
+            self._threshold_step = threshold_usd
+        self._save()
+
+        logger.info(
+            "Cost alert settings changed: webhook=%s, threshold=$%s",
+            "set" if self._webhook_url else "unset",
+            self._threshold_step,
         )
 
     def report_text(self) -> str:

@@ -16,6 +16,7 @@ from ..protocol import (
     ErrorMessage,
     parse_incoming_message,
     OutgoingProtocolMessage,
+    SetCostAlertMessage,
     SetModelMessage,
     serialize_outgoing_message,
 )
@@ -71,7 +72,14 @@ class SessionRuntime:
                 message = None
 
             if isinstance(message, SetModelMessage):
-                await self.run_admin(message)
+                # 1012: every live session (model changed) reopens on it.
+                await self.run_admin(message, close_code=1012, close_reason="Model changed")
+                return
+
+            if isinstance(message, SetCostAlertMessage):
+                # 1000: nothing a connected agent is doing depends on this,
+                # so no session needs to reopen -- just confirm and close.
+                await self.run_admin(message, close_code=1000, close_reason="Cost alert settings changed")
                 return
 
             if message is None or message.event not in CONNECT_EVENTS:
@@ -149,7 +157,13 @@ class SessionRuntime:
         finally:
             await self.close()
 
-    async def run_admin(self, message: SetModelMessage) -> None:
+    async def run_admin(
+        self,
+        message: SetModelMessage | SetCostAlertMessage,
+        *,
+        close_code: int,
+        close_reason: str,
+    ) -> None:
         """
         An admin request sent instead of `connect`: no agents are built, so
         it still works when the current model can't connect at all.
@@ -167,7 +181,7 @@ class SessionRuntime:
             await self.websocket.close(code=1008, reason="Refused")
             return
 
-        await self.websocket.close(code=1012, reason="Model changed")
+        await self.websocket.close(code=close_code, reason=close_reason)
 
     async def start(self) -> None:
         self.state.is_connected = True

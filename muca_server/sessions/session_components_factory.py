@@ -10,6 +10,7 @@ from ..cognition import CognitionPolicy
 
 if TYPE_CHECKING:
     from ..agents.openai.model_settings import ModelSettings
+    from ..usage_report import UsageTracker
 
 PolicyFactory = Callable[[SessionContext], CognitionPolicy]
 
@@ -30,8 +31,10 @@ class DefaultSessionComponentsFactory:
         main_agent_options: MainAgentOptions | None = None,
         silence_timeout_ms: int = DEFAULT_SILENCE_TIMEOUT_MS,
         model_settings: ModelSettings | None = None,
+        usage_tracker: UsageTracker | None = None,
     ) -> None:
         self.model_settings = model_settings
+        self.usage_tracker = usage_tracker
         self.agent_factory = agent_factory
         self.policy_factory = policy_factory
         self.main_agent_options = (
@@ -73,6 +76,7 @@ class DefaultSessionComponentsFactory:
             policy=policy,
             silence_timeout_ms=self.silence_timeout_ms,
             model_settings=self.model_settings,
+            usage_tracker=self.usage_tracker,
         )
 
     async def create_workers(

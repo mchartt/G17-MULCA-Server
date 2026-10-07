@@ -15,6 +15,7 @@ from ..protocol import (
     PlaybackFrameMessage,
     RawProviderMessage,
     RemoveAuxiliaryAgentMessage,
+    SetCostAlertMessage,
     SetModelMessage,
     TextMessage,
     TriggerResponseMessage,
@@ -97,6 +98,13 @@ class AgentRouterProtocol(Protocol):
         """Admin: change the realtime model for every conversation."""
         ...
 
+    async def set_cost_alert(
+        self,
+        message: SetCostAlertMessage,
+    ) -> None:
+        """Admin: change this server's cost-alert webhook/threshold."""
+        ...
+
     async def trigger_response(
         self,
         message: TriggerResponseMessage,
@@ -160,6 +168,9 @@ async def dispatch(
 
         case SetModelMessage():
             await agent_router.set_model(message)
+
+        case SetCostAlertMessage():
+            await agent_router.set_cost_alert(message)
 
         case DisconnectMessage():
             await agent_router.disconnect_agent(message)
