@@ -26,7 +26,7 @@ from .main_agent import (
     encode_for_provider,
     error_code,
     log_usage,
-    truncation,
+    trim_context,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,8 @@ TOOL_NAME = "signal_intervention"
 
 # It responds on every turn, so its context is what is billed most often;
 # it only needs the recent conversation to judge the latest message.
-INTERVENTION_TOKEN_LIMIT = 8_000
+# Input tokens per judgement, instructions included; see trim_context.
+INTERVENTION_TOKEN_LIMIT = 16_000
 
 
 class InterventionAgentOpenAI(AuxiliaryAgent):
@@ -74,6 +75,11 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
         self._connection = None
         self._receive_task: asyncio.Task[None] | None = None
         self._pending_signal: InterventionSignal | None = None
+        # A turn arrived while a judgement was running: judge once more
+        # when it ends, rather than cancelling it.
+        self._rejudge = False
+        # The session's messages, oldest first, for trim_context.
+        self._item_ids: list[str] = []
 
     async def _connect(self) -> None:
         self._connection_manager = self._client.realtime.connect(
@@ -90,7 +96,6 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
                 "instructions": self._build_instructions(),
                 "tools": [self._tool_definition()],
                 "tool_choice": "auto",
-                "truncation": truncation(INTERVENTION_TOKEN_LIMIT),
                 # It hears the conversation's audio too (the Unity
                 # original's intervention agent does), and VAD commits that
                 # audio into its context -- but it only ever judges when the
@@ -179,10 +184,29 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
         if self._connection is None:
             return
 
-        await self._connection.response.create()
-        # Marks a response as in flight so a later interrupt=True actually
-        # has something to cancel instead of erroring on nothing.
+        # Set before the await, so a turn arriving meanwhile is coalesced
+        # (trigger_response below) instead of creating a second response.
         self._response_active = True
+        await self._connection.response.create()
+
+    async def trigger_response(self, **kwargs) -> None:
+        # Never cancels: a cancelled judgement is still billed in full,
+        # uncached, and its decision is lost. The next judgement sees every
+        # turn that arrived meanwhile, so each turn is still judged.
+        if self._response_active:
+            self._rejudge = True
+            return
+
+        await super().trigger_response(**kwargs)
+
+    async def _judge_again_if_asked(self) -> None:
+        if self._rejudge:
+            self._rejudge = False
+            await self._trigger_response(
+                max_tokens=None,
+                instructions="",
+                add_to_conversation=True,
+            )
 
     async def _cancel_response(self) -> None:
         if self._connection is None:
@@ -233,6 +257,16 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
             self._response_active = True
             return
 
+        if event.type == "conversation.item.added":
+            if event.item.type == "message":
+                self._item_ids.append(event.item.id)
+            return
+
+        if event.type == "conversation.item.deleted":
+            with suppress(ValueError):
+                self._item_ids.remove(event.item_id)
+            return
+
         if event.type == "error":
             if error_code(event.error) in IGNORABLE_ERROR_CODES:
                 return
@@ -253,6 +287,7 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
             self._response_active = False
             self._pending_signal = None
             await self._signal_decision(None)
+            await self._judge_again_if_asked()
             return
 
         if (
@@ -277,12 +312,14 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
 
         if event.type == "response.done":
             log_usage(self, self._model, event.response)
+            await trim_context(self, event.response, INTERVENTION_TOKEN_LIMIT)
             self._response_active = False
             signal, self._pending_signal = (
                 self._pending_signal,
                 None,
             )
             await self._signal_decision(signal)
+            await self._judge_again_if_asked()
 
     def _parse_signal(
         self,

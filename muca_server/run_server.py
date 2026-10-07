@@ -217,6 +217,9 @@ def main() -> None:
     logging.getLogger("muca_server").setLevel(
         os.environ.get("MUCA_LOG_LEVEL", "DEBUG"),
     )
+    # Its INFO line per request prints full URLs, the cost-alert webhook's
+    # secret token included.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     uvicorn.run(build_app(), host=host, port=port)
 
 

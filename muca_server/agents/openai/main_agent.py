@@ -29,10 +29,9 @@ TRANSCRIPTION_MODEL = "gpt-4o-transcribe"
 PROVIDER_SAMPLE_RATE = 24_000
 MAX_OUTPUT_TOKENS = 4096
 
-# Every response bills the whole session context again, so it is capped:
-# past the limit the oldest items are dropped, down to 80% of it so the
-# next turns still hit the prompt cache instead of truncating every turn.
-MAIN_TOKEN_LIMIT = 16_000
+# Every response bills the whole session context again, so it is capped
+# (input tokens per response, instructions included; see trim_context).
+MAIN_TOKEN_LIMIT = 24_000
 
 # Per 1M tokens: text in, cached text in, audio in, cached audio in, text
 # out, audio out. Only for the cost estimate in the logs.
@@ -42,12 +41,32 @@ PRICES_PER_MILLION = {
 }
 
 
-def truncation(token_limit: int) -> dict:
-    return {
-        "type": "retention_ratio",
-        "retention_ratio": 0.8,
-        "token_limits": {"post_instructions": token_limit},
-    }
+async def trim_context(agent, response, token_limit: int) -> None:
+    """
+    Past `token_limit` input tokens, delete the oldest half of the session's
+    messages. The provider accepts truncation.token_limits but does not
+    enforce it (checked on gpt-realtime-2.1-mini, 2026-10-07), so this does.
+    Half at once, so the prompt cache restarts only every several turns;
+    deleting items does not otherwise break it.
+    """
+
+    usage = getattr(response, "usage", None)
+    tokens = getattr(usage, "input_tokens", None) or 0
+    if agent._connection is None or tokens <= token_limit:
+        return
+
+    drop = agent._item_ids[: len(agent._item_ids) // 2]
+    del agent._item_ids[: len(drop)]
+    for item_id in drop:
+        await agent._connection.conversation.item.delete(item_id=item_id)
+    logger.info(
+        "%s %s trimmed its %d oldest messages (%d input tokens > %d)",
+        agent.log_label,
+        type(agent).__name__,
+        len(drop),
+        tokens,
+        token_limit,
+    )
 
 # Errors that only mean a request raced the provider's own state (e.g. a
 # cancel arriving just after the response finished): nothing to report.
@@ -143,6 +162,8 @@ class MainAgentOpenAI(MainAgent):
 
         # The last per-turn directive item, deleted before the next is sent.
         self._directive_item_id: str | None = None
+        # The session's messages, oldest first, for trim_context.
+        self._item_ids: list[str] = []
 
     def _build_instructions(self) -> str:
         return f"{self._persona}\n\nTask context:\n{self._task_knowledge}"
@@ -159,7 +180,6 @@ class MainAgentOpenAI(MainAgent):
             "type": "realtime",
             "output_modalities": ["audio"],
             "instructions": self._build_instructions(),
-            "truncation": truncation(MAIN_TOKEN_LIMIT),
             "audio": {
                 "input": {
                     "format": {
@@ -449,6 +469,14 @@ class MainAgentOpenAI(MainAgent):
             self._response_active = False
 
         match event.type:
+            case "conversation.item.added":
+                if event.item.type == "message":
+                    self._item_ids.append(event.item.id)
+
+            case "conversation.item.deleted":
+                with suppress(ValueError):
+                    self._item_ids.remove(event.item_id)
+
             case "response.created":
                 self._response_active = True
                 self._response_id = getattr(event.response, "id", None)
@@ -507,6 +535,7 @@ class MainAgentOpenAI(MainAgent):
 
             case "response.done":
                 log_usage(self, self._model, event.response)
+                await trim_context(self, event.response, MAIN_TOKEN_LIMIT)
                 status = getattr(event.response, "status", None)
                 # response.output_text.done/response.output_audio_transcript
                 # .done also fire, but response.done is the one signal
