@@ -11,6 +11,7 @@ Run with: python -m muca_server.run_server
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 from logging.handlers import TimedRotatingFileHandler
@@ -25,7 +26,13 @@ from .agents.conversation import DEFAULT_SILENCE_TIMEOUT_MS
 from .agents.openai import ChatCompletionsSummarizer, OpenAIAgentFactory, OpenAIEmbedder
 from .agents.openai.model_settings import ModelSettings
 from .cognition import CoalaPolicy
-from .cognition.loader import load_persona, load_strategy_store, load_task
+from .cognition.loader import (
+    load_course_schedule,
+    load_knowledge,
+    load_persona,
+    load_strategy_store,
+    load_task,
+)
 from .cognition.memory.sqlite import (
     SqliteEpisodicStore,
     SqliteSnapshotStore,
@@ -33,6 +40,8 @@ from .cognition.memory.sqlite import (
 )
 from .main import create_app
 from .sessions.session_components_factory import DefaultSessionComponentsFactory
+
+logger = logging.getLogger(__name__)
 
 TASK_ID = "general_moderation"
 # participation_equality_voice deliberately left out: voice is mention-only
@@ -66,6 +75,20 @@ def build_app():
     main_persona = load_persona("main_default")
     intervention_persona = load_persona("intervention_default")
     task_knowledge = load_task(TASK_ID)
+    # The course material and project schedule, for the main agent only.
+    course_knowledge = load_knowledge()
+    course_schedule = load_course_schedule()
+    # Which prompt a reply came from, for the logs: changes with any edit to
+    # the persona, the task or the course material.
+    logger.info(
+        "Main prompt version %s (persona main_default, task %s, %d chars of "
+        "course material)",
+        hashlib.sha256(
+            "\n".join([main_persona, task_knowledge, course_knowledge]).encode()
+        ).hexdigest()[:12],
+        TASK_ID,
+        len(course_knowledge),
+    )
 
     # One SQLite file per conversation_id, not one shared file -- e.g. each
     # of a deployment's Discord channels (channel/instance scoping) gets
@@ -93,6 +116,7 @@ def build_app():
         intervention_persona=intervention_persona,
         task_knowledge=task_knowledge,
         models=model_settings,
+        main_knowledge=course_knowledge,
     )
 
     # Shared across every conversation's store: one client, same as the
@@ -117,6 +141,7 @@ def build_app():
             summarizer=summarizer,
             embedder=embedder,
             assistant_name=ASSISTANT_NAME,
+            schedule=course_schedule,
         )
 
     components_factory = DefaultSessionComponentsFactory(

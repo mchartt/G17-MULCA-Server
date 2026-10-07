@@ -32,9 +32,13 @@ class OpenAIAgentFactory:
         intervention_persona: str,
         task_knowledge: str,
         models: ModelSettings,
+        main_knowledge: str = "",
     ) -> None:
         self._client = client
         self._models = models
+        # Course material for the main agent only: the observer judges
+        # whether to speak, it doesn't answer questions about the course.
+        self._main_knowledge = main_knowledge
         self._strategies = strategies
         self._main_persona = main_persona
         self._intervention_persona = intervention_persona
@@ -48,7 +52,11 @@ class OpenAIAgentFactory:
             options=options,
             client=self._client,
             persona=self._main_persona,
-            task_knowledge=self._task_knowledge,
+            task_knowledge=(
+                f"{self._task_knowledge}\n\nCourse material:\n{self._main_knowledge}"
+                if self._main_knowledge
+                else self._task_knowledge
+            ),
             model=options.model or self._models.main,
         )
 

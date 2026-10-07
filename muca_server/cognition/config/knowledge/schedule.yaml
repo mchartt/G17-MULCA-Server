@@ -1,0 +1,34 @@
+# The project-phase schedule. Rendered into the main agent's instructions
+# (course_schedule.render_schedule), and used to tell it on every reply which
+# deliverable is next for each group (course_schedule.next_deliverables).
+# Only these deliverables are tracked; later deadlines are not the
+# assistant's to announce.
+title: Project schedule (AUI 2026/27)
+header: "Type: normative · Version: v1 (2026-10-07) · Source: AUI 2026/27 project-phase agenda, from the teaching team"
+timezone: Europe/Rome
+
+# Weekly tutoring slots.
+groups:
+  A: Mondays 14:30-16:00
+  B: Wednesdays 08:30-10:00
+
+events:
+  - date: 2026-10-07
+    what: "08:30-10:00, presentation and discussion of project assignments; Q&A with tutors; PROJECT WORK STARTS"
+  - date: 2026-10-19
+    what: autonomous project work (no tutoring)
+  - date: 2026-10-21
+    what: suspended (Master graduation day)
+
+# Each is due at the tutoring of each group, on these dates.
+deliverables:
+  - what: initial user requirements analysis; review of the state of the art related to your project (academic literature & market products)
+    due: {A: 2026-10-12, B: 2026-10-14}
+  - what: initial UX design (with scenarios)
+    due: {A: 2026-10-26, B: 2026-10-28}
+  - what: refined UX design; technology requirements and feasibility analysis
+    due: {A: 2026-11-02, B: 2026-11-04}
+
+# After the last dated deliverable.
+then: initial prototyping, at the following tutoring
+untracked: Later deliverables and deadlines exist but are not tracked here; for those, refer students to the teaching team.
