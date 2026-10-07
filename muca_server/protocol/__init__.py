@@ -29,6 +29,7 @@ from .outgoing import (
     OutgoingMessage,
     OutgoingProtocolMessage,
     StateUpdateMessage,
+    UsageMessage,
     serialize_outgoing_message,
 )
 
@@ -43,6 +44,7 @@ __all__ = [
     "DisconnectMessage",
     "EndSession",
     "ErrorMessage",
+    "UsageMessage",
     "IncomingMessage",
     "IncomingProtocolMessage",
     "InterruptMessage",

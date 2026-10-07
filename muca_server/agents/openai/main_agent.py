@@ -19,7 +19,7 @@ from ...audio import AudioChunk
 from ...audio.pcm import float32_to_pcm16, pcm16_to_float32, resample_float32
 from ..main_agent import MainAgent, MainAgentEvent
 from ..options import AgentCapabilities, MainAgentOptions
-from ...usage_report import UsageTracker
+from ...usage_report import UsageTracker, usage_sink
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +34,15 @@ MAX_OUTPUT_TOKENS = 4096
 MAIN_TOKEN_LIMIT = 24_000
 
 # Per 1M tokens: text in, cached text in, audio in, cached audio in, text
-# out, audio out. Only for the cost estimate in the logs.
+# out, audio out. The cost estimate behind the logs, the cost report and
+# the `usage` events a client limits spending on (OpenAI pricing page,
+# 2026-10-07).
 PRICES_PER_MILLION = {
     "gpt-realtime": (4.0, 0.4, 32.0, 0.4, 16.0, 64.0),
     "gpt-realtime-2.1-mini": (0.6, 0.06, 10.0, 0.3, 2.4, 20.0),
+    TRANSCRIPTION_MODEL: (2.5, 0.0, 2.5, 0.0, 10.0, 0.0),
+    SUMMARY_MODEL: (2.5, 1.25, 0.0, 0.0, 10.0, 0.0),
+    "text-embedding-3-small": (0.02, 0.0, 0.0, 0.0, 0.0, 0.0),
 }
 
 
@@ -164,6 +169,8 @@ class MainAgentOpenAI(MainAgent):
         self._directive_item_id: str | None = None
         # The session's messages, oldest first, for trim_context.
         self._item_ids: list[str] = []
+        # Set by a client's session.update: answer every turn in text.
+        self._text_only = False
 
     def _build_instructions(self) -> str:
         return f"{self._persona}\n\nTask context:\n{self._task_knowledge}"
@@ -269,12 +276,29 @@ class MainAgentOpenAI(MainAgent):
             self._connection = None
 
     async def _update_session(self, session: dict) -> None:
-        # Only the instructions: the rest of the session (turn detection,
-        # audio formats, transcription) is what the server's turn taking
-        # relies on, and a client's own often uses older field names.
-        ignored = sorted(set(session) - {"instructions", "type"})
+        # Only the instructions and the reply modality: the rest of the
+        # session (turn detection, audio formats, transcription) is what the
+        # server's turn taking relies on, and a client's own often uses
+        # older field names.
+        modalities_key = next(
+            (k for k in ("output_modalities", "modalities") if k in session),
+            None,
+        )
+        ignored = sorted(
+            set(session) - {"instructions", "type", modalities_key}
+        )
         if ignored:
             logger.info("%s ignoring session fields %s", self.log_label, ignored)
+
+        # Without "audio" every reply is text, spoken turns included (e.g. a
+        # client keeping its spending down); listening is unchanged.
+        if modalities_key is not None:
+            self._text_only = "audio" not in (session[modalities_key] or [])
+            logger.info(
+                "%s main agent replies in %s",
+                self.log_label,
+                "text only" if self._text_only else "the turn's own medium",
+            )
 
         instructions = session.get("instructions")
         if not instructions or self._connection is None:
@@ -321,6 +345,9 @@ class MainAgentOpenAI(MainAgent):
     ) -> None:
         if self._connection is None:
             return
+
+        if self._text_only:
+            output_modality = "text"
 
         # Pushed as an item, not folded into session.instructions -- a
         # session.update there would replace (not merge with) the
@@ -528,6 +555,22 @@ class MainAgentOpenAI(MainAgent):
                 await self._stream_text(event.delta, modality="audio")
 
             case "conversation.item.input_audio_transcription.completed":
+                usage = getattr(event, "usage", None)
+                if getattr(usage, "type", None) == "tokens":
+                    details = usage.input_token_details
+                    record_cost(
+                        "transcription",
+                        TRANSCRIPTION_MODEL,
+                        (
+                            getattr(details, "text_tokens", 0) or 0,
+                            0,
+                            getattr(details, "audio_tokens", 0) or 0,
+                            0,
+                            usage.output_tokens or 0,
+                            0,
+                        ),
+                        tracker=self._usage_tracker,
+                    )
                 await self._stream_transcript(
                     event.item_id,
                     event.transcript,
@@ -599,8 +642,8 @@ def error_code(error) -> str | None:
 
 def log_usage(agent, model: str, response) -> float:
     """
-    Log one response's tokens and estimated cost, and add the cost to the
-    agent's running total. Returns the cost.
+    Price one Realtime response's tokens (see record_cost) and add the cost
+    to the agent's running total. Returns the cost.
     """
 
     usage = getattr(response, "usage", None)
@@ -621,6 +664,25 @@ def log_usage(agent, model: str, response) -> float:
         count(output, "text_tokens"),
         count(output, "audio_tokens"),
     )
+    kind = "main" if "Main" in type(agent).__name__ else "intervention"
+    return record_cost(kind, model, tokens, agent=agent)
+
+
+def record_cost(
+    kind: str,
+    model: str,
+    tokens: tuple[int, int, int, int, int, int],
+    *,
+    agent=None,
+    tracker: UsageTracker | None = None,
+) -> float:
+    """
+    Price one OpenAI call -- tokens as (text in, cached text in, audio in,
+    cached audio in, text out, audio out) -- log it, add it to the cost
+    report, and send it to the session's client as a `usage` event. `kind`
+    is what made the call: "main", "intervention", "transcription",
+    "summary" or "embedding". Returns the cost.
+    """
 
     prices = PRICES_PER_MILLION.get(model)
     cost = (
@@ -628,26 +690,36 @@ def log_usage(agent, model: str, response) -> float:
         if prices
         else 0.0
     )
-    agent.cost_usd += cost
+    sink = usage_sink.get()
+
+    if agent is not None:
+        agent.cost_usd += cost
+        label = agent.log_label
+        instance = getattr(agent, "instance_label", "") or agent.log_label
+        tracker = getattr(agent, "_usage_tracker", None)
+        total = f", session ${agent.cost_usd:.4f}"
+    else:
+        label = instance = sink[0] if sink else ""
+        total = ""
 
     logger.info(
         "%s %s usage (%s): in text=%d+%d cached, audio=%d+%d cached; "
-        "out text=%d, audio=%d; cost $%.4f%s, session $%.4f",
-        agent.log_label,
-        type(agent).__name__,
+        "out text=%d, audio=%d; cost $%.4f%s%s",
+        label,
+        type(agent).__name__ if agent is not None else kind,
         model,
         *tokens,
         cost,
         "" if prices else " (unknown model price)",
-        agent.cost_usd,
+        total,
     )
 
-    tracker = getattr(agent, "_usage_tracker", None)
     if tracker is not None:
-        agent_type = "main" if "Main" in type(agent).__name__ else "intervention"
-        instance = getattr(agent, "instance_label", "") or agent.log_label
-        tracker.record_usage(agent_type, instance, tokens, cost)
+        tracker.record_usage(kind, instance, tokens, cost)
         asyncio.create_task(tracker.maybe_alert())
+
+    if sink is not None:
+        asyncio.create_task(sink[1](kind, tokens, cost))
 
     return cost
 
@@ -709,9 +781,11 @@ class ChatCompletionsSummarizer:
         client: AsyncOpenAI,
         *,
         model: str = SUMMARY_MODEL,
+        usage_tracker: UsageTracker | None = None,
     ) -> None:
         self._client = client
         self._model = model
+        self._usage_tracker = usage_tracker
 
     async def summarize(
         self,
@@ -765,6 +839,16 @@ class ChatCompletionsSummarizer:
                 "json_schema": _MANAGEMENT_SCHEMA,
             },
         )
+
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            cached = getattr(usage.prompt_tokens_details, "cached_tokens", 0) or 0
+            record_cost(
+                "summary",
+                self._model,
+                (usage.prompt_tokens - cached, cached, 0, 0, usage.completion_tokens, 0),
+                tracker=self._usage_tracker,
+            )
 
         result = json.loads(response.choices[0].message.content)
         return (

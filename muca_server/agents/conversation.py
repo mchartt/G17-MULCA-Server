@@ -38,6 +38,7 @@ from ..protocol import (
     StateUpdateMessage,
     TextMessage,
     TriggerResponseMessage,
+    UsageMessage,
     UserTextMessage,
 )
 from .auxiliary_agent import AuxiliaryAgent
@@ -47,6 +48,7 @@ from .main_agent import MainAgent, MainAgentEvent, MainAgentState
 from .options import AuxiliaryAgentOptions, MainAgentOptions
 from .realtime_agent import RealtimeAgent
 from .turn import Turn
+from ..usage_report import usage_sink
 
 if TYPE_CHECKING:
     from ..sessions.session_state import SessionState
@@ -522,6 +524,9 @@ class Conversation:
                 self._has_conversation_id = True
 
             self._instance_label = message.bot_name or self._conversation_id
+            # Every provider call this session makes from here on reports
+            # its cost to this client (see usage_report.usage_sink).
+            usage_sink.set((self._instance_label, self._send_usage))
             self._is_private = message.is_dm
             self._linked_conversation_id = message.linked_conversation_id
             self._intervention_model = message.intervention_model
@@ -1622,6 +1627,21 @@ class Conversation:
                 is_answering=self.is_answering,
                 assistant_spoke_last=self.assistant_spoke_last,
                 clear_audio_queue=False,
+            )
+        )
+
+    async def _send_usage(self, kind: str, tokens: tuple, cost: float) -> None:
+        fresh_text, cached_text, fresh_audio, cached_audio, out_text, out_audio = tokens
+        await self._send(
+            UsageMessage(
+                agent=kind,
+                fresh_text=fresh_text,
+                cached_text=cached_text,
+                fresh_audio=fresh_audio,
+                cached_audio=cached_audio,
+                out_text=out_text,
+                out_audio=out_audio,
+                cost_usd=cost,
             )
         )
 
