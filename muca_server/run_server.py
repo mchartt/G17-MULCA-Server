@@ -65,12 +65,19 @@ def build_app():
     intervention_persona = load_persona("intervention_default")
     task_knowledge = load_task(TASK_ID)
 
+    agent_factory_kwargs = {}
+    if os.environ.get("MUCA_MAIN_MODEL"):
+        agent_factory_kwargs["main_model"] = os.environ["MUCA_MAIN_MODEL"]
+    if os.environ.get("MUCA_INTERVENTION_MODEL"):
+        agent_factory_kwargs["intervention_model"] = os.environ["MUCA_INTERVENTION_MODEL"]
+
     agent_factory = OpenAIAgentFactory(
         client=client,
         strategies=strategy_store,
         main_persona=main_persona,
         intervention_persona=intervention_persona,
         task_knowledge=task_knowledge,
+        **agent_factory_kwargs,
     )
 
     # One SQLite file per conversation_id, not one shared file -- e.g. each
