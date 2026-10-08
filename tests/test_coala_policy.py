@@ -83,7 +83,7 @@ def make_policy(**kwargs) -> tuple[CoalaPolicy, FakePort]:
 
 
 def make_utterance(
-    speaker_id=1, name="Ada", content="hello", modality="text"
+    speaker_id=1, name="Ada", content="hello", modality="text", is_wake_phrase=False
 ) -> Utterance:
     return Utterance(
         speaker_id=speaker_id,
@@ -91,6 +91,7 @@ def make_utterance(
         content=content,
         timestamp_ms=0,
         modality=modality,
+        is_wake_phrase=is_wake_phrase,
     )
 
 
@@ -105,6 +106,23 @@ async def test_a_forced_mention_bypasses_the_observers():
     assert consult is False
     assert len(port.instructions) == 1
     assert "Forced intervention" in port.instructions[0]
+
+
+async def test_a_wake_phrase_gets_a_fixed_acknowledgement_not_the_observers():
+    # push_to_talk only: conversation.py already opened the listening
+    # window itself before this is ever called (that state lives there,
+    # not in CoalaPolicy) -- this just confirms the fixed "Listening"
+    # acknowledgement fires instead of a normal judged reply.
+    policy, port = make_policy()
+    await policy.start(port)
+
+    consult = await policy.on_utterance(
+        make_utterance(content="hey assistant", modality="audio", is_wake_phrase=True),
+    )
+
+    assert consult is False
+    assert len(port.instructions) == 1
+    assert "Listening" in port.instructions[0]
 
 
 async def test_an_ordinary_utterance_asks_the_observers():

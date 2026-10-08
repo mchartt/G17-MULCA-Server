@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import binascii
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from contextlib import suppress
@@ -75,6 +76,36 @@ TRANSCRIPT_WAIT_SECONDS = 3.0
 # assistant takes its turn anyway.
 PLAYBACK_START_TIMEOUT_SECONDS = 3.0
 
+# push_to_talk mode, voice only: a spoken trigger phrase that opens the
+# listening window, as an alternative to the button/`/listen` -- entirely
+# hands-free, no UI or text channel involved at all (preserving the voice
+# modality this mode exists to study, not just a UX convenience). Plain
+# regex, not a model's semantic judgement -- exactly the kind of unreliable
+# call this mode exists to avoid making continuously. Deliberately not
+# "MULCA": that specific word is the one already confirmed (this session)
+# to transcribe unreliably -- "assistant" is a cleaner, more distinct
+# anchor, closer to how "Hey Siri"/"OK Google" were chosen for the same
+# reason. assist\w* catches "assistant"/"assistent"/plurals etc. without
+# needing full phonetic matching.
+WAKE_PHRASE_PATTERN = re.compile(
+    # "hei"/"hej" are real transcription variants of "hey" confirmed live
+    # this session (not a guess) -- a non-English speaker's "hey" often
+    # comes back as one of these from the transcriber.
+    r"\b(hey|hei|hej|hi|hello|ok|okay)\b[\s,]{0,20}\bassist\w*\b",
+    re.IGNORECASE,
+)
+
+# Unlike the button/`/listen` (a pure toggle, open until pressed again --
+# see arm_listening), a wake phrase only ever opens/extends a window: there
+# is no spoken "stop" phrase, so it has to close itself. Restarted on
+# every judged turn while open (speaking again extends it), same shape as
+# the timer this mode used to always have before it became a pure toggle.
+WAKE_PHRASE_SILENCE_MS = 5_000
+
+
+def _matches_wake_phrase(transcript: str) -> bool:
+    return WAKE_PHRASE_PATTERN.search(transcript) is not None
+
 # Unity's receive loop reads 16 KB per frame; 3000 float32 samples, base64
 # encoded, keep a state_update well under that.
 MAX_SAMPLES_PER_FRAME = 3000
@@ -128,13 +159,13 @@ class Conversation:
         self._model_settings = model_settings
         self._usage_tracker = usage_tracker
         # push_to_talk only; ambient (the default) is entirely unaffected.
-        # A pure toggle, no auto-close timer -- found live that a timer
-        # alongside manual open/close fought the manual control (a window
-        # could close itself mid-conversation well before the next press),
-        # which felt like the toggle was broken rather than working as
-        # designed.
+        # The button/`/listen` toggle has no auto-close timer -- found live
+        # that one alongside manual open/close fought the manual control.
+        # The wake phrase is different: there's no spoken "stop", so it
+        # needs one (WAKE_PHRASE_SILENCE_MS) to close itself.
         self._listening_mode = listening_mode
         self._listening_window_open = False
+        self._wake_phrase_timer: asyncio.Task[None] | None = None
         if model_settings is not None:
             model_settings.watch(outbound_queue)
         # This session's own models, from the handshake; empty means the
@@ -590,6 +621,11 @@ class Conversation:
         if self._listening_mode != "push_to_talk":
             return
 
+        # A manual press is authoritative either way -- cancel any pending
+        # wake-phrase auto-close so it can't later flip this back off
+        # behind the user's back after they explicitly took control of it.
+        self._cancel_wake_phrase_timer()
+
         self._listening_window_open = not self._listening_window_open
         logger.info(
             "%s listening window %s (press)",
@@ -597,6 +633,48 @@ class Conversation:
             "opened" if self._listening_window_open else "closed",
         )
         await self._send(ListeningStateMessage(open=self._listening_window_open))
+
+    async def _handle_wake_phrase(self, speaker: int) -> None:
+        """
+        push_to_talk, voice only: "hey assistant" (WAKE_PHRASE_PATTERN)
+        opens (or extends) the listening window entirely hands-free, no UI
+        or text channel involved. Unlike the button, there's no spoken
+        "stop" -- it closes itself after WAKE_PHRASE_SILENCE_MS of silence,
+        the same way this mode's window used to always behave before the
+        button became a pure toggle.
+        """
+
+        self._listening_window_open = True
+        self._cancel_wake_phrase_timer()
+        task = asyncio.create_task(self._close_window_after_wake_phrase_silence())
+        self._wake_phrase_timer = task
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        logger.info(
+            "%s listening window opened (wake phrase, %s)",
+            self._conversation_id,
+            self._username(speaker),
+        )
+        await self._send(ListeningStateMessage(open=True))
+
+    def _cancel_wake_phrase_timer(self) -> None:
+        if self._wake_phrase_timer is not None:
+            self._wake_phrase_timer.cancel()
+            self._wake_phrase_timer = None
+
+    async def _close_window_after_wake_phrase_silence(self) -> None:
+        try:
+            await asyncio.sleep(WAKE_PHRASE_SILENCE_MS / 1000)
+        except asyncio.CancelledError:
+            return
+
+        self._listening_window_open = False
+        logger.info(
+            "%s listening window closed (%dms silence after wake phrase)",
+            self._conversation_id,
+            WAKE_PHRASE_SILENCE_MS,
+        )
+        await self._send(ListeningStateMessage(open=False))
 
     async def disconnect_agent(
         self,
@@ -840,6 +918,12 @@ class Conversation:
             self._ask_observers_to_consider(speaker)
             return
 
+        is_wake_phrase = self._listening_mode == "push_to_talk" and _matches_wake_phrase(
+            transcript
+        )
+        if is_wake_phrase:
+            await self._handle_wake_phrase(speaker)
+
         # Found live: unlike a text message (_take_text_turn, above), a
         # voice turn's transcript was never actually forwarded to the
         # observers as explicit text -- they only ever "heard" the raw
@@ -865,6 +949,7 @@ class Conversation:
                 timestamp_ms=ended_at,
                 modality="audio",
                 always_reply=in_open_window,
+                is_wake_phrase=is_wake_phrase,
             )
         )
 

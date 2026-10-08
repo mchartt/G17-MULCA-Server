@@ -9,7 +9,7 @@ import asyncio
 from uuid import uuid4
 
 from muca_server.agents import AuxiliaryAgent, MainAgent, MainAgentOptions
-from muca_server.agents.conversation import Conversation
+from muca_server.agents.conversation import Conversation, _matches_wake_phrase
 from muca_server.audio import AudioChunk
 from muca_server.cognition import CoalaPolicy, InterventionSignal, Utterance
 from muca_server.cognition.strategies import Strategy, StrategyStore
@@ -338,3 +338,63 @@ async def test_ambient_mode_is_unaffected():
 
     await conversation.route_user_audio(audio(speaker=1))
     assert factory.auxiliary.audio_chunks_received == 1
+
+
+def test_wake_phrase_matching_is_deterministic_not_fuzzy_guessing():
+    # Anchored on "assist\w*" + a lead-in word -- not "MULCA" (confirmed
+    # this session to transcribe unreliably) and not a full phonetic/LLM
+    # judgement (confirmed this session to be inconsistent).
+    assert _matches_wake_phrase("hey assistant")
+    assert _matches_wake_phrase("Hey Assistant, could you help?")
+    assert _matches_wake_phrase("okay assistent")  # transcription near-miss
+    assert _matches_wake_phrase("hi assistants")  # plural
+    # "hei"/"hej" are real transcription variants of "hey" confirmed live
+    # this session, not a guess -- a non-English "hey" often comes back
+    # as one of these from the transcriber.
+    assert _matches_wake_phrase("Hei assistent.")
+    assert _matches_wake_phrase("Hej assistant")
+
+    assert not _matches_wake_phrase("hello there")
+    assert not _matches_wake_phrase("what do you think about assistants in general")
+    assert not _matches_wake_phrase("assistant")  # no lead-in word at all
+    assert not _matches_wake_phrase("hey chatbot")  # not the configured phrase
+    assert not _matches_wake_phrase("")
+
+
+async def test_the_wake_phrase_opens_the_window_hands_free():
+    conversation, _ = await make_conversation()
+    assert conversation._listening_window_open is False
+
+    await conversation._handle_wake_phrase(speaker=1)
+
+    assert conversation._listening_window_open is True
+
+
+async def test_the_wake_phrase_window_closes_itself_after_silence(monkeypatch):
+    import muca_server.agents.conversation as conversation_module
+
+    monkeypatch.setattr(conversation_module, "WAKE_PHRASE_SILENCE_MS", 20)
+    conversation, _ = await make_conversation()
+
+    await conversation._handle_wake_phrase(speaker=1)
+    assert conversation._listening_window_open is True
+
+    await asyncio.sleep(0.05)
+    assert conversation._listening_window_open is False
+
+
+async def test_a_manual_press_cancels_a_pending_wake_phrase_timer(monkeypatch):
+    # Otherwise a stale wake-phrase timer could close a window the user
+    # just explicitly (re)opened with the button moments later.
+    import muca_server.agents.conversation as conversation_module
+
+    monkeypatch.setattr(conversation_module, "WAKE_PHRASE_SILENCE_MS", 20)
+    conversation, _ = await make_conversation()
+
+    await conversation._handle_wake_phrase(speaker=1)
+    await conversation.arm_listening(arm())  # manual close
+    assert conversation._listening_window_open is False
+
+    await conversation.arm_listening(arm())  # manual re-open
+    await asyncio.sleep(0.05)
+    assert conversation._listening_window_open is True  # not auto-closed

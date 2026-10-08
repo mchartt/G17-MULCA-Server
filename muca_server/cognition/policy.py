@@ -359,6 +359,22 @@ class CoalaPolicy:
         self._pending_utterance = utterance
         self._turn_done.clear()
 
+        if utterance.is_wake_phrase:
+            # conversation.py already opened the listening window itself
+            # (that state lives there, not here) -- this is just the fixed
+            # spoken acknowledgement, same shape as a forced intervention,
+            # not a normal content reply to "hey assistant" itself.
+            wm.set_forced_context('Say exactly: "Listening." Nothing else.')
+            await port.instruct_main_agent(
+                self._render_prompt(
+                    wm,
+                    directive='Say exactly: "Listening." Nothing else.',
+                    port=port,
+                )
+            )
+            await self._finish_turn(path="forced", strategy_id=None)
+            return False
+
         forced = check_forced_intervention(utterance)
         if forced is None:
             return True
