@@ -597,6 +597,18 @@ class CoalaPolicy:
         interrupted: bool,
     ) -> None:
         wm = self._wm
+        # The one place this fires for both modalities (conversation.py
+        # calls it uniformly whether the reply streamed as text or spoken
+        # audio) -- found live, investigating what actually triggered a
+        # reply had no way to see what MULCA actually said, only the
+        # directive sent to it and the strategy decision, never its own
+        # output.
+        logger.info(
+            "%s MULCA said (interrupted=%s): %r",
+            wm.conversation_id if wm is not None else "?",
+            interrupted,
+            text,
+        )
         if wm is not None and text:
             wm.append_history(
                 Utterance(
