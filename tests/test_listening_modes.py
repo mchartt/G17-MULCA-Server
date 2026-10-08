@@ -660,9 +660,11 @@ def test_dismissal_matching():
         "muca stai zitto",
         "basta così mulca",
         "stop mulca",
-        "go to sleep",
+        "go to sleep",  # redundant with bare "sleep" below, kept as a check
         "sleep",
         "mulca, sleep",
+        "vai a dormire mulca",  # redundant with bare "dormire" below
+        "dormire",
         "end session",
         "end the session",
         "mulca, end session",
