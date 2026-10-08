@@ -360,19 +360,18 @@ class CoalaPolicy:
             # (that state lives there, not here) -- this is the forced
             # directive, same shape as a forced intervention. Two cases:
             # the trigger word alone ("assistant?") gets a brief
-            # acknowledgement and nothing else; a real question in the same
-            # breath ("hey mulca, could you define the UNG diagram") gets
-            # that acknowledgement leading a real answer in the same reply,
-            # not a bare acknowledgement with no answer until a second,
-            # separate utterance. Described, not scripted -- a fixed exact
-            # phrase ("Say exactly: Hi.") got repetitive and robotic fast;
-            # a short, natural acknowledgement in its own words serves the
-            # same purpose (confirm the window is open) without that.
+            # acknowledgement and nothing else, since there's nothing yet
+            # to answer; a real question in the same breath ("hey mulca,
+            # could you define the UNG diagram") just gets answered
+            # directly -- found live, explicitly asking for an
+            # acknowledgement here too ("Briefly acknowledge... then
+            # answer") produced a stilted "I heard you, ..." preamble
+            # before every answer. A real question needs no acknowledgement
+            # at all; just answering it already shows it was heard.
             directive = (
-                "Briefly acknowledge in your own words that you heard "
-                "them (a word or two, not a fixed phrase), then directly "
-                "and helpfully answer what they just asked, in the same "
-                "reply."
+                "Directly and helpfully answer what they just asked -- no "
+                "need to acknowledge or confirm you heard them first, just "
+                "answer."
                 if utterance.wake_phrase_has_question
                 else "Briefly acknowledge in your own words that you're "
                 "listening and ready (a word or two, not a fixed phrase). "

@@ -161,12 +161,14 @@ async def test_a_wake_phrase_gets_an_acknowledgement_not_the_observers():
     assert "your own words" in port.instructions[0].lower()
 
 
-async def test_a_wake_phrase_with_a_question_in_the_same_breath_gets_both():
+async def test_a_wake_phrase_with_a_question_in_the_same_breath_just_gets_answered():
     # "hey mulca, could you define the UNG diagram" -- not just the bare
-    # trigger word. The main agent is asked to lead with the
-    # acknowledgement and then actually answer, in the same reply, rather
-    # than the acknowledgement alone with the question left unanswered
-    # until a second, separate utterance.
+    # trigger word. Found live: explicitly asking for an acknowledgement
+    # here too (alongside the answer) produced a stilted "I heard you, ..."
+    # preamble before every single answer -- a real question just gets
+    # answered directly, no acknowledgement needed at all, unlike the bare
+    # trigger-word-alone case (which still gets one, since there's nothing
+    # yet to answer).
     policy, port = make_policy()
     await policy.start(port)
 
@@ -181,7 +183,8 @@ async def test_a_wake_phrase_with_a_question_in_the_same_breath_gets_both():
 
     assert consult is False
     assert len(port.instructions) == 1
-    assert "acknowledge" in port.instructions[0].lower()
+    assert "no need to acknowledge" in port.instructions[0].lower()
+    assert "answer" in port.instructions[0].lower()
     assert "answer" in port.instructions[0].lower()
 
 
