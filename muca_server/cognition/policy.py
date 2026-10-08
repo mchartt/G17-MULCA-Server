@@ -383,9 +383,31 @@ class CoalaPolicy:
             if allowed_for_modality != all_ids
             else ""
         )
+        # Found live: asked (in an open listening window) to "look up the
+        # current price of gas," the observer produced no tool call at
+        # all -- it judged respond_when_addressed's strict address
+        # criteria, found no name/mention, and (never having been told a
+        # reply is already guaranteed here regardless) concluded nothing
+        # should fire, silently dropping needs_web_search along with it.
+        # always_reply's own trigger_description says to fire it anyway,
+        # but only if the observer gets that far in its own reasoning --
+        # spelling the guarantee out here, at the point every strategy
+        # catalog entry is weighed, removes the need to infer it.
+        window_note = (
+            " You are inside an open listening window (the user pressed "
+            "to talk, or said your wake phrase): a reply is already "
+            "guaranteed for this turn no matter what you decide, so "
+            "'nothing applies' is not a real option -- if no more "
+            "specific strategy fits, select always_reply, and still set "
+            "needs_history/needs_web_search whenever they apply, exactly "
+            "as you would for any other strategy."
+            if utterance.always_reply
+            else ""
+        )
         await port.tell_observers(
             "Current trigger variables: "
-            f"{json.dumps(wm.trigger_variables)}.{cooldown_note}{modality_note}"
+            f"{json.dumps(wm.trigger_variables)}.{cooldown_note}"
+            f"{modality_note}{window_note}"
         )
 
         # A decision -- forced or observer-judged -- is now pending for

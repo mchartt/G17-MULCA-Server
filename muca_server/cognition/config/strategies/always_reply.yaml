@@ -11,7 +11,12 @@ trigger_description: >
   what was just said, the same way you would if directly asked.
   If the message asks about a specific detail from earlier in the
   conversation, also set needs_history so you can answer accurately rather
-  than guessing from what's currently visible to you.
+  than guessing from what's currently visible to you. If it asks for
+  current information from outside the conversation (e.g. "look up",
+  "what's the latest", prices, news, anything you'd otherwise have to
+  guess at or say you can't check), also set needs_web_search and
+  web_search_query -- do not fire this strategy alone and let the reply
+  hedge or guess when a real search is what the question actually needs.
 # Deliberately no cooldown_messages: a listening window is a short,
 # solicited back-and-forth (the user pressed the button), not something
 # that should feel throttled turn to turn the way an unsolicited nudge
