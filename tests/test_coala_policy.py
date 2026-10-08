@@ -179,12 +179,6 @@ async def test_a_wake_phrase_with_a_question_in_the_same_breath_gets_both():
     assert len(port.instructions) == 1
     assert "Hi" in port.instructions[0]
     assert "answer" in port.instructions[0].lower()
-    # The main agent never otherwise sees a voice turn as text (only an
-    # observer's own prompt_fragment normally carries attribution along) --
-    # this forced directive must embed it explicitly, same as
-    # check_forced_intervention's own directive does.
-    assert "Ada" in port.instructions[0]
-    assert "could you define the UNG diagram" in port.instructions[0]
 
 
 async def test_an_ordinary_utterance_asks_the_observers():
@@ -283,52 +277,6 @@ async def test_a_spoken_turns_mention_based_strategy_is_unaffected():
 
     assert len(port.instructions) == 1
     assert "Answer them." in port.instructions[0]
-
-
-async def test_a_judged_voice_reply_also_gets_speaker_attribution():
-    # A voice turn's main agent is never otherwise given this utterance as
-    # text at all -- only an observer's own prompt_fragment might mention
-    # who said what, not guaranteed -- unlike a text turn, which it always
-    # sees verbatim via send_text (covered just below).
-    policy, port = make_policy()
-    await policy.start(port)
-
-    await policy.on_utterance(
-        make_utterance(name="Grace", content="what time is the meeting", modality="audio"),
-    )
-    await policy.on_intervention_signal(
-        object(),
-        InterventionSignal(
-            strategy_id="respond_when_addressed",
-            prompt_fragment="they asked about the meeting time",
-        ),
-    )
-
-    assert len(port.instructions) == 1
-    assert "Grace" in port.instructions[0]
-    assert "what time is the meeting" in port.instructions[0]
-
-
-async def test_a_judged_text_reply_does_not_duplicate_the_attribution():
-    # Redundant here: _take_text_turn already sends the main agent the
-    # exact "speaker: text" tag verbatim via send_text, unlike a voice
-    # turn.
-    policy, port = make_policy()
-    await policy.start(port)
-
-    await policy.on_utterance(
-        make_utterance(name="Grace", content="what time is the meeting", modality="text"),
-    )
-    await policy.on_intervention_signal(
-        object(),
-        InterventionSignal(
-            strategy_id="respond_when_addressed",
-            prompt_fragment="they asked about the meeting time",
-        ),
-    )
-
-    assert len(port.instructions) == 1
-    assert "Grace said:" not in port.instructions[0]
 
 
 async def test_a_typed_turn_is_unaffected_by_the_voice_only_veto():

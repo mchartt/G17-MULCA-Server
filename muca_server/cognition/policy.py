@@ -365,17 +365,9 @@ class CoalaPolicy:
             # not a bare "Hi." with no answer until a second, separate
             # utterance.
             directive = (
-                # Named and quoted explicitly, same pattern as
-                # check_forced_intervention's own directive below -- a
-                # voice turn's main agent is never otherwise given this
-                # utterance as text (only an observer's own prompt_fragment
-                # normally carries that along, derived from having seen
-                # it), so without this it has only its own live hearing of
-                # the audio to go on for who asked what.
-                f'{utterance.label()} just asked, in the same breath as '
-                f'addressing you: "{utterance.content}". Begin your reply '
-                'with exactly "Hi." as its own sentence, then directly and '
-                "helpfully answer that, in the same reply."
+                'Begin your reply with exactly "Hi." as its own '
+                "sentence, then directly and helpfully answer what they "
+                "just asked, in the same reply."
                 if utterance.wake_phrase_has_question
                 else 'Say exactly: "Hi." Nothing else.'
             )
@@ -573,24 +565,6 @@ class CoalaPolicy:
             if strategy is not None
             else prompt_fragment or ""
         )
-
-        # A voice turn's main agent is never otherwise given this utterance
-        # as text at all -- only an observer's own prompt_fragment might
-        # mention who said what, and only if it happens to ("high-level
-        # rationale/target only", not a guaranteed quote) -- unlike a text
-        # turn, which the main agent always sees verbatim via send_text
-        # (_take_text_turn). Make it explicit here too, same pattern as
-        # check_forced_intervention's own directive, rather than relying on
-        # the main agent's own live hearing of the raw audio (confirmed
-        # unreliable) or the observer's paraphrase (not guaranteed).
-        if (
-            self._pending_utterance is not None
-            and self._pending_utterance.modality == "audio"
-        ):
-            directive = (
-                f"{self._pending_utterance.label()} said: "
-                f'"{self._pending_utterance.content}". {directive}'
-            )
 
         await port.instruct_main_agent(
             self._render_prompt(wm, directive=directive, port=port),
