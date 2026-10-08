@@ -24,6 +24,17 @@ from ...usage_report import UsageTracker, usage_sink
 logger = logging.getLogger(__name__)
 
 
+# Below this many words, a substring match against the bias prompt is
+# meaningless rather than suspicious -- found live: a bare "MULCA." or
+# "assistant" is *always* a substring of the prompt (it contains those
+# exact words), so without a floor this discarded genuine short wake-word
+# attempts as if they were echoes, not just the real multi-sentence echo
+# it was built to catch. Picked well above the 1-3 words a real address
+# ("MULCA", "Hey MULCA", "assistant") normally is, and well below the
+# ~12-word sentence the confirmed real echoes actually were.
+MIN_PROMPT_ECHO_WORDS = 6
+
+
 def _looks_like_prompt_echo(transcript: str, prompt: str) -> bool:
     """
     Whether `transcript` looks like the ASR model echoing its own
@@ -36,7 +47,9 @@ def _looks_like_prompt_echo(transcript: str, prompt: str) -> bool:
     Cheap, deterministic string containment -- no model call, no
     embeddings: dedupe consecutive repeated sentences (the exact pattern
     seen live), then check whether what's left is substantially the bias
-    prompt itself.
+    prompt itself. Requires MIN_PROMPT_ECHO_WORDS words before considering
+    it at all, so a short, genuine wake-word utterance that merely shares
+    a word with the prompt is never mistaken for echoing it.
     """
 
     normalized_prompt = " ".join(prompt.lower().split())
@@ -48,7 +61,47 @@ def _looks_like_prompt_echo(transcript: str, prompt: str) -> bool:
             deduped.append(sentence)
     normalized_transcript = ". ".join(deduped)
 
-    return bool(normalized_transcript) and normalized_transcript in normalized_prompt
+    if len(normalized_transcript.split()) < MIN_PROMPT_ECHO_WORDS:
+        return False
+
+    return normalized_transcript in normalized_prompt
+
+
+# A rough "don't trust this as real speech" cutoff on the ASR's own
+# per-token confidence. Hallucinated transcripts (invented over
+# near-silent/noisy audio -- confirmed live: coherent, fluent sentences
+# ("I'm reading a book.") generated from pure kitchen noise, not just the
+# bias-prompt echo _looks_like_prompt_echo already catches) are typically
+# produced with much lower confidence than genuine transcription, even
+# when fluent. A starting point, not calibrated against a real sample yet
+# -- tune once there's confirmed-hallucination data to compare against
+# confirmed-genuine (including quiet/accented) speech.
+MIN_AVERAGE_LOGPROB = -1.5
+
+
+def _average_logprob(logprobs) -> float | None:
+    """None if there's nothing to average (not every provider response
+    includes logprobs at all)."""
+
+    if not logprobs:
+        return None
+
+    return sum(entry.logprob for entry in logprobs) / len(logprobs)
+
+
+def _looks_like_low_confidence_transcription(logprobs) -> bool:
+    """
+    Whether the ASR's own per-token confidence for this transcript is low
+    enough to doubt it's real speech, rather than something hallucinated.
+    Unlike _looks_like_prompt_echo (one specific known string), this
+    catches hallucinated content with no relation to any prompt text at
+    all -- the general case, at the cost of needing a threshold rather
+    than an exact match. None/empty logprobs (not every provider response
+    includes them) means no signal either way, not a reason to discard.
+    """
+
+    average = _average_logprob(logprobs)
+    return average is not None and average < MIN_AVERAGE_LOGPROB
 
 
 DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1-mini"
@@ -227,6 +280,11 @@ class MainAgentOpenAI(MainAgent):
             "type": "realtime",
             "output_modalities": ["audio"],
             "instructions": self._build_instructions(),
+            # Otherwise a completed-transcription event's own logprobs is
+            # always None, silently disabling
+            # _looks_like_low_confidence_transcription entirely -- it has
+            # nothing to check against.
+            "include": ["item.input_audio_transcription.logprobs"],
             "audio": {
                 "input": {
                     "format": {
@@ -606,10 +664,38 @@ class MainAgentOpenAI(MainAgent):
                         tracker=self._usage_tracker,
                     )
                 transcript = event.transcript
+                # Unconditional, regardless of outcome -- so the raw
+                # per-transcript average can actually be reviewed against
+                # real confirmed-hallucination/confirmed-genuine examples,
+                # to judge whether MIN_AVERAGE_LOGPROB is a sane cutoff,
+                # not just see the ones that already crossed it.
+                average_logprob = _average_logprob(getattr(event, "logprobs", None))
+                logger.debug(
+                    "%s transcript %r has average logprob %s",
+                    self.log_label,
+                    transcript,
+                    average_logprob,
+                )
                 if _looks_like_prompt_echo(transcript, self._transcription_prompt()):
                     logger.warning(
                         "%s discarded a transcript that looked like a "
                         "prompt echo, not real speech: %r",
+                        self.log_label,
+                        transcript,
+                    )
+                    transcript = ""
+                elif average_logprob is not None and average_logprob < MIN_AVERAGE_LOGPROB:
+                    # -1.5 checked against a real live sample first (not
+                    # just picked): across a full test session, the only
+                    # confirmed-genuine utterance under this cutoff was a
+                    # wake-phrase attempt ("assistente", a mis-rendered
+                    # "assistant") -- every other sub-threshold transcript
+                    # was confirmed hallucinated. Accepting that one known
+                    # risk category for now; worth revisiting a
+                    # wake-phrase-specific exemption if it recurs.
+                    logger.warning(
+                        "%s discarded a low-confidence transcript, likely "
+                        "not real speech: %r",
                         self.log_label,
                         transcript,
                     )

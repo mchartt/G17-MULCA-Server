@@ -109,8 +109,15 @@ PLAYBACK_START_TIMEOUT_SECONDS = 3.0
 # transcription-unreliable word this phrase was built to avoid depending
 # on alone -- an extra alternative in an OR costs nothing and only adds
 # detection chances, it can't make "assistant"/"chatbot" matches worse.
+# "bot" added on request -- the transcription bias prompt already tells
+# the ASR this is a recognized way to address it ("...often addressed by
+# that name, 'assistant', or 'bot'"), but the wake phrase itself never
+# matched it. Unlike the other alternatives, this one is a real tradeoff
+# against the over-triggering investigation: "bot" alone is a much more
+# generic English fragment than "assistant"/"chatbot"/"mulca", so it adds
+# more false-positive surface than the others did.
 WAKE_PHRASE_PATTERN = re.compile(
-    r"\b(assist\w*|chatbot\w*|mulca|muca)\b",
+    r"\b(assist\w*|chatbot\w*|bot|mulca|muca)\b",
     re.IGNORECASE,
 )
 
@@ -1163,7 +1170,8 @@ class Conversation:
 
         transcript = await self._collect_transcript(speaker)
         logger.info(
-            "%s voice turn from %s (%d-char transcript)",
+            "%s voice turn attributed to speaker %s by the ASR (%d-char "
+            "transcript)",
             self._conversation_id,
             speaker,
             len(transcript),
@@ -1172,8 +1180,17 @@ class Conversation:
         # turn/cooldown machinery, not something worth seeing on every
         # single spoken turn by default -- set MUCA_LOG_LEVEL=DEBUG to see
         # these (and the rest of the [voice-turn]-tagged lines) again.
+        #
+        # Worded as the ASR's own claim, not a fact -- found live, a
+        # transcript it attributed to a real speaker turned out to be
+        # hallucinated (plausible-sounding "helpful assistant" boilerplate
+        # text the model invents during near-silent/low-signal audio, a
+        # known ASR failure mode, unrelated to any specific prompt text),
+        # not anything that speaker actually said. The speaker_id here is
+        # only ever "whichever speaker's audio window this was," not
+        # independent confirmation of who said what was transcribed.
         logger.debug(
-            "[voice-turn] %s _take_voice_turn transcript for %s: %r",
+            "[voice-turn] %s ASR transcript (unverified) for speaker %s: %r",
             self._conversation_id,
             self._username(speaker),
             transcript,
