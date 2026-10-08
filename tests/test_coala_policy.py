@@ -1,6 +1,7 @@
 import asyncio
 
 from muca_server.cognition import CoalaPolicy, InterventionSignal, Utterance
+from muca_server.cognition.policy import INTERIM_ACK_MAX_TOKENS
 from muca_server.cognition.memory import (
     EpisodicRecord,
     InMemoryEpisodicStore,
@@ -66,6 +67,7 @@ class FakePort:
         self._participants: dict[int, str] = {}
         self._voice_participants: dict[int, str] = {}
         self.instructions: list[str] = []
+        self.instruction_max_tokens: list[int | None] = []
         self.observer_messages: list[str] = []
 
     @property
@@ -86,8 +88,14 @@ class FakePort:
     def voice_participants(self) -> dict[int, str]:
         return dict(self._voice_participants)
 
-    async def instruct_main_agent(self, directive: str) -> None:
+    async def instruct_main_agent(
+        self,
+        directive: str,
+        *,
+        max_tokens: int | None = None,
+    ) -> None:
         self.instructions.append(directive)
+        self.instruction_max_tokens.append(max_tokens)
 
     async def tell_observers(self, text: str) -> None:
         self.observer_messages.append(text)
@@ -1737,6 +1745,12 @@ async def test_a_voice_question_needing_web_search_gets_an_ack_then_the_findings
     assert len(port.instructions) == 2
     assert "Rome is warm in October." not in port.instructions[0]
     assert "Rome is warm in October." in port.instructions[1]
+    # Found live: without a hard cap, the ack's own wording ("a word or
+    # two") wasn't reliably obeyed -- it rambled into a full, sometimes
+    # fabricated, answer before the real search had even run. The real
+    # findings reply is deliberately uncapped.
+    assert port.instruction_max_tokens[0] == INTERIM_ACK_MAX_TOKENS
+    assert port.instruction_max_tokens[1] is None
 
 
 async def test_the_interim_ack_alone_does_not_resolve_the_turn():

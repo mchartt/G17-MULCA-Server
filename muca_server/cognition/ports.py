@@ -108,8 +108,20 @@ class ConversationPort(Protocol):
         """
         ...
 
-    async def instruct_main_agent(self, directive: str) -> None:
-        """Tell the main agent to respond, with guidance on why and roughly what."""
+    async def instruct_main_agent(
+        self,
+        directive: str,
+        *,
+        max_tokens: int | None = None,
+    ) -> None:
+        """
+        Tell the main agent to respond, with guidance on why and roughly
+        what. max_tokens hard-caps this one response -- for a directive
+        whose own wording ("a word or two") the model doesn't reliably
+        keep to on its own (found live: a voice web search's interim
+        "let me check that" rambled into a full, sometimes fabricated,
+        answer instead).
+        """
         ...
 
     async def tell_observers(self, text: str) -> None:

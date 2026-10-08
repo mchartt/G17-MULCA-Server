@@ -395,15 +395,21 @@ class Conversation:
     def voice_participants(self) -> dict[int, str]:
         return dict(self._voice_participants)
 
-    async def instruct_main_agent(self, directive: str) -> None:
+    async def instruct_main_agent(
+        self,
+        directive: str,
+        *,
+        max_tokens: int | None = None,
+    ) -> None:
         if self._main_agent is None:
             return
 
         logger.info(
-            "%s asking the main agent for a %s reply (%d-char directive)",
+            "%s asking the main agent for a %s reply (%d-char directive)%s",
             self._conversation_id,
             self._turn_modality or "default",
             len(directive),
+            f", max_tokens={max_tokens}" if max_tokens is not None else "",
         )
 
         # Answer in the medium the turn arrived in: a text message gets a
@@ -411,6 +417,7 @@ class Conversation:
         await self._main_agent.trigger_response(
             instructions=directive,
             output_modality=self._turn_modality,
+            max_tokens=max_tokens,
         )
 
     async def tell_observers(self, text: str) -> None:

@@ -57,6 +57,15 @@ TURN_TIMEOUT_SECONDS = 30.0
 # safer than leaving the turn stuck.
 INTERIM_ACK_TIMEOUT_SECONDS = 10.0
 
+# Hard cap on the interim ack's own response -- found live, the directive's
+# wording alone ("a word or two, nothing else") wasn't reliably obeyed: it
+# sometimes rambled into a full, fabricated answer before any search had
+# even run (wrong numbers that then contradicted the real, searched answer
+# moments later). Generous enough for a short natural phrase in audio
+# (which costs far more tokens per word than text), tight enough to cut off
+# well before a second, repeated acknowledgement or a premature answer.
+INTERIM_ACK_MAX_TOKENS = 60
+
 # "remember" retrieves a few specific, relevant facts, not a wide recent
 # window like provide_summary's RETRIEVAL_LIMIT -- a handful of the most
 # similar turns is more useful here than fifty chronological ones.
@@ -690,13 +699,18 @@ class CoalaPolicy:
                         directive=(
                             "Briefly acknowledge, in your own words, that "
                             "you're looking this up right now (e.g. "
-                            '"Let me check that") -- a word or two, not a '
-                            "fixed phrase, and nothing else yet: you don't "
-                            "have the answer to give them until the next "
-                            "turn."
+                            '"Let me check that") -- ONE short sentence, '
+                            "not a fixed phrase, and absolutely nothing "
+                            "else: no numbers, names, facts, or findings "
+                            "of any kind, and do not say you've already "
+                            "found or looked anything up -- you have not, "
+                            "no search has run yet. Say the one sentence "
+                            "and stop; do not say it twice or rephrase it "
+                            "a second way."
                         ),
                         port=port,
-                    )
+                    ),
+                    max_tokens=INTERIM_ACK_MAX_TOKENS,
                 )
                 with suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(
