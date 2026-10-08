@@ -63,12 +63,21 @@ class FakeAudioBuffer:
         self.appended.append(audio)
 
 
+class FakeSession:
+    def __init__(self) -> None:
+        self.updates: list[dict] = []
+
+    async def update(self, *, session: dict) -> None:
+        self.updates.append(session)
+
+
 class FakeConnection:
     def __init__(self) -> None:
         self.item_calls: list = []
         self.conversation = FakeConversation(self.item_calls)
         self.response = FakeResponse()
         self.input_audio_buffer = FakeAudioBuffer()
+        self.session = FakeSession()
 
 
 class _Event:
@@ -203,6 +212,21 @@ def test_persona_and_task_are_combined_for_the_connect_time_instructions():
 
     assert "You are MULCA." in instructions
     assert "Keep the peace." in instructions
+
+
+async def test_a_client_session_update_replaces_only_the_instructions():
+    agent = make_agent()
+    agent._connection = FakeConnection()
+
+    await agent.update_session(
+        {"instructions": "You are Foxy.", "modalities": ["text", "audio"]},
+    )
+    # Nothing to replace: the session keeps what it has.
+    await agent.update_session({"modalities": ["audio"]})
+
+    assert agent._connection.session.updates == [
+        {"type": "realtime", "instructions": "You are Foxy."},
+    ]
 
 
 async def test_trigger_response_pushes_per_turn_content_as_an_item_not_session_instructions():

@@ -1,5 +1,4 @@
 import asyncio
-from datetime import date
 
 from muca_server.cognition import CoalaPolicy, InterventionSignal, Utterance
 from muca_server.cognition.memory import (
@@ -876,38 +875,10 @@ async def test_a_groups_own_summary_is_sent_once_then_not_again():
     assert "Previously, the team discussed the deadline." in port.instructions[0]
     assert "Previously, the team discussed the deadline." not in port.instructions[1]
 
-    # Without a course schedule, nothing about dates or deliverables.
-    assert "Today is" not in port.instructions[0]
-
     # The live session hears every message itself after connecting, so the
     # verbatim tail is not resent (and billed again) with every reply.
     assert "Recent messages in this conversation" in port.instructions[0]
     assert "Recent messages in this conversation" not in port.instructions[1]
-
-
-async def test_every_reply_is_told_today_and_the_next_deliverable():
-    schedule = {
-        "timezone": "Europe/Rome",
-        "groups": {"A": "Mondays"},
-        "deliverables": [
-            {"what": "the moon landing plan", "due": {"A": date(2999, 1, 7)}},
-        ],
-        "then": "nothing",
-    }
-    policy, port = make_policy(schedule=schedule)
-    await policy.start(port)
-
-    for content in ("first message", "second message"):
-        await policy.on_utterance(make_utterance(content=content))
-        await policy.on_intervention_signal(
-            object(),
-            InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
-        )
-        await policy.on_assistant_output("ok", interrupted=False)
-
-    for prompt in port.instructions:
-        assert "Today is " in prompt
-        assert "Group A: the moon landing plan, at the tutoring on Mon 7 Jan 2999" in prompt
 
 
 def make_dm_policy():

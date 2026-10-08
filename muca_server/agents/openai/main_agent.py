@@ -248,6 +248,27 @@ class MainAgentOpenAI(MainAgent):
             self._connection_manager = None
             self._connection = None
 
+    async def _update_session(self, session: dict) -> None:
+        # Only the instructions: the rest of the session (turn detection,
+        # audio formats, transcription) is what the server's turn taking
+        # relies on, and a client's own often uses older field names.
+        ignored = sorted(set(session) - {"instructions", "type"})
+        if ignored:
+            logger.info("%s ignoring session fields %s", self.log_label, ignored)
+
+        instructions = session.get("instructions")
+        if not instructions or self._connection is None:
+            return
+
+        await self._connection.session.update(
+            session={"type": "realtime", "instructions": instructions},
+        )
+        logger.info(
+            "%s main agent instructions replaced by the client (%d chars)",
+            self.log_label,
+            len(instructions),
+        )
+
     async def _send_text(self, text: str, *, role: str) -> None:
         if self._connection is None:
             return

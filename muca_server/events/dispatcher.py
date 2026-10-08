@@ -52,6 +52,10 @@ class AgentRouterProtocol(Protocol):
     async def route_text(self, message: TextMessage) -> None:
         ...
 
+    async def update_session(self, message: RawProviderMessage) -> None:
+        """Apply a client's session.update to the main agent."""
+        ...
+
     async def route_user_text(
         self,
         message: UserTextMessage,
@@ -192,11 +196,15 @@ async def dispatch(
 
             return DispatchResult.CLOSE_SESSION
 
+        case RawProviderMessage() if message.payload.get("type") == "session.update":
+            # A client's own session.update, sent right after connecting the
+            # way dea-multiuser sends its first JSON messages.
+            await agent_router.update_session(message)
+
         case RawProviderMessage():
-            # Provider passthrough (Unity's SendAnythingAsync). Not forwarded:
-            # the server owns each provider session's configuration, and a
-            # client's session.update (often in an older API dialect) would
-            # silently undo it. Forward it from here if a client ever needs to.
+            # Any other provider passthrough (Unity's SendAnythingAsync). Not
+            # forwarded: the server owns each provider session's
+            # configuration.
             logger.info(
                 "Ignoring provider passthrough frame of type %r",
                 message.payload.get("type"),

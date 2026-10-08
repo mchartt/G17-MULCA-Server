@@ -10,7 +10,7 @@ It is a superset of the Unity client's `Orchestration/Remote/OrchestrationServic
 - **One connection is one session**, and a session is one conversation. Open one connection per scope: per group, per DM, and so on.
 - **First frame:** the client must send `connect` (or `connect_main_assistant`) within **5 s**. Otherwise the server closes the connection with code `1008`. If the main agent's provider connection fails, the server closes with `1011`.
 - **Ending the session:** send `disconnect` with no `targetAgentGuid`. Dropping the connection also ends it.
-- **Reconnecting:** if the connection drops, open a new one and replay `connect`, then `create_auxiliary_agent`, then `participants`. A session that gave a `conversationId` gets its memory restored from the server's store.
+- **Reconnecting:** if the connection drops, open a new one and replay `connect`, then your `session.update` if you send one, then `create_auxiliary_agent`, then `participants`. A session that gave a `conversationId` gets its memory restored from the server's store.
 
 A minimal lifecycle:
 
@@ -43,7 +43,8 @@ Every field name is camelCase. The server ignores fields it doesn't know, so the
 | `trigger_response` | `maxTokens?`, `interrupt=true`, `instructions=""`, `targetAgentGuid?` | Makes an agent respond now. A `maxTokens` value ≤ 0 or > 4096 means no limit. |
 | `interrupt` / `interrupt_response` | `targetAgentGuid?` | Stops an agent. For the main agent, the server also cuts its reply at `playbackTimeMs`. |
 | `disconnect` | `targetAgentGuid?` | Without a target, ends the session. With a target, disconnects one observer. |
-| *(no `event`)* | anything | A provider passthrough frame, such as Unity's `SendAnythingAsync`. It is ignored, because the server owns every provider session's configuration. |
+| *(no `event`)* `session.update` | `type: "session.update"`, `session: {instructions}` | Replaces the main agent's whole instructions (the server's persona and task), like the first JSON messages dea-multiuser sends after connecting. Send it right after `connect`, before any turn. Only `session.instructions` is applied: the server owns the rest of the provider session (turn detection, audio, transcription). With a `targetAgentGuid` it is ignored. |
+| *(no `event`)* | anything else | A provider passthrough frame, such as Unity's `SendAnythingAsync`. It is ignored, because the server owns every provider session's configuration. |
 
 ## Server → client
 

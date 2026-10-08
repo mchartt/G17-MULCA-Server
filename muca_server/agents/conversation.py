@@ -34,6 +34,7 @@ from ..protocol import (
     OutgoingProtocolMessage,
     ParticipantsMessage,
     PlaybackFrameMessage,
+    RawProviderMessage,
     RemoveAuxiliaryAgentMessage,
     SetCostAlertMessage,
     SetModelMessage,
@@ -510,6 +511,18 @@ class Conversation:
             return
 
         await agent.send_text(message.text, role=message.role)
+
+    async def update_session(self, message: RawProviderMessage) -> None:
+        if message.target_agent_guid or self._main_agent is None:
+            logger.info(
+                "%s ignoring a session.update not for the main agent",
+                self._conversation_id,
+            )
+            return
+
+        await self._main_agent.update_session(
+            message.payload.get("session") or {},
+        )
 
     async def route_user_text(
         self,
