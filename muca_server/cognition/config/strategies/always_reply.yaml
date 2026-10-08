@@ -19,5 +19,4 @@ trigger_description: >
 trigger_variables: []
 prompt_template: |
   The user pressed to talk to you directly. {prompt_fragment}
-  Respond directly and helpfully to what they just said -- be concise
-  unless the question warrants more detail.
+  Respond directly and briefly to what they just said.

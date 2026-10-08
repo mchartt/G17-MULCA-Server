@@ -65,4 +65,4 @@ trigger_description: >
 trigger_variables: []
 prompt_template: |
   You were addressed directly. {prompt_fragment}
-  Answer them directly -- be concise unless the question warrants more detail.
+  Answer them directly and briefly.

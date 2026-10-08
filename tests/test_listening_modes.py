@@ -12,12 +12,16 @@ behave exactly as before.
 import asyncio
 from uuid import uuid4
 
+import muca_server.agents.conversation as conversation_module
 from muca_server.agents import AuxiliaryAgent, MainAgent, MainAgentOptions
 from muca_server.agents.conversation import (
     Conversation,
+    _matches_dismissal,
     _matches_wake_phrase,
     _wake_phrase_has_question,
 )
+from muca_server.agents.main_agent import MainAgentState
+from muca_server.agents.turn import Turn
 from muca_server.audio import AudioChunk
 from muca_server.cognition import CoalaPolicy, InterventionSignal, Utterance
 from muca_server.cognition.strategies import Strategy, StrategyStore
@@ -458,3 +462,287 @@ async def test_a_repeated_wake_phrase_restarts_the_silence_timer(monkeypatch):
 
     await asyncio.sleep(0.03)
     assert conversation._listening_window_open is False
+
+
+# ----------------------------------------------------------------------
+# "wake": the wake phrase starts an engaged session, judged like ambient,
+# until silence, the time limit, a dismissal or interruptions end it.
+# ----------------------------------------------------------------------
+
+
+def playback():
+    return parse_incoming_message({"event": "playback_frame", "audio": VOICE})
+
+
+def listening_states(conversation) -> list[bool]:
+    states = []
+    queue = conversation._outbound_queue
+    while not queue.empty():
+        message = queue.get_nowait()
+        if getattr(message, "event", None) == "listening_state":
+            states.append(message.open)
+    return states
+
+
+async def voice_turn(conversation, text: str, *, speaker: int = 1) -> None:
+    """A spoken turn whose transcript is `text` ("" for untranscribed)."""
+
+    async def collect(_speaker):
+        return text
+
+    conversation._collect_transcript = collect
+    await conversation._take_voice_turn(speaker, 0)
+    await conversation.wait_until_idle()
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+
+async def interrupted(conversation, heard_ms, *, lasted_ms=1_000, text="wait, stop"):
+    """MUCA talked over after `heard_ms`, by a turn of `lasted_ms`."""
+
+    conversation.turns.append(Turn(start_time=0, end_time=lasted_ms, speaker_id=1))
+    conversation._pending_interruption_ms = heard_ms
+    await conversation._settle_interruption(1, lasted_ms, text)
+
+
+async def test_wake_dormant_turns_are_not_judged_and_the_judge_hears_nothing():
+    conversation, factory = await make_conversation(listening_mode="wake")
+
+    await voice_turn(conversation, "we should look at the budget")
+    await voice_turn(conversation, "")
+    await conversation.route_user_audio(audio(speaker=1))
+    conversation.main_agent_state = MainAgentState.ANSWERING
+    await conversation.route_playback_frame(playback())
+    await conversation._send_to_listeners(AudioChunk(data=b"\x00" * 400))
+
+    assert factory.auxiliary.asked == 0
+    assert factory.auxiliary.audio_chunks_received == 0
+    assert not factory.main.instructions
+
+
+async def test_the_wake_phrase_engages_without_the_judge_and_announces_once():
+    conversation, factory = await make_conversation(listening_mode="wake")
+
+    await voice_turn(conversation, "hey muca, what is the deadline")
+    await voice_turn(conversation, "muca, and the budget?")
+
+    assert conversation._listening_window_open is True
+    assert factory.auxiliary.asked == 0  # both forced, never judged
+    assert len(factory.main.instructions) == 2
+    assert listening_states(conversation) == [True]
+
+
+async def test_engaged_turns_are_judged_like_ambient_and_heard():
+    conversation, factory = await make_conversation(
+        listening_mode="wake",
+        strategies=STRATEGIES_WITH_ALWAYS_REPLY,
+        auxiliary_cls=DecliningInterventionAgent,
+    )
+    await voice_turn(conversation, "hey muca, what is the deadline")
+
+    await voice_turn(conversation, "I think it is friday", speaker=2)
+    await conversation.route_user_audio(audio(speaker=2))
+
+    assert factory.auxiliary.asked == 1
+    assert len(factory.main.instructions) == 1  # declined, nothing forced
+    assert factory.auxiliary.audio_chunks_received == 1
+
+
+async def test_a_bare_wake_forces_a_reply_to_the_same_speakers_next_turn_only():
+    conversation, factory = await make_conversation(
+        listening_mode="wake",
+        strategies=STRATEGIES_WITH_ALWAYS_REPLY,
+        auxiliary_cls=DecliningInterventionAgent,
+    )
+
+    await voice_turn(conversation, "hey muca")
+    await voice_turn(conversation, "something unrelated", speaker=2)
+    await voice_turn(conversation, "what is the deadline")
+    await voice_turn(conversation, "and another thing")
+
+    assert factory.auxiliary.asked == 3
+    assert len(factory.main.instructions) == 2
+    assert "Respond directly" in factory.main.instructions[1]
+
+
+async def test_untranscribed_turns_are_judged_only_inside_a_window():
+    for mode, engage, judged in [
+        ("wake", False, 0),
+        ("wake", True, 1),
+        ("transcribe", False, 0),
+        ("ambient", False, 1),
+    ]:
+        conversation, factory = await make_conversation(listening_mode=mode)
+        if engage:
+            await conversation._handle_wake_phrase(speaker=1)
+
+        await voice_turn(conversation, "")
+
+        assert factory.auxiliary.asked == judged, mode
+
+
+async def test_text_turns_are_judged_while_wake_is_dormant():
+    conversation, factory = await make_conversation(listening_mode="wake")
+
+    await conversation._judge(
+        Utterance(
+            speaker_id=1,
+            speaker_name="Ada",
+            content="hello",
+            timestamp_ms=0,
+            modality="text",
+        )
+    )
+    await conversation.wait_until_idle()
+
+    assert factory.auxiliary.asked == 1
+
+
+async def test_a_quiet_room_ends_the_session_and_speech_keeps_it_alive():
+    conversation, _ = await make_conversation(listening_mode="wake")
+    await conversation._handle_wake_phrase(speaker=1)
+    start = conversation._last_speech_ms
+    silence = conversation_module.ENGAGED_SILENCE_MS
+
+    conversation.turns.append(Turn(start_time=start, speaker_id=1))
+    await conversation._check_engaged_session(start + silence)
+    assert conversation._listening_window_open is True
+    assert conversation._last_speech_ms == start + silence
+
+    conversation.turns[-1].end_time = start + silence
+    await conversation._check_engaged_session(start + 2 * silence - 1)
+    assert conversation._listening_window_open is True
+    await conversation._check_engaged_session(start + 2 * silence)
+    assert conversation._listening_window_open is False
+    assert listening_states(conversation) == [True, False]
+
+
+async def test_the_time_limit_waits_for_a_playing_reply():
+    conversation, _ = await make_conversation(listening_mode="wake")
+    await conversation._handle_wake_phrase(speaker=1)
+    cap = conversation._engaged_since_ms + conversation_module.ENGAGED_MAX_MS
+
+    conversation.main_agent_state = MainAgentState.ANSWERING
+    await conversation._check_engaged_session(cap)
+    assert conversation._listening_window_open is True
+
+    conversation.main_agent_state = MainAgentState.INACTIVE
+    await conversation._check_engaged_session(cap + 1)
+    assert conversation._listening_window_open is False
+
+
+async def test_a_repeated_wake_phrase_restarts_the_session():
+    conversation, _ = await make_conversation(listening_mode="wake")
+    await conversation._handle_wake_phrase(speaker=1)
+    conversation._engaged_since_ms = 0
+    conversation._interruption_score = 3
+    conversation._warned_about_interruptions = True
+
+    await conversation._handle_wake_phrase(speaker=1)
+
+    assert conversation._engaged_since_ms > 0
+    assert conversation._interruption_score == 0
+    assert conversation._warned_about_interruptions is False
+    assert listening_states(conversation) == [True]
+
+
+def test_dismissal_matching():
+    # With the wake word: in a short turn, however long ago MUCA spoke.
+    assert _matches_dismissal(
+        "thank you very much muca",
+        assistant_spoke_recently=False,
+    )
+    # A longer one is a request, even right after MUCA spoke.
+    assert not _matches_dismissal(
+        "thanks muca, can you also check the budget",
+        assistant_spoke_recently=True,
+    )
+    # Standalone: in a short turn, or right after MUCA spoke.
+    assert _matches_dismissal("ok that's all", assistant_spoke_recently=False)
+    assert _matches_dismissal(
+        "grazie, adesso passiamo al prossimo punto",
+        assistant_spoke_recently=True,
+    )
+    # People thanking each other, mid-discussion.
+    assert not _matches_dismissal(
+        "thanks Ada, now let us move on to the budget",
+        assistant_spoke_recently=False,
+    )
+    assert not _matches_dismissal("let us move on", assistant_spoke_recently=True)
+
+
+async def test_a_dismissal_ends_the_session_unanswered_and_never_starts_one():
+    conversation, factory = await make_conversation(listening_mode="wake")
+
+    await voice_turn(conversation, "thanks muca")
+    assert conversation._listening_window_open is False
+    assert not factory.main.instructions
+
+    await voice_turn(conversation, "hey muca, what is the deadline")
+    await voice_turn(conversation, "thanks muca")
+
+    assert conversation._listening_window_open is False
+    assert len(factory.main.instructions) == 1
+    assert factory.auxiliary.asked == 0
+    assert listening_states(conversation) == [True, False]
+
+
+async def test_interruptions_are_scored_by_how_long_muca_was_heard():
+    conversation, _ = await make_conversation(listening_mode="wake")
+    await conversation._handle_wake_phrase(speaker=1)
+
+    await interrupted(conversation, 500)
+    await interrupted(conversation, 400)
+    assert conversation._interruption_score == 2
+    await interrupted(conversation, 2_000)
+    assert conversation._interruption_score == 2
+    await interrupted(conversation, 4_000)
+    assert conversation._interruption_score == 1
+    await interrupted(conversation, 9_000)
+    assert conversation._interruption_score == 0  # never below 0
+
+    # A backchannel or a cough doesn't count.
+    await interrupted(conversation, 500, lasted_ms=300, text="mm")
+    assert conversation._interruption_score == 0
+
+
+async def test_interruptions_warn_the_judge_at_half_then_end_the_session():
+    conversation, _ = await make_conversation(listening_mode="wake")
+    await conversation._handle_wake_phrase(speaker=1)
+
+    await interrupted(conversation, 500)
+    assert conversation._warned_about_interruptions is False
+    await interrupted(conversation, 500)  # 2: half of 3, rounded up
+    assert conversation._warned_about_interruptions is True
+    assert conversation._listening_window_open is True
+
+    await interrupted(conversation, 500)  # 3
+    assert conversation._listening_window_open is False
+
+
+async def test_the_interruption_threshold_drops_over_time_to_one():
+    conversation, _ = await make_conversation(listening_mode="wake")
+    await conversation._handle_wake_phrase(speaker=1)
+    start = conversation._engaged_since_ms
+    step = conversation_module.INTERRUPTION_THRESHOLD_STEP_MS
+
+    assert conversation._interruption_threshold(start) == 3
+    assert conversation._interruption_threshold(start + step) == 2
+    assert conversation._interruption_threshold(start + 2 * step) == 1
+    assert conversation._interruption_threshold(start + 3 * step) == 1
+
+    # At the floor, the first talk-over that counts ends the session.
+    conversation._engaged_since_ms = start - 2 * step
+    await interrupted(conversation, 500)
+    assert conversation._listening_window_open is False
+
+
+async def test_a_reply_heard_out_resets_the_interruption_score():
+    conversation, _ = await make_conversation(listening_mode="wake")
+    await conversation._handle_wake_phrase(speaker=1)
+    await interrupted(conversation, 500)
+    assert conversation._interruption_score == 1
+
+    await conversation._end_assistant_turn()
+
+    assert conversation._interruption_score == 0

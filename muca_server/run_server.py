@@ -58,13 +58,16 @@ ACTIVE_STRATEGY_IDS = [
 ]
 ASSISTANT_NAME = "MULCA"
 
-# "ambient" (default): every turn is judged, as above. "toggle"/
+# "ambient": every turn is judged, as above. "toggle"/
 # "transcribe": the intervention agent is only consulted inside a window
 # (opened by the button/`/listen`, or a spoken wake phrase, respectively --
 # see conversation.py's arm_listening/_handle_wake_phrase/_judge) -- it
 # never hears raw audio at all in either, only the main agent's transcript.
 # Two separate, mutually exclusive modes, not two input methods for one
-# combined mode.
+# combined mode. "wake" (default): dormant like a closed "transcribe"
+# window until the wake phrase, then judged like ambient until the
+# session ends (silence, time limit, dismissal, interruptions --
+# conversation.py's _disengage).
 LISTENING_MODE_ENV_VAR = "MUCA_LISTENING_MODE"
 
 # Anchored to this package's own location, not the current working
@@ -79,11 +82,11 @@ DEFAULT_DB_DIR = Path(__file__).resolve().parent.parent / "data"
 def build_app():
     load_dotenv()
 
-    listening_mode = os.environ.get(LISTENING_MODE_ENV_VAR, "ambient")
-    if listening_mode not in ("ambient", "toggle", "transcribe"):
+    listening_mode = os.environ.get(LISTENING_MODE_ENV_VAR, "wake")
+    if listening_mode not in ("ambient", "toggle", "transcribe", "wake"):
         raise ValueError(
-            f"{LISTENING_MODE_ENV_VAR} must be 'ambient', 'toggle', or "
-            f"'transcribe', got {listening_mode!r}"
+            f"{LISTENING_MODE_ENV_VAR} must be 'ambient', 'toggle', "
+            f"'transcribe', or 'wake', got {listening_mode!r}"
         )
 
     # This is the server-wide default only -- a link can still override it

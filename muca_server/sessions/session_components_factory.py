@@ -32,7 +32,7 @@ class DefaultSessionComponentsFactory:
         silence_timeout_ms: int = DEFAULT_SILENCE_TIMEOUT_MS,
         model_settings: ModelSettings | None = None,
         usage_tracker: UsageTracker | None = None,
-        listening_mode: Literal["ambient", "toggle", "transcribe"] = "ambient",
+        listening_mode: Literal["ambient", "toggle", "transcribe", "wake"] = "ambient",
     ) -> None:
         self.model_settings = model_settings
         self.usage_tracker = usage_tracker

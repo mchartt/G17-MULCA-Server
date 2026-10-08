@@ -1187,6 +1187,16 @@ class CoalaPolicy:
             else "Current directive:"
         )
 
+        # Found live: without being told who a reply is for, the main
+        # agent hedged about who was speaking -- the platform knows, it
+        # isn't guessing from voices.
+        pending = self._pending_utterance
+        speaker_block = (
+            f"Replying to: {pending.label()} ({pending.modality})\n\n"
+            if pending is not None
+            else ""
+        )
+
         return (
             f"{current_time_block}"
             f"{voice_roster_block}"
@@ -1195,6 +1205,7 @@ class CoalaPolicy:
             f"{linked_tail_block}"
             f"{retrieved_block}"
             f"{web_search_block}"
+            f"{speaker_block}"
             f"{directive_label}\n"
             f"{directive or 'Respond naturally as the ongoing conversation warrants.'}"
         )
