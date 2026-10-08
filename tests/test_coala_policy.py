@@ -140,11 +140,13 @@ async def test_a_forced_mention_bypasses_the_observers():
     assert "Forced intervention" in port.instructions[0]
 
 
-async def test_a_wake_phrase_gets_a_fixed_acknowledgement_not_the_observers():
+async def test_a_wake_phrase_gets_an_acknowledgement_not_the_observers():
     # "transcribe" mode only: conversation.py already opened the listening
     # window itself before this is ever called (that state lives there,
-    # not in CoalaPolicy) -- this just confirms the fixed "Hi"
-    # acknowledgement fires instead of a normal judged reply.
+    # not in CoalaPolicy) -- this just confirms a forced acknowledgement
+    # directive fires instead of a normal judged reply. Described, not
+    # scripted: the main agent is asked to acknowledge in its own words,
+    # not forced to say an exact fixed phrase.
     policy, port = make_policy()
     await policy.start(port)
 
@@ -154,15 +156,16 @@ async def test_a_wake_phrase_gets_a_fixed_acknowledgement_not_the_observers():
 
     assert consult is False
     assert len(port.instructions) == 1
-    assert "Hi" in port.instructions[0]
+    assert "acknowledge" in port.instructions[0].lower()
+    assert "your own words" in port.instructions[0].lower()
 
 
 async def test_a_wake_phrase_with_a_question_in_the_same_breath_gets_both():
     # "hey mulca, could you define the UNG diagram" -- not just the bare
     # trigger word. The main agent is asked to lead with the
     # acknowledgement and then actually answer, in the same reply, rather
-    # than "Hi." alone with the question left unanswered until a second,
-    # separate utterance.
+    # than the acknowledgement alone with the question left unanswered
+    # until a second, separate utterance.
     policy, port = make_policy()
     await policy.start(port)
 
@@ -177,7 +180,7 @@ async def test_a_wake_phrase_with_a_question_in_the_same_breath_gets_both():
 
     assert consult is False
     assert len(port.instructions) == 1
-    assert "Hi" in port.instructions[0]
+    assert "acknowledge" in port.instructions[0].lower()
     assert "answer" in port.instructions[0].lower()
 
 
