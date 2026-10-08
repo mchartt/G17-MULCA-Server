@@ -676,6 +676,18 @@ def test_dismissal_matching():
         "stop sharing your screen and look at this, Ada",
         assistant_spoke_recently=False,
     )
+    # New phrasings, standalone or with the name.
+    for transcript in (
+        "stop mulca",
+        "go to sleep",
+        "end session",
+        "end the session",
+        "mulca, end session",
+        "that's enough",
+        "fine sessione",
+        "fine della sessione mulca",
+    ):
+        assert _matches_dismissal(transcript, assistant_spoke_recently=False)
 
 
 async def test_a_dismissal_ends_the_session_unanswered_and_never_starts_one():
