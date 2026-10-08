@@ -85,15 +85,13 @@ PLAYBACK_START_TIMEOUT_SECONDS = 3.0
 # "MULCA": that specific word is the one already confirmed (this session)
 # to transcribe unreliably -- "assistant" is a cleaner, more distinct
 # anchor, closer to how "Hey Siri"/"OK Google" were chosen for the same
-# reason. assist\w* catches "assistant"/"assistent"/plurals etc. without
-# needing full phonetic matching.
-WAKE_PHRASE_PATTERN = re.compile(
-    # "hei"/"hej" are real transcription variants of "hey" confirmed live
-    # this session (not a guess) -- a non-English speaker's "hey" often
-    # comes back as one of these from the transcriber.
-    r"\b(hey|hei|hej|hi|hello|ok|okay)\b[\s,]{0,20}\bassist\w*\b",
-    re.IGNORECASE,
-)
+# reason. Bare "assistant" (no required lead-in word like "hey") --
+# confirmed live that the transcriber sometimes drops a short, quiet
+# lead-in word entirely, which a "hey assistant"-only pattern then misses
+# completely (the real turn transcribed as just "Assistant?"). assist\w*
+# catches "assistant"/"assistent"/plurals etc. without needing full
+# phonetic matching.
+WAKE_PHRASE_PATTERN = re.compile(r"\bassist\w*\b", re.IGNORECASE)
 
 # Unlike the button/`/listen` (a pure toggle, open until pressed again --
 # see arm_listening), a wake phrase only ever opens/extends a window: there

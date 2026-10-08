@@ -341,23 +341,26 @@ async def test_ambient_mode_is_unaffected():
 
 
 def test_wake_phrase_matching_is_deterministic_not_fuzzy_guessing():
-    # Anchored on "assist\w*" + a lead-in word -- not "MULCA" (confirmed
-    # this session to transcribe unreliably) and not a full phonetic/LLM
-    # judgement (confirmed this session to be inconsistent).
+    # Anchored on bare "assist\w*" -- not "MULCA" (confirmed this session
+    # to transcribe unreliably), not a full phonetic/LLM judgement
+    # (confirmed this session to be inconsistent), and deliberately no
+    # required lead-in word like "hey": confirmed live that the
+    # transcriber sometimes drops a short, quiet lead-in word entirely,
+    # which a "hey assistant"-only pattern then misses completely (a real
+    # turn transcribed as just "Assistant?").
+    assert _matches_wake_phrase("assistant")
+    assert _matches_wake_phrase("Assistant?")
     assert _matches_wake_phrase("hey assistant")
-    assert _matches_wake_phrase("Hey Assistant, could you help?")
-    assert _matches_wake_phrase("okay assistent")  # transcription near-miss
-    assert _matches_wake_phrase("hi assistants")  # plural
-    # "hei"/"hej" are real transcription variants of "hey" confirmed live
-    # this session, not a guess -- a non-English "hey" often comes back
-    # as one of these from the transcriber.
-    assert _matches_wake_phrase("Hei assistent.")
-    assert _matches_wake_phrase("Hej assistant")
+    assert _matches_wake_phrase("assistent")  # transcription near-miss
+    assert _matches_wake_phrase("assistants")  # plural
+    # The tradeoff of dropping the lead-in requirement: "assistant"
+    # mentioned in passing now also opens the window, not just a direct
+    # address -- accepted deliberately, in exchange for actually detecting
+    # the bare "Assistant?" case above, which real transcripts produced.
+    assert _matches_wake_phrase("what do you think about assistants in general")
 
     assert not _matches_wake_phrase("hello there")
-    assert not _matches_wake_phrase("what do you think about assistants in general")
-    assert not _matches_wake_phrase("assistant")  # no lead-in word at all
-    assert not _matches_wake_phrase("hey chatbot")  # not the configured phrase
+    assert not _matches_wake_phrase("hey chatbot")  # not the configured word
     assert not _matches_wake_phrase("")
 
 
