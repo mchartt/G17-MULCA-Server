@@ -1000,7 +1000,17 @@ class Conversation:
         # must reach observers before _judge -> on_utterance's
         # trigger-variables note, so they see (utterance, then variables),
         # never the reverse.
+        #
+        # Also found live: the main agent was never included here either,
+        # unlike _take_text_turn (which sends it to both) -- it only ever
+        # heard the raw audio, with no durable "who said what" text record
+        # the way a text turn gives it, so it had nothing to summarize
+        # per-person from and no general sense of who is in the
+        # conversation beyond whatever a single turn's own directive
+        # happens to mention. Included now, same tagged line, same pattern.
         spoken = f"{self._username(speaker)}: {transcript}"
+        if self._main_agent is not None:
+            await self._main_agent.send_text(spoken, role="user")
         for agent in list(self._auxiliary_agents.values()):
             if agent.listens_to_user(speaker):
                 await agent.send_text(spoken, role="user")

@@ -189,6 +189,28 @@ async def test_a_transcribed_spoken_turn_reaches_the_policy_attributed():
     ]
 
 
+async def test_the_main_agent_also_gets_the_speaker_tagged_transcript():
+    # Found live: unlike a text turn (which sends the main agent the exact
+    # "speaker: text" line), a voice turn never did -- the main agent only
+    # ever heard raw audio, with no durable per-speaker text record to
+    # summarize from later, unlike the auxiliary/intervention agent, which
+    # already got this. Same tagged line, same pattern, now for both.
+    conversation, factory, policy, _ = make_conversation()
+    await conversation.start()
+    await conversation.route_participants(
+        parse_incoming_message(
+            {"event": "participants", "participants": [{"id": 5, "name": "Ada"}]},
+        )
+    )
+    received = record_text(factory.main)
+
+    await speak_one_turn(conversation, factory, speaker=5, item_id="in-1")
+    await conversation._handle_transcript("in-1", "what time is it?")
+    await conversation.wait_until_idle()
+
+    assert "Ada: what time is it?" in received
+
+
 async def test_an_untranscribed_turn_is_logged_and_observers_still_asked(
     monkeypatch,
 ):
