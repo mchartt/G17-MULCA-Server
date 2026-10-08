@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import time
+from datetime import datetime, timezone
 from collections.abc import Callable
 from uuid import UUID
 
@@ -983,6 +984,22 @@ class CoalaPolicy:
         if needs_full_context:
             self._full_context_sent_at = now
 
+        # Grounds "upcoming"/"next week"/etc. in an actual date -- the main
+        # agent otherwise has no sense of the current date at all. Sourced
+        # from the most recent utterance's own timestamp_ms (already
+        # tracked on every Utterance, already in wm.history) rather than a
+        # fresh system clock read: this is data the conversation already
+        # has, not a new dependency, and it's current to the millisecond
+        # whenever this turn actually happened. Every turn, not gated like
+        # summary_block/recent_block above -- a time-sensitive question can
+        # come up at any point, not just early in a connection.
+        current_time_block = (
+            "Current date/time: "
+            f"{datetime.fromtimestamp(wm.history[-1].timestamp_ms / 1000, tz=timezone.utc):%A, %Y-%m-%d %H:%M UTC}\n\n"
+            if wm.history
+            else ""
+        )
+
         summary_block = (
             (
                 "Summary of the conversation so far:\n"
@@ -1048,6 +1065,7 @@ class CoalaPolicy:
         )
 
         return (
+            f"{current_time_block}"
             f"{summary_block}"
             f"{recent_block}"
             f"{linked_tail_block}"

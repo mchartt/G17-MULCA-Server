@@ -114,12 +114,13 @@ def make_utterance(
     is_wake_phrase=False,
     always_reply=False,
     wake_phrase_has_question=False,
+    timestamp_ms=0,
 ) -> Utterance:
     return Utterance(
         speaker_id=speaker_id,
         speaker_name=name,
         content=content,
-        timestamp_ms=0,
+        timestamp_ms=timestamp_ms,
         modality=modality,
         is_wake_phrase=is_wake_phrase,
         always_reply=always_reply,
@@ -192,6 +193,29 @@ async def test_an_ordinary_utterance_asks_the_observers():
 
     assert consult is True
     assert port.instructions == []
+
+
+async def test_the_directive_is_grounded_in_the_latest_utterances_own_timestamp():
+    # "what are upcoming deadlines" needs an actual date to be "upcoming"
+    # relative to -- sourced from the most recent utterance's own
+    # timestamp_ms (already tracked, already in wm.history), not a fresh
+    # system clock read, so it matches whenever this turn actually
+    # happened rather than whenever the prompt happens to be rendered.
+    policy, port = make_policy()
+    await policy.start(port)
+
+    # 2026-03-08T12:00:00 UTC.
+    await policy.on_utterance(make_utterance(timestamp_ms=1772971200000))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="respond_when_addressed",
+            prompt_fragment="they asked about deadlines",
+        ),
+    )
+
+    assert len(port.instructions) == 1
+    assert "2026-03-08" in port.instructions[0]
 
 
 async def test_a_selected_strategy_instructs_the_main_agent():
