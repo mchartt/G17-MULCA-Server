@@ -81,24 +81,31 @@ def build_app():
             f"'transcribe', got {listening_mode!r}"
         )
 
-    active_strategy_ids = ACTIVE_STRATEGY_IDS
+    # always_reply is loaded unconditionally, regardless of this server's
+    # own default: CoalaPolicy.on_intervention_signal only ever forces it
+    # for an utterance whose own always_reply flag is True, and
+    # Conversation only ever sets that for a link actually running
+    # "toggle"/"transcribe" with its window open -- inert for every
+    # ambient-mode utterance, on this server's default or any other link's.
+    # Loading it unconditionally is what lets a single link's own
+    # /mulca link mode:toggle|transcribe override have a fallback to force,
+    # even while this server's own default here stays "ambient" (the usual
+    # case: modes are chosen per Discord channel, not by redeploying with a
+    # different env var).
+    active_strategy_ids = ACTIVE_STRATEGY_IDS + ["always_reply"]
     if listening_mode in ("toggle", "transcribe"):
         # No continuous judgment happens in either of these modes, so there is no
-        # ambient moderation to speak of -- non_offensive is purely that,
-        # and is dropped rather than left active with nothing watching for
-        # it most of the time. The solicited strategies (respond_when_
-        # addressed, provide_summary, remember) can still fire inside an
-        # open window, same as always; always_reply is this mode's own
-        # fallback floor for when none of those more specific ones apply
-        # -- CoalaPolicy.on_intervention_signal forces it rather than
-        # letting "do nothing" be a real outcome inside an open window
-        # (speaking at all only happens because the user pressed the
-        # button, so there is no "was this addressed to me" question).
+        # ambient moderation to speak of -- non_offensive is purely that, and is
+        # dropped when this is the server's own default. A link overridden into
+        # one of these modes while the server's own default stays "ambient"
+        # leaves non_offensive loaded for every link, that one included; this is
+        # harmless, since it only ever gets a chance to fire inside that link's
+        # own open window to begin with (see _judge's gate on the mode).
         active_strategy_ids = [
             strategy_id
-            for strategy_id in ACTIVE_STRATEGY_IDS
+            for strategy_id in active_strategy_ids
             if strategy_id != "non_offensive"
-        ] + ["always_reply"]
+        ]
 
     # This is the server-wide default only -- a link can still override it
     # per-conversation via ConnectAgentMessage.listening_mode (/mulca link
