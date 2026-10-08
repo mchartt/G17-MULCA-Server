@@ -362,14 +362,14 @@ class CoalaPolicy:
             # acknowledgement and nothing else; a real question in the same
             # breath ("hey mulca, could you define the UNG diagram") gets
             # that acknowledgement leading a real answer in the same reply,
-            # not a bare "Listening." with no answer until a second,
-            # separate utterance.
+            # not a bare "Hi." with no answer until a second, separate
+            # utterance.
             directive = (
-                'Begin your reply with exactly "Listening." as its own '
+                'Begin your reply with exactly "Hi." as its own '
                 "sentence, then directly and helpfully answer what they "
                 "just asked, in the same reply."
                 if utterance.wake_phrase_has_question
-                else 'Say exactly: "Listening." Nothing else.'
+                else 'Say exactly: "Hi." Nothing else.'
             )
             wm.set_forced_context(directive)
             await port.instruct_main_agent(
