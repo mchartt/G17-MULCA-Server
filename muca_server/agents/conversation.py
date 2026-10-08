@@ -193,9 +193,10 @@ INTERRUPTION_THRESHOLD_FLOOR = 1
 # right after MUCA spoke or in a short turn -- otherwise people thanking
 # each other would end the session.
 DISMISSAL_PATTERN = re.compile(
-    r"\b(that'?s (all|it)|we'?re done|you can go|go to sleep|stop listening"
-    r"|thank(s| you)|grazie|basta( così)?|ho finito|abbiamo finito"
-    r"|puoi andare)\b",
+    r"\b(that'?s (all|it)|we'?re done|you can go|go to sleep|stop|be quiet"
+    r"|shut up|go away|thank(s| you)|grazie|basta( così)?|ho finito"
+    r"|abbiamo finito|puoi andare|smettila|fermati|(stai )?zitt[oa]|silenzio"
+    r"|vai a dormire)\b",
     re.IGNORECASE,
 )
 DISMISSAL_RECENT_MS = 15_000
