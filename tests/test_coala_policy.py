@@ -221,6 +221,41 @@ async def test_the_directive_is_grounded_in_the_latest_utterances_own_timestamp(
     assert "2026-03-08" in port.instructions[0]
 
 
+async def test_the_date_is_only_re_announced_when_the_calendar_day_changes():
+    # Repeating the same date on every single reply over a session that
+    # can run for hours is pure waste once it was already established
+    # earlier in the connection -- only worth repeating once it's actually
+    # a new day.
+    policy, port = make_policy()
+    await policy.start(port)
+
+    for strategy_id, fragment in [
+        ("respond_when_addressed", "first"),
+        ("respond_when_addressed", "second same day"),
+    ]:
+        await policy.on_utterance(make_utterance(timestamp_ms=1772971200000))
+        await policy.on_intervention_signal(
+            object(),
+            InterventionSignal(strategy_id=strategy_id, prompt_fragment=fragment),
+        )
+
+    assert "2026-03-08" in port.instructions[0]
+    assert "2026-03-08" not in port.instructions[1]
+
+    # The next day.
+    await policy.on_utterance(make_utterance(timestamp_ms=1773057600000))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="respond_when_addressed",
+            prompt_fragment="third, a new day",
+        ),
+    )
+
+    assert len(port.instructions) == 3
+    assert "2026-03-09" in port.instructions[2]
+
+
 async def test_the_directive_carries_the_live_voice_roster_not_just_who_spoke():
     # "who is in the chat" was being answered from the speaker-tagged
     # transcript alone (only people actually heard from), missing anyone

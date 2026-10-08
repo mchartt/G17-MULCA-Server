@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from collections.abc import Callable
 from uuid import UUID
 
@@ -153,6 +153,14 @@ class CoalaPolicy:
         # session has this natively is purely a function of connection
         # lifetime, not wall-clock time elapsed.
         self._own_tail_sent = False
+
+        # Gates current_time_block -- re-announced only when the calendar
+        # date actually changes (by the clock of each turn's own
+        # timestamp_ms), not every single turn. Not persisted across a
+        # reconnect, same reasoning as _own_tail_sent above: a reconnect is
+        # a brand new main-agent session with no memory of a date
+        # announced in a previous one.
+        self._last_date_announced: date | None = None
 
     async def start(self, port: ConversationPort) -> None:
         self._port = port
@@ -988,14 +996,27 @@ class CoalaPolicy:
         # from the most recent utterance's own timestamp_ms (already
         # tracked on every Utterance, already in wm.history) rather than a
         # fresh system clock read: this is data the conversation already
-        # has, not a new dependency, and it's current to the millisecond
-        # whenever this turn actually happened. Every turn, not gated like
-        # summary_block/recent_block above -- a time-sensitive question can
-        # come up at any point, not just early in a connection.
-        current_time_block = (
-            "Current date/time: "
-            f"{datetime.fromtimestamp(wm.history[-1].timestamp_ms / 1000, tz=timezone.utc):%A, %Y-%m-%d %H:%M UTC}\n\n"
+        # has, not a new dependency. Re-announced only when the calendar
+        # date actually changes, not every turn -- a session can run for
+        # hours, and repeating the same date on every single reply was pure
+        # waste once it was already established earlier in the connection.
+        current_date = (
+            datetime.fromtimestamp(
+                wm.history[-1].timestamp_ms / 1000, tz=timezone.utc
+            ).date()
             if wm.history
+            else None
+        )
+        send_date = (
+            current_date is not None
+            and current_date != self._last_date_announced
+        )
+        if send_date:
+            self._last_date_announced = current_date
+
+        current_time_block = (
+            f"Today's date: {current_date:%A, %Y-%m-%d} (UTC)\n\n"
+            if send_date
             else ""
         )
 
