@@ -39,10 +39,20 @@ class Utterance:
     # Only meaningful when is_wake_phrase is True: whether real content
     # rode along with the trigger word in the same breath ("hey mulca,
     # could you define the UNG diagram" -- not just "assistant?" alone).
-    # CoalaPolicy.on_utterance uses this to ask the main agent to lead with
-    # the acknowledgement and then directly answer, same reply, rather
-    # than the fixed "Listening." alone with no answer at all.
     wake_phrase_has_question: bool = False
+    # Only meaningful when wake_phrase_has_question is True. "transcribe"/
+    # "toggle": the question gets judged normally (consult_observers), same
+    # as a follow-up later in the window -- found live, the alternative
+    # (answer immediately, no judgement at all) meant needs_web_search
+    # could never be set for a question asked in the very breath that
+    # opens the window, e.g. "MULCA, could you look up the latest X?"
+    # right away answered "I can't look things up" with no search
+    # attempted. "wake": left False on purpose -- an engaged session's own
+    # opening question is still answered immediately with no judgement
+    # (confirmed by test_the_wake_phrase_engages_without_the_judge_and_
+    # announces_once), consistent with "wake" judging only later, engaged
+    # turns, never the one that starts the session.
+    judge_wake_question: bool = False
 
     def label(self) -> str:
         return self.speaker_name or f"User {self.speaker_id}"

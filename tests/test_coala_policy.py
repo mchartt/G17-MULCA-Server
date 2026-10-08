@@ -114,6 +114,7 @@ def make_utterance(
     is_wake_phrase=False,
     always_reply=False,
     wake_phrase_has_question=False,
+    judge_wake_question=False,
     timestamp_ms=0,
 ) -> Utterance:
     return Utterance(
@@ -125,6 +126,7 @@ def make_utterance(
         is_wake_phrase=is_wake_phrase,
         always_reply=always_reply,
         wake_phrase_has_question=wake_phrase_has_question,
+        judge_wake_question=judge_wake_question,
     )
 
 
@@ -162,11 +164,14 @@ async def test_a_wake_phrase_gets_an_acknowledgement_not_the_observers():
 
 
 async def test_a_wake_phrase_with_a_question_in_the_same_breath_just_gets_answered():
-    # "hey mulca, could you define the UNG diagram" -- not just the bare
-    # trigger word. Found live: explicitly asking for an acknowledgement
-    # here too (alongside the answer) produced a stilted "I heard you, ..."
-    # preamble before every single answer -- a real question just gets
-    # answered directly, no acknowledgement needed at all, unlike the bare
+    # "wake" mode only (judge_wake_question=False): "hey mulca, could you
+    # define the UNG diagram" -- not just the bare trigger word, but still
+    # answered immediately with no observer judgement, since "wake" judges
+    # only later, engaged turns, never the one that starts the session.
+    # Found live: explicitly asking for an acknowledgement here too
+    # (alongside the answer) produced a stilted "I heard you, ..." preamble
+    # before every single answer -- a real question just gets answered
+    # directly, no acknowledgement needed at all, unlike the bare
     # trigger-word-alone case (which still gets one, since there's nothing
     # yet to answer).
     policy, port = make_policy()
@@ -186,6 +191,42 @@ async def test_a_wake_phrase_with_a_question_in_the_same_breath_just_gets_answer
     assert "no need to acknowledge" in port.instructions[0].lower()
     assert "answer" in port.instructions[0].lower()
     assert "answer" in port.instructions[0].lower()
+
+
+async def test_a_transcribe_wake_question_is_judged_so_it_can_get_a_web_search():
+    # "transcribe"/"toggle" (judge_wake_question=True): found live,
+    # "MULCA, could you look up the latest videos by X?" used to take the
+    # immediate-answer shortcut above with no observer judgement at all, so
+    # needs_web_search could never be set for a question asked in the same
+    # breath as the wake phrase -- MULCA just answered from what it already
+    # knew ("I can't look that up"). It must now reach the observer like
+    # any other addressed turn.
+    policy, port = make_policy(
+        strategy_store=STRATEGIES_WITH_ALWAYS_REPLY,
+        web_searcher=FakeWebSearcher(),
+    )
+    await policy.start(port)
+
+    consult = await policy.on_utterance(
+        make_utterance(
+            content="MULCA, could you look up the latest videos by Dark Dark?",
+            modality="audio",
+            is_wake_phrase=True,
+            wake_phrase_has_question=True,
+            judge_wake_question=True,
+        ),
+    )
+
+    assert consult is True
+    assert port.instructions == []  # nothing forced yet -- awaiting judgement
+
+    # Even if the observer fails to produce any decision at all (the same
+    # live failure mode already seen for a later follow-up question), the
+    # "toggle"/"transcribe" guarantee still forces a reply.
+    await policy.on_intervention_signal(object(), None)
+
+    assert len(port.instructions) == 1
+    assert "Respond directly" in port.instructions[0]
 
 
 async def test_the_directive_names_who_the_reply_is_for():

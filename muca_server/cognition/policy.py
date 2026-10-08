@@ -401,7 +401,7 @@ class CoalaPolicy:
             "specific strategy fits, select always_reply, and still set "
             "needs_history/needs_web_search whenever they apply, exactly "
             "as you would for any other strategy."
-            if utterance.always_reply
+            if utterance.always_reply or utterance.judge_wake_question
             else ""
         )
         await port.tell_observers(
@@ -416,19 +416,34 @@ class CoalaPolicy:
         self._pending_utterance = utterance
         self._turn_done.clear()
 
+        if utterance.is_wake_phrase and utterance.judge_wake_question:
+            # "transcribe"/"toggle" only (see judge_wake_question's own
+            # comment on Utterance). Found live: "MULCA, could you look up
+            # the latest videos by [X]?" -- a real question riding along
+            # with the wake phrase itself -- used to always take the
+            # immediate-answer shortcut below, which never consults the
+            # observer at all, so needs_web_search could never be set for
+            # it; MULCA just answered from what it already knew. The
+            # question almost always names MULCA literally (it's spoken in
+            # the same breath as the wake phrase), so respond_when_addressed
+            # should fire normally here -- consult the observer like any
+            # other addressed turn, so it gets the chance to flag
+            # needs_web_search/needs_history. The "toggle"/"transcribe"
+            # guarantee below still forces a reply regardless, exactly as
+            # it would for a follow-up question later in the same window.
+            return True
+
         if utterance.is_wake_phrase:
-            # conversation.py already opened the listening window itself
-            # (that state lives there, not here) -- this is the forced
-            # directive, same shape as a forced intervention. Two cases:
-            # the trigger word alone ("assistant?") gets a brief
-            # acknowledgement and nothing else, since there's nothing yet
-            # to answer; a real question in the same breath ("hey mulca,
-            # could you define the UNG diagram") just gets answered
-            # directly -- found live, explicitly asking for an
-            # acknowledgement here too ("Briefly acknowledge... then
-            # answer") produced a stilted "I heard you, ..." preamble
-            # before every answer. A real question needs no acknowledgement
-            # at all; just answering it already shows it was heard.
+            # Either the trigger word alone ("assistant?", nothing to
+            # answer yet), or a question riding along with it in "wake"
+            # mode specifically -- "wake" judges only later, engaged turns,
+            # never the one that starts the session (confirmed by
+            # test_the_wake_phrase_engages_without_the_judge_and_announces_
+            # once), so this stays the immediate, unjudged shortcut for
+            # both of "wake"'s own cases. conversation.py already opened
+            # the listening window/engaged session itself (that state lives
+            # there, not here) -- this is the forced directive, same shape
+            # as a forced intervention.
             directive = (
                 "Directly and helpfully answer what they just asked -- no "
                 "need to acknowledge or confirm you heard them first, just "
@@ -593,11 +608,20 @@ class CoalaPolicy:
         # ignore, same as the vetoes above -- "do nothing" is not a real
         # outcome for an utterance spoken during an explicitly opened
         # listening window, whether the model itself chose nothing or a
-        # veto just cleared what it did choose.
+        # veto just cleared what it did choose. judge_wake_question is
+        # included here too: that utterance's own always_reply is always
+        # False (conversation.py snapshots it before the wake phrase opens
+        # the window), but a question asked in the same breath as the wake
+        # phrase gets exactly the same guarantee a later follow-up question
+        # would, in the "transcribe"/"toggle" modes where it's judged at
+        # all (see judge_wake_question's own comment on Utterance).
         if (
             strategy_id is None
             and self._pending_utterance is not None
-            and self._pending_utterance.always_reply
+            and (
+                self._pending_utterance.always_reply
+                or self._pending_utterance.judge_wake_question
+            )
             and self._strategies.get("always_reply") is not None
         ):
             strategy_id = "always_reply"

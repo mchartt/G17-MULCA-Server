@@ -1249,6 +1249,9 @@ class Conversation:
         wake_phrase_has_question = is_wake_phrase and _wake_phrase_has_question(
             transcript
         )
+        judge_wake_question = (
+            wake_phrase_has_question and self._listening_mode != "wake"
+        )
         if is_followup:
             self._followup_speaker = None
         if is_wake_phrase:
@@ -1300,8 +1303,17 @@ class Conversation:
                 ),
                 is_wake_phrase=is_wake_phrase,
                 wake_phrase_has_question=wake_phrase_has_question,
+                judge_wake_question=judge_wake_question,
             ),
-            in_window=in_open_window or is_followup,
+            # judge_wake_question: in_open_window was snapshotted before
+            # _handle_wake_phrase (above) opened the window for this very
+            # utterance -- a real question riding along with the wake
+            # phrase itself must still reach the observer in "transcribe"/
+            # "toggle" (see policy.py's on_utterance), not be treated as
+            # "outside any window" just because the window technically
+            # didn't exist yet at the top of this function. "wake" is
+            # unaffected: judge_wake_question is always False there.
+            in_window=in_open_window or is_followup or judge_wake_question,
         )
 
     async def _judge(
