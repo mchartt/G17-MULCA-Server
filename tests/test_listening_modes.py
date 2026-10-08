@@ -710,32 +710,29 @@ async def test_interruptions_warn_the_judge_at_half_then_end_the_session():
     conversation, _ = await make_conversation(listening_mode="wake")
     await conversation._handle_wake_phrase(speaker=1)
 
-    for _ in range(2):
-        await interrupted(conversation, 500)
-    assert conversation._warned_about_interruptions is False
-    await interrupted(conversation, 500)  # 3: half of 5, rounded up
-    assert conversation._warned_about_interruptions is True
-
     await interrupted(conversation, 500)
+    assert conversation._warned_about_interruptions is False
+    await interrupted(conversation, 500)  # 2: half of 3, rounded up
+    assert conversation._warned_about_interruptions is True
     assert conversation._listening_window_open is True
-    await interrupted(conversation, 500)  # 5
+
+    await interrupted(conversation, 500)  # 3
     assert conversation._listening_window_open is False
 
 
-async def test_the_interruption_threshold_drops_over_time_to_two():
+async def test_the_interruption_threshold_drops_over_time_to_one():
     conversation, _ = await make_conversation(listening_mode="wake")
     await conversation._handle_wake_phrase(speaker=1)
     start = conversation._engaged_since_ms
     step = conversation_module.INTERRUPTION_THRESHOLD_STEP_MS
 
-    assert conversation._interruption_threshold(start) == 5
-    assert conversation._interruption_threshold(start + step) == 4
-    assert conversation._interruption_threshold(start + 3 * step) == 2
-    assert conversation._interruption_threshold(start + 4 * step) == 2
+    assert conversation._interruption_threshold(start) == 3
+    assert conversation._interruption_threshold(start + step) == 2
+    assert conversation._interruption_threshold(start + 2 * step) == 1
+    assert conversation._interruption_threshold(start + 3 * step) == 1
 
-    conversation._engaged_since_ms = start - 4 * step
-    await interrupted(conversation, 500)
-    assert conversation._listening_window_open is True
+    # At the floor, the first talk-over that counts ends the session.
+    conversation._engaged_since_ms = start - 2 * step
     await interrupted(conversation, 500)
     assert conversation._listening_window_open is False
 

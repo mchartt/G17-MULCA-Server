@@ -188,6 +188,19 @@ async def test_a_wake_phrase_with_a_question_in_the_same_breath_just_gets_answer
     assert "answer" in port.instructions[0].lower()
 
 
+async def test_the_directive_names_who_the_reply_is_for():
+    # Found live: not told who a reply was for, the main agent hedged about
+    # who was speaking, though the platform labels every turn.
+    policy, port = make_policy()
+    await policy.start(port)
+
+    await policy.on_utterance(
+        make_utterance(content="hey assistant", modality="audio", is_wake_phrase=True),
+    )
+
+    assert "Replying to: Ada (audio)" in port.instructions[0]
+
+
 async def test_an_ordinary_utterance_asks_the_observers():
     policy, port = make_policy()
     await policy.start(port)
