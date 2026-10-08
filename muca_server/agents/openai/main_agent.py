@@ -249,7 +249,7 @@ class MainAgentOpenAI(MainAgent):
                         "type": "server_vad",
                         "create_response": False,
                         "interrupt_response": False,
-                        "silence_duration_ms": 300,
+                        "silence_duration_ms": 500,
                         "prefix_padding_ms": 500,
                     },
                 },

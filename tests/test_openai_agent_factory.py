@@ -64,6 +64,20 @@ def test_an_ambient_conversations_agent_never_has_always_reply_in_its_catalog(
     assert "always_reply" not in aux._strategies.ids()
 
 
+def test_a_wake_conversations_agent_gets_the_ambient_catalog(tmp_path):
+    # An engaged "wake" session is judged like ambient; only the follow-up
+    # to a bare wake phrase is forced, by the policy, not by the model.
+    factory = make_factory(tmp_path)
+
+    aux = factory.build_auxiliary(
+        AuxiliaryAgentOptions.for_type(
+            "intervention_detection",
+        ).model_copy(update={"listening_mode": "wake"}),
+    )
+
+    assert "always_reply" not in aux._strategies.ids()
+
+
 def test_a_toggle_conversations_agent_has_always_reply_in_its_catalog(tmp_path):
     factory = make_factory(tmp_path)
 

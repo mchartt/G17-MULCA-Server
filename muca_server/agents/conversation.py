@@ -68,7 +68,9 @@ logger = logging.getLogger(__name__)
 # tested, and reasoned about) independently. Both share the exact same
 # "only judge inside an open window" gating in _judge() -- this tuple is
 # that shared check.
-NON_AMBIENT_LISTENING_MODES = ("toggle", "transcribe")
+NON_AMBIENT_LISTENING_MODES = ("toggle", "transcribe", "wake")
+
+ListeningMode = Literal["ambient", "toggle", "transcribe", "wake"]
 
 NO_SPEAKER = -1
 
@@ -149,6 +151,61 @@ def _wake_phrase_has_question(transcript: str) -> bool:
     remainder = _WAKE_PHRASE_FILLER.sub("", remainder)
     return len(remainder.strip(" ,.!?:;-")) > 0
 
+
+# "wake" mode, voice only: the wake phrase starts an engaged session --
+# judged like ambient for the length of a discussion -- instead of
+# transcribe's 5 s window. These end it again (_disengage), all silently:
+# the client shows the change from the ListeningStateMessage.
+#
+# A quiet room: nobody, MUCA included, spoke for this long.
+ENGAGED_SILENCE_MS = 30_000
+# Bounds what one engagement can cost; saying the wake phrase again
+# restarts it.
+ENGAGED_MAX_MS = 300_000
+
+# Being talked over right away means MUCA isn't wanted; being heard out
+# means it is. A talk-over after T seconds of MUCA's audible reply moves
+# the score by the first band T falls under; a reply that finishes
+# uninterrupted resets it to 0.
+INTERRUPTION_BANDS_MS = ((1_000, 1), (3_000, 0), (5_000, -1))
+INTERRUPTION_LONG_REPLY_DELTA = -2
+# A backchannel ("mm", "sì") or a cough isn't a rejection: only a
+# talk-over that lasted this long, or said this many words, counts.
+INTERRUPTION_MIN_MS = 600
+INTERRUPTION_MIN_WORDS = 2
+# The score that ends the session drops the longer it runs: the start
+# value, minus one per step, never below the floor. Half of it (rounded
+# up) warns the intervention agent first, once.
+INTERRUPTION_THRESHOLD_START = 5
+INTERRUPTION_THRESHOLD_STEP_MS = 60_000
+INTERRUPTION_THRESHOLD_FLOOR = 2
+
+# A spoken way out, in either language. With the wake word in it, only a
+# short turn counts ("thanks MUCA") -- a longer one ("thanks MUCA, can you
+# also check X") is a request, not goodbye. Standalone phrases only count
+# right after MUCA spoke or in a short turn -- otherwise people thanking
+# each other would end the session.
+DISMISSAL_PATTERN = re.compile(
+    r"\b(that'?s (all|it)|we'?re done|you can go|go to sleep|stop listening"
+    r"|thank(s| you)|grazie|basta( così)?|ho finito|abbiamo finito"
+    r"|puoi andare)\b",
+    re.IGNORECASE,
+)
+DISMISSAL_RECENT_MS = 15_000
+DISMISSAL_MAX_WORDS = 4
+DISMISSAL_WITH_NAME_MAX_WORDS = 6
+
+
+def _matches_dismissal(transcript: str, *, assistant_spoke_recently: bool) -> bool:
+    if DISMISSAL_PATTERN.search(transcript) is None:
+        return False
+
+    words = len(transcript.split())
+    if _matches_wake_phrase(transcript):
+        return words <= DISMISSAL_WITH_NAME_MAX_WORDS
+
+    return assistant_spoke_recently or words <= DISMISSAL_MAX_WORDS
+
 # Unity's receive loop reads 16 KB per frame; 3000 float32 samples, base64
 # encoded, keep a state_update well under that.
 MAX_SAMPLES_PER_FRAME = 3000
@@ -195,7 +252,7 @@ class Conversation:
         silence_timeout_ms: int = DEFAULT_SILENCE_TIMEOUT_MS,
         model_settings: ModelSettings | None = None,
         usage_tracker: UsageTracker | None = None,
-        listening_mode: Literal["ambient", "toggle", "transcribe"] = "ambient",
+        listening_mode: ListeningMode = "ambient",
     ) -> None:
         self._state = state
         self._outbound_queue = outbound_queue
@@ -210,6 +267,20 @@ class Conversation:
         self._listening_mode = listening_mode
         self._listening_window_open = False
         self._wake_phrase_timer: asyncio.Task[None] | None = None
+        # "wake" only: _listening_window_open doubles as "engaged". When
+        # it started, the last time anyone spoke, and the interruption
+        # score that can end it (see INTERRUPTION_BANDS_MS).
+        self._engaged_since_ms = 0
+        self._last_speech_ms = 0
+        self._interruption_score = 0
+        self._warned_about_interruptions = False
+        # How far into MUCA's audible reply it was talked over, until the
+        # interrupting turn closes and shows whether it counts.
+        self._pending_interruption_ms: int | None = None
+        self._last_assistant_speech_ms = 0
+        # Who said a bare wake phrase: their next turn is the question it
+        # was said for, so it always gets a reply.
+        self._followup_speaker: int | None = None
         if model_settings is not None:
             model_settings.watch(outbound_queue)
         # This session's own models, from the handshake; empty means the
@@ -499,8 +570,9 @@ class Conversation:
             # literal transcript. The main agent above is unaffected: it
             # still needs audio for turn-taking/VAD -- see the "NOT
             # CURRENTLY WIRED IN" note in transcription_agent.py for why
-            # that part isn't also changed yet.
-            if self._listening_mode == "ambient":
+            # that part isn't also changed yet. "wake" hears it only while
+            # engaged, i.e. while it judges like ambient.
+            if self._listening_mode == "ambient" or self._engaged():
                 for agent in list(self._auxiliary_agents.values()):
                     if agent.listens_to_user(message.speaker):
                         await agent.send_audio_chunk(chunk)
@@ -527,6 +599,9 @@ class Conversation:
             return
 
         if self.main_agent_state is not MainAgentState.ANSWERING:
+            return
+
+        if self._wake_dormant():
             return
 
         for agent in list(self._auxiliary_agents.values()):
@@ -690,14 +765,26 @@ class Conversation:
         )
         await self._send(ListeningStateMessage(open=self._listening_window_open))
 
-    async def _handle_wake_phrase(self, speaker: int) -> None:
+    async def _handle_wake_phrase(
+        self,
+        speaker: int,
+        *,
+        has_question: bool = True,
+    ) -> None:
         """
         "transcribe" mode only, voice only: a wake phrase (WAKE_PHRASE_
         PATTERN) opens (or extends) the listening window entirely
         hands-free, no UI or text channel involved. Unlike "toggle" mode's
         button, there's no spoken "stop" -- it closes itself after
         WAKE_PHRASE_SILENCE_MS of silence instead.
+
+        "wake" mode instead starts (or restarts) an engaged session, which
+        only _disengage ends.
         """
+
+        if self._listening_mode == "wake":
+            await self._engage(speaker, has_question=has_question)
+            return
 
         self._listening_window_open = True
         self._cancel_wake_phrase_timer()
@@ -730,6 +817,138 @@ class Conversation:
             WAKE_PHRASE_SILENCE_MS,
         )
         await self._send(ListeningStateMessage(open=False))
+
+    def _engaged(self) -> bool:
+        return self._listening_mode == "wake" and self._listening_window_open
+
+    def _wake_dormant(self) -> bool:
+        return self._listening_mode == "wake" and not self._listening_window_open
+
+    async def _engage(self, speaker: int, *, has_question: bool) -> None:
+        """
+        "wake" mode: start the session, or restart it if already engaged --
+        saying the name again is the strongest sign MUCA is still wanted.
+        """
+
+        was_engaged = self._listening_window_open
+        now = _now_ms()
+        self._listening_window_open = True
+        self._engaged_since_ms = now
+        self._last_speech_ms = now
+        self._interruption_score = 0
+        self._warned_about_interruptions = False
+        self._pending_interruption_ms = None
+        # A bare "hey MUCA": the question comes in their next turn.
+        self._followup_speaker = None if has_question else speaker
+        logger.info(
+            "%s engaged session %s (wake phrase, %s)",
+            self._conversation_id,
+            "restarted" if was_engaged else "started",
+            self._username(speaker),
+        )
+        if not was_engaged:
+            await self._send(ListeningStateMessage(open=True))
+
+    async def _disengage(self, reason: str) -> None:
+        if not self._listening_window_open:
+            return
+
+        self._listening_window_open = False
+        self._followup_speaker = None
+        self._pending_interruption_ms = None
+        logger.info(
+            "%s engaged session ended (%s) after %ds, interruption score %d",
+            self._conversation_id,
+            reason,
+            (_now_ms() - self._engaged_since_ms) // 1000,
+            self._interruption_score,
+        )
+        self._interruption_score = 0
+        self._warned_about_interruptions = False
+        await self._send(ListeningStateMessage(open=False))
+
+    async def _check_engaged_session(self, now: int) -> None:
+        """Every tick: a quiet room, or the time limit, ends the session."""
+
+        if (
+            self._user_is_speaking()
+            or self._user_voice_activity_detected
+            or self.main_agent_state is MainAgentState.ANSWERING
+        ):
+            # Also keeps a reply that is playing from being cut by the cap.
+            self._last_speech_ms = now
+            return
+
+        if now - self._last_speech_ms >= ENGAGED_SILENCE_MS:
+            await self._disengage("silence")
+        elif now - self._engaged_since_ms >= ENGAGED_MAX_MS:
+            await self._disengage("time limit")
+
+    def _interruption_threshold(self, now: int) -> int:
+        elapsed_steps = (
+            now - self._engaged_since_ms
+        ) // INTERRUPTION_THRESHOLD_STEP_MS
+        return max(
+            INTERRUPTION_THRESHOLD_FLOOR,
+            INTERRUPTION_THRESHOLD_START - elapsed_steps,
+        )
+
+    async def _settle_interruption(
+        self,
+        speaker: int,
+        ended_at: int,
+        transcript: str,
+    ) -> None:
+        """
+        The turn that talked over MUCA just closed: score it, unless it was
+        only a backchannel or a cough.
+        """
+
+        heard_ms = self._pending_interruption_ms
+        self._pending_interruption_ms = None
+        if heard_ms is None or not self._engaged():
+            return
+
+        turn = next(
+            (
+                t
+                for t in reversed(self.turns)
+                if t.speaker_id == speaker and t.end_time == ended_at
+            ),
+            None,
+        )
+        lasted_ms = ended_at - turn.start_time if turn is not None else 0
+        if (
+            lasted_ms < INTERRUPTION_MIN_MS
+            and len(transcript.split()) < INTERRUPTION_MIN_WORDS
+        ):
+            return
+
+        delta = next(
+            (d for limit, d in INTERRUPTION_BANDS_MS if heard_ms < limit),
+            INTERRUPTION_LONG_REPLY_DELTA,
+        )
+        self._interruption_score = max(0, self._interruption_score + delta)
+
+        threshold = self._interruption_threshold(_now_ms())
+        logger.info(
+            "%s talked over after %dms: interruption score %d/%d",
+            self._conversation_id,
+            heard_ms,
+            self._interruption_score,
+            threshold,
+        )
+        if self._interruption_score >= threshold:
+            await self._disengage("interruptions")
+        elif (
+            self._interruption_score >= -(-threshold // 2)
+            and not self._warned_about_interruptions
+        ):
+            self._warned_about_interruptions = True
+            await self._tell_observers(
+                "You've been cut off repeatedly -- only intervene in a "
+                "clear pause or when directly addressed."
+            )
 
     async def disconnect_agent(
         self,
@@ -938,6 +1157,9 @@ class Conversation:
             self._listening_mode in NON_AMBIENT_LISTENING_MODES
             and self._listening_window_open
         )
+        is_followup = (
+            self._engaged() and self._followup_speaker == speaker
+        )
 
         transcript = await self._collect_transcript(speaker)
         logger.info(
@@ -956,6 +1178,9 @@ class Conversation:
             self._username(speaker),
             transcript,
         )
+        if self._listening_mode == "wake":
+            await self._settle_interruption(speaker, ended_at, transcript)
+
         if not transcript:
             # Nothing understood (noise, or transcription failed) --
             # explicitly told, rather than asking the observers to judge
@@ -976,17 +1201,44 @@ class Conversation:
                 "(likely noise, not speech) -- nothing intelligible was "
                 "said, so there is nothing to react to."
             )
-            self._ask_observers_to_consider(speaker)
+            # Outside a non-ambient window, nothing is judged -- noise
+            # included (the prompt-echo filter makes these more common).
+            if (
+                self._listening_mode not in NON_AMBIENT_LISTENING_MODES
+                or in_open_window
+            ):
+                self._ask_observers_to_consider(speaker)
             return
 
-        is_wake_phrase = self._listening_mode == "transcribe" and _matches_wake_phrase(
-            transcript
-        )
+        is_wake_phrase = self._listening_mode in (
+            "transcribe",
+            "wake",
+        ) and _matches_wake_phrase(transcript)
+
+        # "wake": a dismissal wins over the wake phrase -- it ends an
+        # engaged session unanswered, and never starts one.
+        if self._listening_mode == "wake" and _matches_dismissal(
+            transcript,
+            assistant_spoke_recently=(
+                _now_ms() - self._last_assistant_speech_ms
+                <= DISMISSAL_RECENT_MS
+            ),
+        ):
+            await self._disengage("dismissed")
+            is_wake_phrase = False
+            is_followup = False
+            in_open_window = False
+
         wake_phrase_has_question = is_wake_phrase and _wake_phrase_has_question(
             transcript
         )
+        if is_followup:
+            self._followup_speaker = None
         if is_wake_phrase:
-            await self._handle_wake_phrase(speaker)
+            await self._handle_wake_phrase(
+                speaker,
+                has_question=wake_phrase_has_question,
+            )
 
         # Found live: unlike a text message (_take_text_turn, above), a
         # voice turn's transcript was never actually forwarded to the
@@ -1022,13 +1274,25 @@ class Conversation:
                 content=transcript,
                 timestamp_ms=ended_at,
                 modality="audio",
-                always_reply=in_open_window,
+                # "wake" judges an engaged turn like ambient: only the
+                # question after a bare wake phrase must get a reply.
+                always_reply=(
+                    is_followup
+                    if self._listening_mode == "wake"
+                    else in_open_window
+                ),
                 is_wake_phrase=is_wake_phrase,
                 wake_phrase_has_question=wake_phrase_has_question,
-            )
+            ),
+            in_window=in_open_window or is_followup,
         )
 
-    async def _judge(self, utterance: Utterance) -> None:
+    async def _judge(
+        self,
+        utterance: Utterance,
+        *,
+        in_window: bool | None = None,
+    ) -> None:
         consult_observers = await self._policy.on_utterance(utterance)
 
         # "toggle"/"transcribe": outside an open window, resolve exactly
@@ -1045,12 +1309,16 @@ class Conversation:
         # after. Re-reading live state here would let a /listen press that
         # happens *during* that wait retroactively count an
         # already-finished utterance as inside the window, even though it
-        # was said before the press -- confirmed live.
+        # was said before the press -- confirmed live. "wake" passes that
+        # snapshot as in_window instead: its engaged turns are inside the
+        # window without always_reply.
+        if in_window is None:
+            in_window = utterance.always_reply
         if (
             consult_observers
             and self._listening_mode in NON_AMBIENT_LISTENING_MODES
             and utterance.modality == "audio"
-            and not utterance.always_reply
+            and not in_window
         ):
             await self._policy.on_intervention_signal(NO_OBSERVER, None)
             consult_observers = False
@@ -1150,6 +1418,9 @@ class Conversation:
                 )
                 if stale:
                     await self._read_speaker(None)
+
+                if self._engaged():
+                    await self._check_engaged_session(now)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -1158,6 +1429,11 @@ class Conversation:
     async def _send_to_listeners(self, chunk: AudioChunk) -> None:
         if self._main_agent is not None:
             await self._main_agent.send_audio_chunk(chunk)
+
+        # A dormant "wake" observer never judges: audio would only be
+        # context it pays for at its next judgement.
+        if self._wake_dormant():
+            return
 
         for agent in list(self._auxiliary_agents.values()):
             await agent.send_audio_chunk(chunk)
@@ -1496,6 +1772,11 @@ class Conversation:
         self.main_agent_state = MainAgentState.INACTIVE
         self._reset_assistant_audio()
 
+        # Heard out in full: MUCA is wanted after all.
+        self._last_assistant_speech_ms = _now_ms()
+        self._interruption_score = 0
+        self._warned_about_interruptions = False
+
         await self._send(
             StateUpdateMessage.response_completed(
                 current_speaker=self.current_speaker,
@@ -1514,6 +1795,13 @@ class Conversation:
         )
 
         self._assistant_turn_ending = True
+
+        # Scored once the interrupting turn closes (_settle_interruption):
+        # only then is it known whether it was a real talk-over.
+        now = _now_ms()
+        if self._engaged() and self._assistant_turn_open():
+            self._pending_interruption_ms = now - self.turns[-1].start_time
+        self._last_assistant_speech_ms = now
 
         # This fires whenever the user starts talking while the assistant's
         # reply is still audible on the client, even if generation (and
