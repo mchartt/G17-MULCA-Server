@@ -13,7 +13,11 @@ import asyncio
 from uuid import uuid4
 
 from muca_server.agents import AuxiliaryAgent, MainAgent, MainAgentOptions
-from muca_server.agents.conversation import Conversation, _matches_wake_phrase
+from muca_server.agents.conversation import (
+    Conversation,
+    _matches_wake_phrase,
+    _wake_phrase_has_question,
+)
 from muca_server.audio import AudioChunk
 from muca_server.cognition import CoalaPolicy, InterventionSignal, Utterance
 from muca_server.cognition.strategies import Strategy, StrategyStore
@@ -380,6 +384,25 @@ def test_wake_phrase_matching_is_deterministic_not_fuzzy_guessing():
 
     assert not _matches_wake_phrase("hello there")
     assert not _matches_wake_phrase("")
+
+
+def test_wake_phrase_has_question_detects_a_real_question_in_the_same_breath():
+    # "hey mulca, could you define the UNG diagram" -- a real question rode
+    # along with the trigger word in the same breath, not just the trigger
+    # word alone (used to decide between the bare "Listening."
+    # acknowledgement and leading a real answer with it, same reply).
+    assert _wake_phrase_has_question(
+        "hey mulca, could you define the UNG diagram"
+    )
+    assert _wake_phrase_has_question("assistant what time is the next class")
+
+    # Bare trigger word alone (plus stray punctuation/filler) -- no real
+    # question rode along with it.
+    assert not _wake_phrase_has_question("assistant")
+    assert not _wake_phrase_has_question("Assistant?")
+    assert not _wake_phrase_has_question("hey assistant")
+    assert not _wake_phrase_has_question("mulca")
+    assert not _wake_phrase_has_question("")
 
 
 async def test_the_wake_phrase_opens_the_window_hands_free():

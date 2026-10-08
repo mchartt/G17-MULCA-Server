@@ -113,6 +113,7 @@ def make_utterance(
     modality="text",
     is_wake_phrase=False,
     always_reply=False,
+    wake_phrase_has_question=False,
 ) -> Utterance:
     return Utterance(
         speaker_id=speaker_id,
@@ -122,6 +123,7 @@ def make_utterance(
         modality=modality,
         is_wake_phrase=is_wake_phrase,
         always_reply=always_reply,
+        wake_phrase_has_question=wake_phrase_has_question,
     )
 
 
@@ -153,6 +155,30 @@ async def test_a_wake_phrase_gets_a_fixed_acknowledgement_not_the_observers():
     assert consult is False
     assert len(port.instructions) == 1
     assert "Listening" in port.instructions[0]
+
+
+async def test_a_wake_phrase_with_a_question_in_the_same_breath_gets_both():
+    # "hey mulca, could you define the UNG diagram" -- not just the bare
+    # trigger word. The main agent is asked to lead with the
+    # acknowledgement and then actually answer, in the same reply, rather
+    # than "Listening." alone with the question left unanswered until a
+    # second, separate utterance.
+    policy, port = make_policy()
+    await policy.start(port)
+
+    consult = await policy.on_utterance(
+        make_utterance(
+            content="hey mulca, could you define the UNG diagram",
+            modality="audio",
+            is_wake_phrase=True,
+            wake_phrase_has_question=True,
+        ),
+    )
+
+    assert consult is False
+    assert len(port.instructions) == 1
+    assert "Listening" in port.instructions[0]
+    assert "answer" in port.instructions[0].lower()
 
 
 async def test_an_ordinary_utterance_asks_the_observers():

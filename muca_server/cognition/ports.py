@@ -36,6 +36,13 @@ class Utterance:
     # Fires a fixed acknowledgement (CoalaPolicy.on_utterance), not a normal
     # reply -- the content itself is a control phrase, not a question.
     is_wake_phrase: bool = False
+    # Only meaningful when is_wake_phrase is True: whether real content
+    # rode along with the trigger word in the same breath ("hey mulca,
+    # could you define the UNG diagram" -- not just "assistant?" alone).
+    # CoalaPolicy.on_utterance uses this to ask the main agent to lead with
+    # the acknowledgement and then directly answer, same reply, rather
+    # than the fixed "Listening." alone with no answer at all.
+    wake_phrase_has_question: bool = False
 
     def label(self) -> str:
         return self.speaker_name or f"User {self.speaker_id}"

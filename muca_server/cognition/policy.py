@@ -356,14 +356,26 @@ class CoalaPolicy:
 
         if utterance.is_wake_phrase:
             # conversation.py already opened the listening window itself
-            # (that state lives there, not here) -- this is just the fixed
-            # spoken acknowledgement, same shape as a forced intervention,
-            # not a normal content reply to "hey assistant" itself.
-            wm.set_forced_context('Say exactly: "Listening." Nothing else.')
+            # (that state lives there, not here) -- this is the forced
+            # directive, same shape as a forced intervention. Two cases:
+            # the trigger word alone ("assistant?") gets the fixed
+            # acknowledgement and nothing else; a real question in the same
+            # breath ("hey mulca, could you define the UNG diagram") gets
+            # that acknowledgement leading a real answer in the same reply,
+            # not a bare "Listening." with no answer until a second,
+            # separate utterance.
+            directive = (
+                'Begin your reply with exactly "Listening." as its own '
+                "sentence, then directly and helpfully answer what they "
+                "just asked, in the same reply."
+                if utterance.wake_phrase_has_question
+                else 'Say exactly: "Listening." Nothing else.'
+            )
+            wm.set_forced_context(directive)
             await port.instruct_main_agent(
                 self._render_prompt(
                     wm,
-                    directive='Say exactly: "Listening." Nothing else.',
+                    directive=directive,
                     port=port,
                 )
             )

@@ -123,6 +123,32 @@ WAKE_PHRASE_SILENCE_MS = 5_000
 def _matches_wake_phrase(transcript: str) -> bool:
     return WAKE_PHRASE_PATTERN.search(transcript) is not None
 
+
+# Lead-in words that may accompany the trigger itself ("hey mulca") but
+# carry no content of their own -- stripped the same as the trigger word
+# when deciding whether real content rode along with it, so a bare
+# greeting-plus-trigger ("hey mulca") isn't mistaken for a real question.
+_WAKE_PHRASE_FILLER = re.compile(
+    r"\b(hey|hi|hej|hei|ok|okay|hello)\b",
+    re.IGNORECASE,
+)
+
+
+def _wake_phrase_has_question(transcript: str) -> bool:
+    """
+    Whether real content rode along with the wake phrase in the same
+    breath ("hey mulca, could you define the UNG diagram" -- not just
+    "hey assistant?" alone). Strips every wake-phrase match and lead-in
+    filler word out and checks whether anything but stray punctuation is
+    left; used to decide whether to give the fixed "Listening."
+    acknowledgement alone, or ask the main agent to lead with it and then
+    directly answer, same reply.
+    """
+
+    remainder = WAKE_PHRASE_PATTERN.sub("", transcript)
+    remainder = _WAKE_PHRASE_FILLER.sub("", remainder)
+    return len(remainder.strip(" ,.!?:;-")) > 0
+
 # Unity's receive loop reads 16 KB per frame; 3000 float32 samples, base64
 # encoded, keep a state_update well under that.
 MAX_SAMPLES_PER_FRAME = 3000
@@ -956,6 +982,9 @@ class Conversation:
         is_wake_phrase = self._listening_mode == "transcribe" and _matches_wake_phrase(
             transcript
         )
+        wake_phrase_has_question = is_wake_phrase and _wake_phrase_has_question(
+            transcript
+        )
         if is_wake_phrase:
             await self._handle_wake_phrase(speaker)
 
@@ -985,6 +1014,7 @@ class Conversation:
                 modality="audio",
                 always_reply=in_open_window,
                 is_wake_phrase=is_wake_phrase,
+                wake_phrase_has_question=wake_phrase_has_question,
             )
         )
 
