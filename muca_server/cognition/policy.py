@@ -513,11 +513,11 @@ class CoalaPolicy:
             prompt_fragment = None
             needs_history = False
 
-        # push_to_talk's guarantee: not a request the model might ignore,
-        # same as the vetoes above -- "do nothing" is not a real outcome
-        # for an utterance spoken during an explicitly opened listening
-        # window, whether the model itself chose nothing or a veto just
-        # cleared what it did choose.
+        # "toggle"/"transcribe" guarantee: not a request the model might
+        # ignore, same as the vetoes above -- "do nothing" is not a real
+        # outcome for an utterance spoken during an explicitly opened
+        # listening window, whether the model itself chose nothing or a
+        # veto just cleared what it did choose.
         if (
             strategy_id is None
             and self._pending_utterance is not None

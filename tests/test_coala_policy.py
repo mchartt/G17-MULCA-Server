@@ -109,7 +109,7 @@ async def test_a_forced_mention_bypasses_the_observers():
 
 
 async def test_a_wake_phrase_gets_a_fixed_acknowledgement_not_the_observers():
-    # push_to_talk only: conversation.py already opened the listening
+    # "transcribe" mode only: conversation.py already opened the listening
     # window itself before this is ever called (that state lives there,
     # not in CoalaPolicy) -- this just confirms the fixed "Listening"
     # acknowledgement fires instead of a normal judged reply.

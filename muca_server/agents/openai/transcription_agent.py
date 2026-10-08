@@ -1,5 +1,5 @@
 """
-A hears-only agent for the push_to_talk listening mode (conversation.py):
+A hears-only agent for the "toggle"/"transcribe" listening modes (conversation.py):
 transcribes audio continuously, with no reasoning or response-generation
 capability of its own. Uses OpenAI's dedicated Realtime *transcription*
 session type ("type": "transcription"), a distinct session kind from the
@@ -8,8 +8,9 @@ conversational one MainAgentOpenAI/InterventionAgentOpenAI use ("type":
 so it cannot ever accidentally trigger a billed response; only the ASR
 model's own (separate) transcription pricing applies, continuously.
 
-NOT CURRENTLY WIRED IN. push_to_talk mode's first cut (conversation.py)
-reuses MainAgentOpenAI's existing transcription instead (its VAD/turn
+NOT CURRENTLY WIRED IN. The "toggle"/"transcribe" modes' first cut
+(conversation.py) reuses MainAgentOpenAI's existing transcription instead
+(its VAD/turn
 detection is what drives speaker-attribution today, and that machinery is
 tightly coupled to the main agent's own audio -- moving it to a separate
 hears-only connection is real, separate work, not just swapping which
@@ -49,7 +50,7 @@ TranscriptHandler = Callable[[str, str], Awaitable[None]]
 
 class TranscriptionAgentOpenAI(RealtimeAgent):
     """
-    Continuously transcribes a conversation's audio for push_to_talk mode.
+    Continuously transcribes a conversation's audio for the "toggle"/"transcribe" modes.
 
     Unlike MainAgentOpenAI (which also transcribes, as a side effect of a
     full conversational session), this agent has nothing to say and no

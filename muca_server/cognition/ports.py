@@ -21,14 +21,15 @@ class Utterance:
     content: str
     timestamp_ms: int
     modality: Literal["text", "audio"] = "text"
-    # push_to_talk mode only, voice only: set while a listening window is
-    # open (see conversation.py's arm_listening) -- the user explicitly
-    # pressed a button before speaking, so there is no "was this addressed
-    # to me" question the way there is in ambient mode. CoalaPolicy's
-    # on_intervention_signal uses this to force a reply, rather than let
-    # "do nothing" be a real outcome -- see the always_reply strategy.
+    # "toggle"/"transcribe" modes only, voice only: set while a listening
+    # window is open (see conversation.py's arm_listening/_handle_wake_
+    # phrase) -- the user explicitly opened it before speaking, so there is
+    # no "was this addressed to me" question the way there is in ambient
+    # mode. CoalaPolicy's on_intervention_signal uses this to force a
+    # reply, rather than let "do nothing" be a real outcome -- see the
+    # always_reply strategy.
     always_reply: bool = False
-    # push_to_talk mode only, voice only: a deterministic (not model-judged)
+    # "transcribe" mode only, voice only: a deterministic (not model-judged)
     # phrase match found in conversation.py -- plain string matching, not
     # left to an observer's semantic judgement, which is exactly the kind
     # of unreliable call this mode exists to avoid making continuously.

@@ -59,10 +59,13 @@ ACTIVE_STRATEGY_IDS = [
 ]
 ASSISTANT_NAME = "MULCA"
 
-# "ambient" (default): every turn is judged, as above. "push_to_talk": the
-# intervention agent is only consulted inside a window opened by
-# ArmListeningMessage (conversation.py's arm_listening/_judge) -- it never
-# hears raw audio at all in that mode, only the main agent's transcript.
+# "ambient" (default): every turn is judged, as above. "toggle"/
+# "transcribe": the intervention agent is only consulted inside a window
+# (opened by the button/`/listen`, or a spoken wake phrase, respectively --
+# see conversation.py's arm_listening/_handle_wake_phrase/_judge) -- it
+# never hears raw audio at all in either, only the main agent's transcript.
+# Two separate, mutually exclusive modes, not two input methods for one
+# combined mode.
 LISTENING_MODE_ENV_VAR = "MUCA_LISTENING_MODE"
 
 # Anchored to this package's own location, not the current working
@@ -78,15 +81,15 @@ def build_app():
     load_dotenv()
 
     listening_mode = os.environ.get(LISTENING_MODE_ENV_VAR, "ambient")
-    if listening_mode not in ("ambient", "push_to_talk"):
+    if listening_mode not in ("ambient", "toggle", "transcribe"):
         raise ValueError(
-            f"{LISTENING_MODE_ENV_VAR} must be 'ambient' or 'push_to_talk', "
-            f"got {listening_mode!r}"
+            f"{LISTENING_MODE_ENV_VAR} must be 'ambient', 'toggle', or "
+            f"'transcribe', got {listening_mode!r}"
         )
 
     active_strategy_ids = ACTIVE_STRATEGY_IDS
-    if listening_mode == "push_to_talk":
-        # No continuous judgment happens in this mode, so there is no
+    if listening_mode in ("toggle", "transcribe"):
+        # No continuous judgment happens in either of these modes, so there is no
         # ambient moderation to speak of -- non_offensive is purely that,
         # and is dropped rather than left active with nothing watching for
         # it most of the time. The solicited strategies (respond_when_

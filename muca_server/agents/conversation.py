@@ -57,6 +57,16 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Two separate, mutually exclusive alternatives to "ambient" (every turn
+# judged): "toggle" (the button/`/listen`, no auto-close timer -- see
+# arm_listening) and "transcribe" (the spoken wake phrase, auto-closes on
+# silence -- see _handle_wake_phrase). Kept as two distinct modes, not one
+# combined mode with two input methods, so each can be selected (and
+# tested, and reasoned about) independently. Both share the exact same
+# "only judge inside an open window" gating in _judge() -- this tuple is
+# that shared check.
+NON_AMBIENT_LISTENING_MODES = ("toggle", "transcribe")
+
 NO_SPEAKER = -1
 
 # Stands in for an observer's guid when a turn had nobody to judge it.
@@ -76,10 +86,10 @@ TRANSCRIPT_WAIT_SECONDS = 3.0
 # assistant takes its turn anyway.
 PLAYBACK_START_TIMEOUT_SECONDS = 3.0
 
-# push_to_talk mode, voice only: a spoken trigger phrase that opens the
-# listening window, as an alternative to the button/`/listen` -- entirely
-# hands-free, no UI or text channel involved at all (preserving the voice
-# modality this mode exists to study, not just a UX convenience). Plain
+# "transcribe" mode, voice only: a spoken trigger phrase that opens the
+# listening window, as an alternative to "toggle" mode's button/`/listen`
+# -- entirely hands-free, no UI or text channel involved at all (preserving
+# the voice modality this mode exists to study, not just a UX convenience). Plain
 # regex, not a model's semantic judgement -- exactly the kind of unreliable
 # call this mode exists to avoid making continuously. Deliberately not
 # "MULCA": that specific word is the one already confirmed (this session)
@@ -90,8 +100,14 @@ PLAYBACK_START_TIMEOUT_SECONDS = 3.0
 # lead-in word entirely, which a "hey assistant"-only pattern then misses
 # completely (the real turn transcribed as just "Assistant?"). assist\w*
 # catches "assistant"/"assistent"/plurals etc. without needing full
-# phonetic matching.
-WAKE_PHRASE_PATTERN = re.compile(r"\bassist\w*\b", re.IGNORECASE)
+# phonetic matching. "mulca"/"muca" included on request despite being the
+# transcription-unreliable word this phrase was built to avoid depending
+# on alone -- an extra alternative in an OR costs nothing and only adds
+# detection chances, it can't make "assistant"/"chatbot" matches worse.
+WAKE_PHRASE_PATTERN = re.compile(
+    r"\b(assist\w*|chatbot\w*|mulca|muca)\b",
+    re.IGNORECASE,
+)
 
 # Unlike the button/`/listen` (a pure toggle, open until pressed again --
 # see arm_listening), a wake phrase only ever opens/extends a window: there
@@ -150,17 +166,18 @@ class Conversation:
         silence_timeout_ms: int = DEFAULT_SILENCE_TIMEOUT_MS,
         model_settings: ModelSettings | None = None,
         usage_tracker: UsageTracker | None = None,
-        listening_mode: Literal["ambient", "push_to_talk"] = "ambient",
+        listening_mode: Literal["ambient", "toggle", "transcribe"] = "ambient",
     ) -> None:
         self._state = state
         self._outbound_queue = outbound_queue
         self._model_settings = model_settings
         self._usage_tracker = usage_tracker
-        # push_to_talk only; ambient (the default) is entirely unaffected.
-        # The button/`/listen` toggle has no auto-close timer -- found live
-        # that one alongside manual open/close fought the manual control.
-        # The wake phrase is different: there's no spoken "stop", so it
-        # needs one (WAKE_PHRASE_SILENCE_MS) to close itself.
+        # "toggle"/"transcribe" only; ambient (the default) is entirely
+        # unaffected. "toggle" (the button/`/listen`) has no auto-close
+        # timer -- found live that one alongside manual open/close fought
+        # the manual control. "transcribe" (the wake phrase) is different:
+        # there's no spoken "stop", so it needs one (WAKE_PHRASE_SILENCE_MS)
+        # to close itself.
         self._listening_mode = listening_mode
         self._listening_window_open = False
         self._wake_phrase_timer: asyncio.Task[None] | None = None
@@ -446,9 +463,9 @@ class Conversation:
             if self._main_agent is not None:
                 await self._main_agent.send_audio_chunk(chunk)
 
-            # push_to_talk: the intervention agent never hears raw audio at
-            # all, only the already-transcribed text _take_voice_turn sends
-            # it -- the whole point of this mode is that it never judges
+            # toggle/transcribe: the intervention agent never hears raw
+            # audio at all, only the already-transcribed text
+            # _take_voice_turn sends it -- the whole point is that it never judges
             # from an "impression" of audio it passively heard, only from a
             # literal transcript. The main agent above is unaffected: it
             # still needs audio for turn-taking/VAD -- see the "NOT
@@ -602,12 +619,14 @@ class Conversation:
 
     async def arm_listening(self, message: ArmListeningMessage) -> None:
         """
-        push_to_talk mode: a participant pressed the button -- a toggle,
+        "toggle" mode only: a participant pressed the button -- a toggle,
         same button for "start talking" and "stop talking", open until
         pressed again (no auto-close timer: found live that one alongside
         manual control just fought it, closing a window mid-conversation
-        well before the next press). A no-op in ambient mode -- every turn
-        is already judged there.
+        well before the next press). A no-op in ambient or "transcribe"
+        mode -- "transcribe" arms exclusively via the spoken wake phrase
+        instead; these are two separate, mutually exclusive modes, not two
+        input methods for one combined mode.
 
         The server is the sole source of truth for which of the two a
         given press means (the button itself carries no state -- every
@@ -616,13 +635,8 @@ class Conversation:
         rather than guessing or claiming a fixed direction.
         """
 
-        if self._listening_mode != "push_to_talk":
+        if self._listening_mode != "toggle":
             return
-
-        # A manual press is authoritative either way -- cancel any pending
-        # wake-phrase auto-close so it can't later flip this back off
-        # behind the user's back after they explicitly took control of it.
-        self._cancel_wake_phrase_timer()
 
         self._listening_window_open = not self._listening_window_open
         logger.info(
@@ -634,12 +648,11 @@ class Conversation:
 
     async def _handle_wake_phrase(self, speaker: int) -> None:
         """
-        push_to_talk, voice only: "hey assistant" (WAKE_PHRASE_PATTERN)
-        opens (or extends) the listening window entirely hands-free, no UI
-        or text channel involved. Unlike the button, there's no spoken
-        "stop" -- it closes itself after WAKE_PHRASE_SILENCE_MS of silence,
-        the same way this mode's window used to always behave before the
-        button became a pure toggle.
+        "transcribe" mode only, voice only: a wake phrase (WAKE_PHRASE_
+        PATTERN) opens (or extends) the listening window entirely
+        hands-free, no UI or text channel involved. Unlike "toggle" mode's
+        button, there's no spoken "stop" -- it closes itself after
+        WAKE_PHRASE_SILENCE_MS of silence instead.
         """
 
         self._listening_window_open = True
@@ -873,7 +886,8 @@ class Conversation:
         # to when the turn actually ended, not to whatever the server's
         # processing lag happened to be.
         in_open_window = (
-            self._listening_mode == "push_to_talk" and self._listening_window_open
+            self._listening_mode in NON_AMBIENT_LISTENING_MODES
+            and self._listening_window_open
         )
 
         transcript = await self._collect_transcript(speaker)
@@ -916,7 +930,7 @@ class Conversation:
             self._ask_observers_to_consider(speaker)
             return
 
-        is_wake_phrase = self._listening_mode == "push_to_talk" and _matches_wake_phrase(
+        is_wake_phrase = self._listening_mode == "transcribe" and _matches_wake_phrase(
             transcript
         )
         if is_wake_phrase:
@@ -954,15 +968,13 @@ class Conversation:
     async def _judge(self, utterance: Utterance) -> None:
         consult_observers = await self._policy.on_utterance(utterance)
 
-        # push_to_talk: outside an open window, resolve exactly like
-        # "nobody is listening" below -- the utterance still updates wm
-        # history/the episodic log via on_intervention_signal, it just never
-        # actually reaches the intervention agent to be judged. The window
-        # itself stays open until explicitly toggled closed again (no
-        # auto-close timer). Voice only: this is a voice-UX concept (the
-        # cost/accuracy problem it fixes was continuous audio judgment), so
-        # a text message or DM on a push_to_talk link is judged normally,
-        # same as always.
+        # "toggle"/"transcribe": outside an open window, resolve exactly
+        # like "nobody is listening" below -- the utterance still updates
+        # wm history/the episodic log via on_intervention_signal, it just
+        # never actually reaches the intervention agent to be judged. Voice
+        # only: this is a voice-UX concept (the cost/accuracy problem it
+        # fixes was continuous audio judgment), so a text message or DM on
+        # a non-ambient link is judged normally, same as always.
         #
         # utterance.always_reply (not self._listening_window_open directly)
         # is the source of truth here -- it was snapshotted in
@@ -973,7 +985,7 @@ class Conversation:
         # was said before the press -- confirmed live.
         if (
             consult_observers
-            and self._listening_mode == "push_to_talk"
+            and self._listening_mode in NON_AMBIENT_LISTENING_MODES
             and utterance.modality == "audio"
             and not utterance.always_reply
         ):

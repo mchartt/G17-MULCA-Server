@@ -1,8 +1,12 @@
 """
-push_to_talk listening mode: the intervention agent is only consulted
-inside a window opened by ArmListeningMessage, never hears raw audio at
-all (regardless of window state), and the window auto-closes after
-silence. Ambient mode (the default) must behave exactly as before.
+"toggle"/"transcribe" listening modes: two separate, mutually exclusive
+alternatives to "ambient" (every turn judged). In both, the intervention
+agent is only consulted inside a window, never hears raw audio at all
+(regardless of window state). "toggle" opens/closes only on an explicit
+ArmListeningMessage (button/`/listen`), with no auto-close timer.
+"transcribe" opens on a spoken wake phrase and auto-closes after silence
+(there's no spoken "stop" to toggle on). Ambient mode (the default) must
+behave exactly as before.
 """
 
 import asyncio
@@ -41,7 +45,7 @@ STRATEGIES_WITH_ALWAYS_REPLY = StrategyStore(
         ),
         "always_reply": Strategy(
             id="always_reply",
-            trigger_description="push_to_talk fallback",
+            trigger_description="toggle/transcribe fallback",
             prompt_template="Respond directly. {prompt_fragment}",
             modalities=frozenset({"audio"}),
         ),
@@ -157,7 +161,7 @@ def utterance(text: str = "hello", *, always_reply: bool = False) -> Utterance:
 
 async def make_conversation(
     *,
-    listening_mode: str = "push_to_talk",
+    listening_mode: str = "toggle",
     strategies: StrategyStore = STRATEGIES,
     auxiliary_cls: type = FakeInterventionAgent,
 ):
@@ -222,9 +226,9 @@ async def test_a_second_press_closes_the_window_immediately():
 async def test_the_window_stays_open_with_no_auto_close_timer():
     # Found live: an auto-close timer alongside manual open/close fought
     # the manual control, closing a window mid-conversation well before
-    # the next press -- removed entirely. Once opened, a window now stays
-    # open indefinitely, across any number of judged turns, until an
-    # explicit press closes it.
+    # the next press -- removed entirely for "toggle" mode. Once opened, a
+    # window now stays open indefinitely, across any number of judged
+    # turns, until an explicit press closes it.
     conversation, _ = await make_conversation()
 
     await conversation.arm_listening(arm())
@@ -235,10 +239,21 @@ async def test_the_window_stays_open_with_no_auto_close_timer():
     assert conversation._listening_window_open is True
 
 
+async def test_arm_listening_is_a_no_op_outside_toggle_mode():
+    # "toggle" and "transcribe" are separate, mutually exclusive modes, not
+    # two input methods for one combined mode: a button press on a
+    # "transcribe" link should do nothing.
+    conversation, factory = await make_conversation(listening_mode="transcribe")
+
+    await conversation.arm_listening(arm())
+
+    assert conversation._listening_window_open is False
+
+
 async def test_text_turns_are_judged_normally_even_with_a_closed_window():
-    # push_to_talk is a voice-UX concept (the problem it fixes was
-    # continuous audio judgment); a text message or DM on a push_to_talk
-    # link must not be silenced behind the button.
+    # "toggle"/"transcribe" are voice-UX concepts (the problem they fix was
+    # continuous audio judgment); a text message or DM on a link in either
+    # mode must not be silenced behind the window.
     conversation, factory = await make_conversation()
 
     text_utterance = Utterance(
@@ -261,7 +276,7 @@ async def test_the_intervention_agent_never_hears_raw_audio_in_this_mode():
     conversation, factory = await make_conversation()
 
     # Window open or not: the intervention agent never gets raw audio at
-    # all in push_to_talk, only _judge()'s text push.
+    # all in "toggle" mode, only _judge()'s text push.
     await conversation.arm_listening(arm())
     await conversation.route_user_audio(audio(speaker=1))
 
@@ -270,14 +285,12 @@ async def test_the_intervention_agent_never_hears_raw_audio_in_this_mode():
 
 async def test_a_per_link_handshake_override_wins_over_the_servers_own_mode():
     # The server defaults to "ambient" (as if MUCA_LISTENING_MODE were
-    # unset); this link's own ConnectAgentMessage asks for push_to_talk --
+    # unset); this link's own ConnectAgentMessage asks for "toggle" --
     # same override precedence as mainModel/interventionModel.
     conversation, factory = await make_conversation(listening_mode="ambient")
 
     await conversation.connect_agent(
-        parse_incoming_message(
-            {"event": "connect", "listeningMode": "push_to_talk"}
-        )
+        parse_incoming_message({"event": "connect", "listeningMode": "toggle"})
     )
 
     await conversation._judge(utterance())
@@ -287,9 +300,9 @@ async def test_a_per_link_handshake_override_wins_over_the_servers_own_mode():
 
 
 async def test_a_declined_turn_inside_a_window_falls_back_to_always_reply():
-    # The intervention agent itself chose "do nothing" -- push_to_talk's
-    # guarantee overrides that, same as a hard veto, rather than letting
-    # an open window ever produce silence.
+    # The intervention agent itself chose "do nothing" -- "toggle"/
+    # "transcribe"'s guarantee overrides that, same as a hard veto, rather
+    # than letting an open window ever produce silence.
     conversation, factory = await make_conversation(
         strategies=STRATEGIES_WITH_ALWAYS_REPLY,
         auxiliary_cls=DecliningInterventionAgent,
@@ -306,7 +319,7 @@ async def test_a_declined_turn_inside_a_window_falls_back_to_always_reply():
     assert "Respond directly" in factory.main.instructions[0]
 
 
-async def test_always_reply_never_fires_outside_push_to_talk():
+async def test_always_reply_never_fires_outside_non_ambient_modes():
     # Ambient mode never sets always_reply on an utterance in the first
     # place (conversation.py), but on_intervention_signal's own guard
     # should refuse to fire it even if something did ask for it.
@@ -358,14 +371,19 @@ def test_wake_phrase_matching_is_deterministic_not_fuzzy_guessing():
     # address -- accepted deliberately, in exchange for actually detecting
     # the bare "Assistant?" case above, which real transcripts produced.
     assert _matches_wake_phrase("what do you think about assistants in general")
+    # Other aliases, on request -- including "mulca"/"muca" despite being
+    # the transcription-unreliable word this phrase was built to avoid
+    # depending on alone: an extra alternative only adds detection chances.
+    assert _matches_wake_phrase("hey chatbot")
+    assert _matches_wake_phrase("mulca")
+    assert _matches_wake_phrase("muca")
 
     assert not _matches_wake_phrase("hello there")
-    assert not _matches_wake_phrase("hey chatbot")  # not the configured word
     assert not _matches_wake_phrase("")
 
 
 async def test_the_wake_phrase_opens_the_window_hands_free():
-    conversation, _ = await make_conversation()
+    conversation, _ = await make_conversation(listening_mode="transcribe")
     assert conversation._listening_window_open is False
 
     await conversation._handle_wake_phrase(speaker=1)
@@ -377,7 +395,7 @@ async def test_the_wake_phrase_window_closes_itself_after_silence(monkeypatch):
     import muca_server.agents.conversation as conversation_module
 
     monkeypatch.setattr(conversation_module, "WAKE_PHRASE_SILENCE_MS", 20)
-    conversation, _ = await make_conversation()
+    conversation, _ = await make_conversation(listening_mode="transcribe")
 
     await conversation._handle_wake_phrase(speaker=1)
     assert conversation._listening_window_open is True
@@ -386,18 +404,20 @@ async def test_the_wake_phrase_window_closes_itself_after_silence(monkeypatch):
     assert conversation._listening_window_open is False
 
 
-async def test_a_manual_press_cancels_a_pending_wake_phrase_timer(monkeypatch):
-    # Otherwise a stale wake-phrase timer could close a window the user
-    # just explicitly (re)opened with the button moments later.
+async def test_a_repeated_wake_phrase_restarts_the_silence_timer(monkeypatch):
+    # The wake phrase can also re-arm an already-open window (e.g. said
+    # again mid-conversation) -- that should restart the silence clock
+    # rather than leave a stale timer from the first utterance pending.
     import muca_server.agents.conversation as conversation_module
 
-    monkeypatch.setattr(conversation_module, "WAKE_PHRASE_SILENCE_MS", 20)
-    conversation, _ = await make_conversation()
+    monkeypatch.setattr(conversation_module, "WAKE_PHRASE_SILENCE_MS", 40)
+    conversation, _ = await make_conversation(listening_mode="transcribe")
 
     await conversation._handle_wake_phrase(speaker=1)
-    await conversation.arm_listening(arm())  # manual close
-    assert conversation._listening_window_open is False
+    await asyncio.sleep(0.02)
+    await conversation._handle_wake_phrase(speaker=1)  # restarts the timer
+    await asyncio.sleep(0.03)
+    assert conversation._listening_window_open is True  # not yet 40ms since restart
 
-    await conversation.arm_listening(arm())  # manual re-open
-    await asyncio.sleep(0.05)
-    assert conversation._listening_window_open is True  # not auto-closed
+    await asyncio.sleep(0.03)
+    assert conversation._listening_window_open is False

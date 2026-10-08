@@ -141,7 +141,7 @@ class ConnectAgentMessage(TargetedMessage):
     # (run_server.py) -- None means use the server's setting, same
     # precedence as main_model/intervention_model above. Lets different
     # teams run different modes without a server-wide redeploy.
-    listening_mode: Literal["ambient", "push_to_talk"] | None = Field(
+    listening_mode: Literal["ambient", "toggle", "transcribe"] | None = Field(
         default=None,
         alias="listeningMode",
     )
@@ -181,10 +181,11 @@ class SetCostAlertMessage(IncomingMessage):
 
 class ArmListeningMessage(IncomingMessage):
     """
-    push_to_talk mode only: a participant pressed the button. Opens a
-    listening window (the intervention agent judges turns, same as always)
-    until speech goes quiet for MUCA_PTT_SILENCE_MS, or it closes again.
-    No admin token -- any participant may send this.
+    "toggle" mode only: a participant pressed the button/`/listen` -- a
+    toggle, same message opens and closes a window (the intervention agent
+    judges turns, same as always, only while one is open). No-op in
+    ambient or "transcribe" mode. No admin token -- any participant may
+    send this.
     """
 
     event: Literal["arm_listening"]

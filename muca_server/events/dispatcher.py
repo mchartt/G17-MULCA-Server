@@ -110,7 +110,7 @@ class AgentRouterProtocol(Protocol):
         self,
         message: ArmListeningMessage,
     ) -> None:
-        """push_to_talk mode: a participant pressed the button."""
+        """Toggle mode: a participant pressed the button or /listen."""
         ...
 
     async def trigger_response(

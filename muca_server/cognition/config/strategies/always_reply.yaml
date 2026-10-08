@@ -1,11 +1,11 @@
 id: always_reply
 modalities: [audio]
 trigger_description: >
-  push_to_talk mode only: the user explicitly pressed a button to open a
-  listening window before speaking, so unlike every other strategy, there
-  is no "was this addressed to me" question to answer and no "do nothing"
-  option -- whatever they just said during this window is always directed
-  at you. Prefer a more specific strategy when one clearly applies
+  "toggle"/"transcribe" modes only: the user explicitly opened a listening
+  window before speaking (pressed the button, or said the wake phrase), so
+  unlike every other strategy, there is no "was this addressed to me"
+  question to answer and no "do nothing" option -- whatever they just said
+  during this window is always directed at you. Prefer a more specific strategy when one clearly applies
   (provide_summary for a recap request, remember for recalling a specific
   past fact) -- otherwise fire this one. Respond helpfully and directly to
   what was just said, the same way you would if directly asked.

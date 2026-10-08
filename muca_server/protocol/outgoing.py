@@ -151,10 +151,10 @@ class ErrorMessage(OutgoingMessage):
 
 class ListeningStateMessage(OutgoingMessage):
     """
-    push_to_talk mode only: sent right after an ArmListeningMessage toggle,
-    reporting the window's new state -- the client never sends one itself
-    (no auto-close timer to drift out of sync with, but still: the server
-    is the only side that knows for sure).
+    "toggle"/"transcribe" modes: sent right after a window opens or
+    closes (a button/`/listen` toggle, or a "transcribe"-mode wake phrase
+    opening or auto-closing one) -- the client never sends one itself; the
+    server is the only side that knows the real state for sure.
     """
 
     event: Literal["listening_state"] = "listening_state"
