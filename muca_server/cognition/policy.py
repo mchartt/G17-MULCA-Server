@@ -365,9 +365,17 @@ class CoalaPolicy:
             # not a bare "Hi." with no answer until a second, separate
             # utterance.
             directive = (
-                'Begin your reply with exactly "Hi." as its own '
-                "sentence, then directly and helpfully answer what they "
-                "just asked, in the same reply."
+                # Named and quoted explicitly, same pattern as
+                # check_forced_intervention's own directive below -- a
+                # voice turn's main agent is never otherwise given this
+                # utterance as text (only an observer's own prompt_fragment
+                # normally carries that along, derived from having seen
+                # it), so without this it has only its own live hearing of
+                # the audio to go on for who asked what.
+                f'{utterance.label()} just asked, in the same breath as '
+                f'addressing you: "{utterance.content}". Begin your reply '
+                'with exactly "Hi." as its own sentence, then directly and '
+                "helpfully answer that, in the same reply."
                 if utterance.wake_phrase_has_question
                 else 'Say exactly: "Hi." Nothing else.'
             )

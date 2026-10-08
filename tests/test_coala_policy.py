@@ -179,6 +179,12 @@ async def test_a_wake_phrase_with_a_question_in_the_same_breath_gets_both():
     assert len(port.instructions) == 1
     assert "Hi" in port.instructions[0]
     assert "answer" in port.instructions[0].lower()
+    # The main agent never otherwise sees a voice turn as text (only an
+    # observer's own prompt_fragment normally carries attribution along) --
+    # this forced directive must embed it explicitly, same as
+    # check_forced_intervention's own directive does.
+    assert "Ada" in port.instructions[0]
+    assert "could you define the UNG diagram" in port.instructions[0]
 
 
 async def test_an_ordinary_utterance_asks_the_observers():
