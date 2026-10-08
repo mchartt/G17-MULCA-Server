@@ -20,7 +20,11 @@ trigger_description: >
   greeting or address naming ANY OTHER participant instead (e.g. "hey
   Pietro", "thanks Ada") is NOT addressed to you, even though it has the
   exact same "greeting + name" shape as a real one -- check WHICH name is
-  said, not just that a name-like address pattern is present.
+  said, not just that a name-like address pattern is present. The name or
+  role must be said TO you, calling on you ("MULCA, ...", "bot, can
+  you..."): talking ABOUT you in the third person ("MULCA keeps assuming
+  Italy", "the bot interrupts too much", "it changed state") is NOT an
+  address, however often your name comes up.
   (2) The message is itself a reply to your own immediately preceding
   message (not merely on the same subject as something you said) AND it
   explicitly says "you" or names you again within that reply (e.g. "could
