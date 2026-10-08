@@ -685,21 +685,21 @@ class MainAgentOpenAI(MainAgent):
                     )
                     transcript = ""
                 elif average_logprob is not None and average_logprob < MIN_AVERAGE_LOGPROB:
-                    # Not discarded yet, on purpose -- MIN_AVERAGE_LOGPROB
-                    # is an uncalibrated guess (see its own comment above).
-                    # Logged only, so real transcripts can be compared
-                    # against their own logprobs (the debug line above
-                    # already has this one's) before this can actually
-                    # silence anything, to avoid risking real speech going
-                    # unanswered on a threshold nobody's checked against
-                    # live data yet.
+                    # -1.5 checked against a real live sample first (not
+                    # just picked): across a full test session, the only
+                    # confirmed-genuine utterance under this cutoff was a
+                    # wake-phrase attempt ("assistente", a mis-rendered
+                    # "assistant") -- every other sub-threshold transcript
+                    # was confirmed hallucinated. Accepting that one known
+                    # risk category for now; worth revisiting a
+                    # wake-phrase-specific exemption if it recurs.
                     logger.warning(
-                        "%s a transcript crossed the low-confidence "
-                        "threshold but was kept (filtering not enabled "
-                        "yet): %r",
+                        "%s discarded a low-confidence transcript, likely "
+                        "not real speech: %r",
                         self.log_label,
                         transcript,
                     )
+                    transcript = ""
 
                 await self._stream_transcript(
                     event.item_id,
