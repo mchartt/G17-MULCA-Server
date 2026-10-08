@@ -107,8 +107,15 @@ PLAYBACK_START_TIMEOUT_SECONDS = 3.0
 # transcription-unreliable word this phrase was built to avoid depending
 # on alone -- an extra alternative in an OR costs nothing and only adds
 # detection chances, it can't make "assistant"/"chatbot" matches worse.
+# "bot" added on request -- the transcription bias prompt already tells
+# the ASR this is a recognized way to address it ("...often addressed by
+# that name, 'assistant', or 'bot'"), but the wake phrase itself never
+# matched it. Unlike the other alternatives, this one is a real tradeoff
+# against the over-triggering investigation: "bot" alone is a much more
+# generic English fragment than "assistant"/"chatbot"/"mulca", so it adds
+# more false-positive surface than the others did.
 WAKE_PHRASE_PATTERN = re.compile(
-    r"\b(assist\w*|chatbot\w*|mulca|muca)\b",
+    r"\b(assist\w*|chatbot\w*|bot|mulca|muca)\b",
     re.IGNORECASE,
 )
 

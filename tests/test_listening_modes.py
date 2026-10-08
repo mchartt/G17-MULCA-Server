@@ -382,6 +382,20 @@ def test_wake_phrase_matching_is_deterministic_not_fuzzy_guessing():
     assert _matches_wake_phrase("mulca")
     assert _matches_wake_phrase("muca")
 
+    # "bot" added on request -- the transcription bias prompt already
+    # tells the ASR this is a recognized way to address it, but the wake
+    # phrase itself never matched it. Bare "bot" only, not "bot\w*": unlike
+    # the other alternatives, a wildcard here would also match "bottle"/
+    # "bother"/"bottom"/"botox" -- ordinary words with no relation to
+    # addressing it at all, which is a materially worse false-positive
+    # tradeoff than "assistants"/"chatbots" being plural forms of the same
+    # concept.
+    assert _matches_wake_phrase("hey bot")
+    assert _matches_wake_phrase("Bot?")
+    assert not _matches_wake_phrase("I forgot my bottle")
+    assert not _matches_wake_phrase("don't bother")
+    assert not _matches_wake_phrase("from the bottom")
+
     assert not _matches_wake_phrase("hello there")
     assert not _matches_wake_phrase("")
 
