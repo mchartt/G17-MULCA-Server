@@ -28,6 +28,30 @@ STRATEGIES = StrategyStore(
 )
 
 
+STRATEGIES_WITH_ALWAYS_REPLY = StrategyStore(
+    {
+        "participation_equality": Strategy(
+            id="participation_equality",
+            trigger_description="unequal participation",
+            prompt_template="Balance participation. {prompt_fragment}",
+            cooldown_messages=5,
+        ),
+        "respond_when_addressed": Strategy(
+            id="respond_when_addressed",
+            trigger_description="addressed directly",
+            prompt_template="Answer them. {prompt_fragment}",
+            modalities=frozenset({"text", "audio"}),
+        ),
+        "always_reply": Strategy(
+            id="always_reply",
+            trigger_description="toggle/transcribe fallback",
+            prompt_template="Respond directly. {prompt_fragment}",
+            modalities=frozenset({"audio"}),
+        ),
+    }
+)
+
+
 class FakePort:
     def __init__(
         self,
@@ -72,9 +96,10 @@ class FakePort:
 def make_policy(**kwargs) -> tuple[CoalaPolicy, FakePort]:
     episodic = kwargs.pop("episodic_store", InMemoryEpisodicStore())
     port = kwargs.pop("port", None) or FakePort()
+    strategy_store = kwargs.pop("strategy_store", STRATEGIES)
 
     policy = CoalaPolicy(
-        strategy_store=STRATEGIES,
+        strategy_store=strategy_store,
         episodic_store=episodic,
         **kwargs,
     )
@@ -82,7 +107,12 @@ def make_policy(**kwargs) -> tuple[CoalaPolicy, FakePort]:
 
 
 def make_utterance(
-    speaker_id=1, name="Ada", content="hello", modality="text", is_wake_phrase=False
+    speaker_id=1,
+    name="Ada",
+    content="hello",
+    modality="text",
+    is_wake_phrase=False,
+    always_reply=False,
 ) -> Utterance:
     return Utterance(
         speaker_id=speaker_id,
@@ -91,6 +121,7 @@ def make_utterance(
         timestamp_ms=0,
         modality=modality,
         is_wake_phrase=is_wake_phrase,
+        always_reply=always_reply,
     )
 
 
@@ -236,6 +267,31 @@ async def test_a_typed_turn_is_unaffected_by_the_voice_only_veto():
     )
 
     assert len(port.instructions) == 1
+
+
+async def test_always_reply_fires_when_the_model_chooses_it_inside_an_open_window():
+    # Still legitimate to test directly against CoalaPolicy/on_intervention_
+    # signal: the guarantee that an ambient conversation's own observer
+    # never sees always_reply as an option at all lives one layer up, in
+    # which StrategyStore gets built into that conversation's own
+    # InterventionAgentOpenAI (OpenAIAgentFactory.build_auxiliary) -- see
+    # test_openai_agent_factory.py for that. This only confirms the
+    # forced-reply path itself still honors a model's own direct selection
+    # when the utterance says it may.
+    policy, port = make_policy(strategy_store=STRATEGIES_WITH_ALWAYS_REPLY)
+    await policy.start(port)
+
+    await policy.on_utterance(make_utterance(modality="audio", always_reply=True))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="always_reply",
+            prompt_fragment="they asked a direct question",
+        ),
+    )
+
+    assert len(port.instructions) == 1
+    assert "Respond directly." in port.instructions[0]
 
 
 async def test_a_voice_only_strategy_is_vetoed_for_a_typed_turn():

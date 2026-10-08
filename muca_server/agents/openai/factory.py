@@ -34,10 +34,20 @@ class OpenAIAgentFactory:
         task_knowledge: str,
         models: ModelSettings,
         usage_tracker: UsageTracker | None = None,
+        non_ambient_strategies: StrategyStore | None = None,
     ) -> None:
         self._client = client
         self._models = models
         self._strategies = strategies
+        # A separate catalog for "toggle"/"transcribe" conversations (see
+        # run_server.py) -- defaults to the same store when not given
+        # (tests that don't care about the distinction), never silently
+        # merged into one: an ambient conversation's own InterventionAgentOpenAI
+        # must never be built with always_reply in its catalog at all, since
+        # that catalog is a structured-output enum the model can otherwise
+        # actually select from (see InterventionAgentOpenAI._tool_definition),
+        # not just prose it might misjudge.
+        self._non_ambient_strategies = non_ambient_strategies or strategies
         self._main_persona = main_persona
         self._intervention_persona = intervention_persona
         self._task_knowledge = task_knowledge
@@ -61,10 +71,15 @@ class OpenAIAgentFactory:
         options: AuxiliaryAgentOptions,
     ) -> AuxiliaryAgent:
         if options.agent_type == INTERVENTION_DETECTION:
+            strategies = (
+                self._non_ambient_strategies
+                if options.listening_mode in ("toggle", "transcribe")
+                else self._strategies
+            )
             return InterventionAgentOpenAI(
                 options=options,
                 client=self._client,
-                strategies=self._strategies,
+                strategies=strategies,
                 persona=self._intervention_persona,
                 task_knowledge=self._task_knowledge,
                 model=options.model or self._models.intervention,

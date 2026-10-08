@@ -70,6 +70,18 @@ class AuxiliaryAgentOptions(AgentOptions):
     # server handles both group and DM sessions with the same factory.
     is_dm: bool = False
 
+    # This conversation's own resolved mode ("ambient"/"toggle"/
+    # "transcribe" -- Conversation's own listening_mode, after any per-link
+    # handshake override), read off the conversation at creation time, same
+    # as is_dm above -- one server handles every link's own mode with the
+    # same factory. OpenAIAgentFactory.build_auxiliary uses this to decide
+    # which strategy catalog the intervention agent is built with: a
+    # structured enum (see its _tool_definition), not just prose, so
+    # whichever strategies aren't in that conversation's own catalog are
+    # structurally impossible for the model to select, not merely
+    # discouraged by a trigger_description it might misjudge.
+    listening_mode: str = "ambient"
+
     @classmethod
     def for_type(
         cls,

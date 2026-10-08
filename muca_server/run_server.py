@@ -81,40 +81,29 @@ def build_app():
             f"'transcribe', got {listening_mode!r}"
         )
 
-    # always_reply is loaded unconditionally, regardless of this server's
-    # own default: CoalaPolicy.on_intervention_signal only ever forces it
-    # for an utterance whose own always_reply flag is True, and
-    # Conversation only ever sets that for a link actually running
-    # "toggle"/"transcribe" with its window open -- inert for every
-    # ambient-mode utterance, on this server's default or any other link's.
-    # Loading it unconditionally is what lets a single link's own
-    # /mulca link mode:toggle|transcribe override have a fallback to force,
-    # even while this server's own default here stays "ambient" (the usual
-    # case: modes are chosen per Discord channel, not by redeploying with a
-    # different env var).
-    active_strategy_ids = ACTIVE_STRATEGY_IDS + ["always_reply"]
-    if listening_mode in ("toggle", "transcribe"):
-        # No continuous judgment happens in either of these modes, so there is no
-        # ambient moderation to speak of -- non_offensive is purely that, and is
-        # dropped when this is the server's own default. A link overridden into
-        # one of these modes while the server's own default stays "ambient"
-        # leaves non_offensive loaded for every link, that one included; this is
-        # harmless, since it only ever gets a chance to fire inside that link's
-        # own open window to begin with (see _judge's gate on the mode).
-        active_strategy_ids = [
-            strategy_id
-            for strategy_id in active_strategy_ids
-            if strategy_id != "non_offensive"
-        ]
-
     # This is the server-wide default only -- a link can still override it
     # per-conversation via ConnectAgentMessage.listening_mode (/mulca link
     # mode:...). Logged because it's read once at startup from the
     # environment: a running process never picks up a later .env edit.
     logger.info("Default listening mode: %s", listening_mode)
 
+    # Two separate catalogs, not one store that always includes
+    # always_reply: which strategies an intervention agent's catalog
+    # contains is a structured-output enum it picks strategy_id from (see
+    # InterventionAgentOpenAI._tool_definition), not just prose -- an
+    # ambient conversation's own agent must never have always_reply (or any
+    # "toggle"/"transcribe"-only strategy) in its catalog at all, so the
+    # model is structurally unable to select it, not merely asked not to by
+    # a trigger_description it might misjudge. OpenAIAgentFactory picks
+    # between these two per conversation, from that conversation's own
+    # resolved listening_mode (server default, or its own handshake
+    # override) -- never from this process's own env var alone.
     client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    strategy_store = load_strategy_store(active_strategy_ids)
+    strategy_store = load_strategy_store(ACTIVE_STRATEGY_IDS)
+    non_ambient_strategy_store = load_strategy_store(
+        [sid for sid in ACTIVE_STRATEGY_IDS if sid != "non_offensive"]
+        + ["always_reply"]
+    )
     main_persona = load_persona("main_default")
     intervention_persona = load_persona("intervention_default")
     task_knowledge = load_task(TASK_ID)
@@ -173,6 +162,7 @@ def build_app():
     agent_factory = OpenAIAgentFactory(
         client=client,
         strategies=strategy_store,
+        non_ambient_strategies=non_ambient_strategy_store,
         main_persona=main_persona,
         intervention_persona=intervention_persona,
         task_knowledge=task_knowledge,

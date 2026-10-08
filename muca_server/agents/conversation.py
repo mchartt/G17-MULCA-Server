@@ -736,6 +736,11 @@ class Conversation:
             is_dm=self._is_private,
         )
         options.model = self._intervention_model
+        # This link's own resolved mode (server default, or its handshake
+        # override -- already applied by the time this runs), not a guess:
+        # decides which strategy catalog this agent is built with (see
+        # OpenAIAgentFactory.build_auxiliary).
+        options.listening_mode = self._listening_mode
 
         agent = self._agent_factory.build_auxiliary(options)
         agent.on_message = self._auxiliary_message_handler(
