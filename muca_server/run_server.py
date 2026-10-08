@@ -104,6 +104,24 @@ def build_app():
         [sid for sid in ACTIVE_STRATEGY_IDS if sid != "non_offensive"]
         + ["always_reply"]
     )
+    # CoalaPolicy's own store is different from the two above: it is never
+    # exposed to a model as a selectable catalog (that's strictly the
+    # intervention agent's own, mode-filtered one -- see
+    # OpenAIAgentFactory.build_auxiliary), only used internally for
+    # cooldown/modality vetoes and the always_reply forced-fallback lookup
+    # (CoalaPolicy.on_intervention_signal's self._strategies.get(...)
+    # calls). It needs every strategy any conversation might legitimately
+    # reference, in any mode, all the time -- not a per-conversation
+    # subset, since CoalaPolicy is built once per conversation by
+    # policy_factory below, before that conversation's own listening_mode
+    # handshake override has even arrived (create_conversation runs at
+    # session start; ConnectAgentMessage arrives after). Leaving
+    # non_offensive or always_reply out of this store for some
+    # conversations would make a legitimate strategy_id the model's own
+    # (correctly filtered) catalog just gave it resolve to nothing here.
+    policy_strategy_store = load_strategy_store(
+        ACTIVE_STRATEGY_IDS + ["always_reply"]
+    )
     main_persona = load_persona("main_default")
     intervention_persona = load_persona("intervention_default")
     task_knowledge = load_task(TASK_ID)
@@ -187,7 +205,7 @@ def build_app():
 
     def policy_factory(context) -> CoalaPolicy:
         return CoalaPolicy(
-            strategy_store=strategy_store,
+            strategy_store=policy_strategy_store,
             store_factory=store_factory,
             summarizer=summarizer,
             embedder=embedder,
