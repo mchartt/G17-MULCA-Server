@@ -1670,12 +1670,15 @@ async def test_a_text_question_needing_web_search_gets_it():
     assert "Rome is warm in October." in port.instructions[-1]
 
 
-async def test_a_voice_question_needing_web_search_does_not_get_it_yet():
-    # First cut: voice doesn't attempt the two-stage "let me look that
-    # up... <answer>" flow yet, so it's treated exactly as if
-    # needs_web_search had never been set.
+async def test_a_voice_question_needing_web_search_gets_an_ack_then_the_findings():
+    # Voice: "let me check that" (its own spoken turn) -> search -> the
+    # real answer (a second spoken turn) -- not one reply with a silent
+    # multi-second gap in it. on_intervention_signal only returns once
+    # both stages are sent, because the interim ack's own completion
+    # doesn't resolve the turn (see test_the_interim_ack_alone_does_not_
+    # resolve_the_turn below for that half in isolation).
     searcher = FakeWebSearcher()
-    policy, port = make_policy(web_searcher=searcher)
+    policy, port = make_policy(web_searcher=searcher, interim_ack_timeout_seconds=0.05)
     await policy.start(port)
 
     await policy.on_utterance(make_utterance(modality="audio"))
@@ -1689,8 +1692,48 @@ async def test_a_voice_question_needing_web_search_does_not_get_it_yet():
         ),
     )
 
-    assert searcher.queries == []
-    assert "Rome is warm in October." not in port.instructions[-1]
+    assert searcher.queries == ["weather in Rome today"]
+    assert len(port.instructions) == 2
+    assert "Rome is warm in October." not in port.instructions[0]
+    assert "Rome is warm in October." in port.instructions[1]
+
+
+async def test_the_interim_ack_alone_does_not_resolve_the_turn():
+    # If the ack's own completion arrives (conversation.py calls
+    # on_assistant_output for every completed reply, including this
+    # interim one), the turn must stay open: the real findings reply for
+    # this same turn is still in flight.
+    policy, port = make_policy(
+        web_searcher=FakeWebSearcher(),
+        interim_ack_timeout_seconds=5,
+    )
+    await policy.start(port)
+    await policy.on_utterance(make_utterance(modality="audio"))
+
+    signal_task = asyncio.create_task(
+        policy.on_intervention_signal(
+            object(),
+            InterventionSignal(
+                strategy_id="respond_when_addressed",
+                prompt_fragment="asked about the weather",
+                needs_web_search=True,
+                web_search_query="weather in Rome today",
+            ),
+        )
+    )
+    # Let on_intervention_signal run up to its await on the ack.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    await policy.on_assistant_output("Let me check that.", interrupted=False)
+
+    waiter = asyncio.create_task(policy.wait_for_turn_to_finish())
+    await asyncio.sleep(0)
+    assert not waiter.done()  # the real findings reply hasn't landed yet
+
+    await asyncio.wait_for(signal_task, timeout=1)
+    await policy.on_assistant_output("Rome is warm in October.", interrupted=False)
+    await asyncio.wait_for(waiter, timeout=1)
 
 
 async def test_needs_web_search_without_a_configured_searcher_is_a_no_op():

@@ -5,12 +5,12 @@ Satisfies cognition.ports.WebSearcher structurally. Uses the Responses API's
 hosted web_search tool, not a separate search vendor -- same client, same
 API key as every other OpenAI-backed piece here, nothing new to provision.
 
-NOT YET WIRED IN for voice: CoalaPolicy only calls this for a text-modality
-utterance (see its own comment). A voice reply asking "let me look that up"
-before the real answer, then speaking it once this resolves, is a two-stage
-conversational flow this first cut deliberately doesn't attempt -- voice
-still just forces a normal reply instead, exactly as if needs_web_search had
-never been set, until that's built.
+Used identically for text and voice turns -- CoalaPolicy.on_intervention_
+signal is what differs per modality: text calls this once, inline, before
+building its one reply; voice says a quick "let me check that" first (a
+separate spoken turn), then calls this, then reports the findings as a
+second spoken turn, rather than searching silently inside one reply with
+an unexplained multi-second gap in it.
 """
 
 from __future__ import annotations

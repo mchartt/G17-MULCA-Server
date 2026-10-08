@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import time
+from contextlib import suppress
 from datetime import date, datetime, timezone
 from collections.abc import Callable
 from uuid import UUID
@@ -48,6 +49,13 @@ RETRIEVAL_LIMIT = 50
 # transcript() to stop independently re-capping at a smaller, unrelated 20.
 MANAGEMENT_CYCLE_INTERVAL = 24
 TURN_TIMEOUT_SECONDS = 30.0
+
+# How long a voice web search's interim "let me check that" is given to
+# actually finish playing before moving on regardless -- a safety net, not
+# a real limit: a short acknowledgement should finish in well under this,
+# and if it somehow doesn't, proceeding anyway (rather than hanging) is
+# safer than leaving the turn stuck.
+INTERIM_ACK_TIMEOUT_SECONDS = 10.0
 
 # "remember" retrieves a few specific, relevant facts, not a wide recent
 # window like provide_summary's RETRIEVAL_LIMIT -- a handful of the most
@@ -92,6 +100,7 @@ class CoalaPolicy:
         retrieval_limit: int = RETRIEVAL_LIMIT,
         similarity_retrieval_limit: int = SIMILARITY_RETRIEVAL_LIMIT,
         turn_timeout_seconds: float = TURN_TIMEOUT_SECONDS,
+        interim_ack_timeout_seconds: float = INTERIM_ACK_TIMEOUT_SECONDS,
     ) -> None:
         self._strategies = strategy_store
         self._assistant_id = assistant_id
@@ -115,6 +124,7 @@ class CoalaPolicy:
         self._retrieval_limit = retrieval_limit
         self._similarity_retrieval_limit = similarity_retrieval_limit
         self._turn_timeout_seconds = turn_timeout_seconds
+        self._interim_ack_timeout_seconds = interim_ack_timeout_seconds
 
         self._port: ConversationPort | None = None
         self._wm: WorkingMemory | None = None
@@ -138,6 +148,15 @@ class CoalaPolicy:
         # so the log captures what MULCA said, not just what triggered it --
         # nothing ever wrote this before, at all.
         self._pending_episodic_record: EpisodicRecord | None = None
+
+        # Set only for the span between a voice web-search's interim
+        # acknowledgment ("let me check that") and the real follow-up
+        # reply it stands in for -- on_assistant_output must not resolve
+        # the turn (or log an episodic record) for the interim one, only
+        # for the real one that follows; otherwise the next utterance
+        # could be let through, and judged, while the search and the real
+        # reply are still in flight for this one.
+        self._interim_ack_done: asyncio.Event | None = None
 
         # Whether this session's main agent has already been sent the
         # Gates summary_block/linked_tail_block in _render_prompt -- the
@@ -585,13 +604,8 @@ class CoalaPolicy:
         elif needs_history or strategy_id == "provide_summary":
             await self._retrieve(wm, port)
 
-        # Text only, for this first cut -- a voice reply saying "let me
-        # look that up" before the real answer, then speaking it once this
-        # resolves, is a two-stage conversational flow this doesn't
-        # attempt yet; a voice utterance just gets a normal reply instead,
-        # exactly as if needs_web_search had never been set. Independent
-        # of the branch above: a question can need both history and a
-        # live lookup at once.
+        # Independent of the branch above: a question can need both
+        # history and a live lookup at once.
         if needs_web_search:
             modality = (
                 self._pending_utterance.modality
@@ -615,13 +629,36 @@ class CoalaPolicy:
                     "configured -- skipping",
                     wm.conversation_id,
                 )
-            elif modality != "text":
-                logger.info(
-                    "%s needs_web_search set for a %s turn -- skipping, "
-                    "voice isn't wired in yet",
-                    wm.conversation_id,
-                    modality,
+            elif modality == "audio":
+                # Voice: "let me check that" -> narrow search -> the real
+                # answer, as two separate spoken turns, not one reply with
+                # a silent multi-second gap in it. on_assistant_output
+                # won't resolve the turn for this interim one (see
+                # _interim_ack_done) -- the real resolution is the normal
+                # _finish_turn call below, once this falls through to it.
+                ack_done = asyncio.Event()
+                self._interim_ack_done = ack_done
+                await port.instruct_main_agent(
+                    self._render_prompt(
+                        wm,
+                        directive=(
+                            "Briefly acknowledge, in your own words, that "
+                            "you're looking this up right now (e.g. "
+                            '"Let me check that") -- a word or two, not a '
+                            "fixed phrase, and nothing else yet: you don't "
+                            "have the answer to give them until the next "
+                            "turn."
+                        ),
+                        port=port,
+                    )
                 )
+                with suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(
+                        ack_done.wait(),
+                        timeout=self._interim_ack_timeout_seconds,
+                    )
+                self._interim_ack_done = None
+                await self._retrieve_web_search(wm, web_search_query)
             else:
                 await self._retrieve_web_search(wm, web_search_query)
 
@@ -672,6 +709,16 @@ class CoalaPolicy:
                     timestamp_ms=int(time.time() * 1000),
                 )
             )
+
+        if self._interim_ack_done is not None:
+            # This was the interim "let me check that" standing in for a
+            # voice web search's real reply -- already logged to history
+            # above for conversational continuity, but the turn itself
+            # isn't done: the real reply (the one that actually answers
+            # the question) is still coming.
+            self._interim_ack_done.set()
+            self._interim_ack_done = None
+            return
 
         # Resolves regardless of whether text was empty: a turn that
         # triggered a reply but got nothing back (interrupted, or the model
