@@ -11,6 +11,7 @@ from muca_server.agents.main_agent import MainAgentEvent
 from muca_server.agents.openai.main_agent import (
     MAIN_TOKEN_LIMIT,
     MainAgentOpenAI,
+    _looks_like_prompt_echo,
     log_usage,
     trim_context,
 )
@@ -449,6 +450,54 @@ async def test_user_transcripts_reach_the_transcript_hook():
     )
 
     assert received == [("in-1", "hello there")]
+
+
+def test_prompt_echo_detection_is_deterministic_string_matching():
+    prompt = (
+        'The conversation is in English or Italian, sometimes switching '
+        'between the two. One participant is an AI assistant named '
+        'MULCA, often addressed by that name, "assistant", or "bot".'
+    )
+
+    # Confirmed live: both the full prompt verbatim, and its first
+    # sentence duplicated, are real transcripts an ASR model produced
+    # instead of actual speech.
+    assert _looks_like_prompt_echo(prompt, prompt)
+    assert _looks_like_prompt_echo(
+        "The conversation is in English or Italian, sometimes switching "
+        "between the two. The conversation is in English or Italian, "
+        "sometimes switching between the two.",
+        prompt,
+    )
+
+    assert not _looks_like_prompt_echo("what time is the meeting", prompt)
+    assert not _looks_like_prompt_echo("", prompt)
+
+
+async def test_a_transcript_that_echoes_the_bias_prompt_is_discarded():
+    # Found live: the ASR model occasionally hallucinates by echoing its
+    # own vocabulary-bias prompt back instead of transcribing real speech
+    # (little/no real signal to transcribe from). Treated the same as no
+    # transcript at all -- conversation.py already handles that as noise,
+    # not a real utterance -- rather than treating it as something someone
+    # actually said.
+    agent = make_agent()
+    received = []
+
+    async def record(item_id, transcript):
+        received.append((item_id, transcript))
+
+    agent.on_transcript = record
+
+    await agent._interpret(
+        _Event(
+            "conversation.item.input_audio_transcription.completed",
+            item_id="in-1",
+            transcript=agent._transcription_prompt(),
+        )
+    )
+
+    assert received == [("in-1", "")]
 
 
 async def test_speech_started_remembers_the_input_item():

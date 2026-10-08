@@ -23,6 +23,34 @@ from ...usage_report import UsageTracker, usage_sink
 
 logger = logging.getLogger(__name__)
 
+
+def _looks_like_prompt_echo(transcript: str, prompt: str) -> bool:
+    """
+    Whether `transcript` looks like the ASR model echoing its own
+    vocabulary-bias prompt back, rather than a real spoken turn -- a known
+    failure mode (OpenAI's gpt-4o-transcribe/Whisper-family models) when
+    there's little real speech signal: it hallucinates by repeating the
+    prompt it was given, verbatim or with a sentence repeated, instead of
+    an empty/low-confidence result. Confirmed live.
+
+    Cheap, deterministic string containment -- no model call, no
+    embeddings: dedupe consecutive repeated sentences (the exact pattern
+    seen live), then check whether what's left is substantially the bias
+    prompt itself.
+    """
+
+    normalized_prompt = " ".join(prompt.lower().split())
+
+    sentences = [s.strip() for s in transcript.lower().split(".") if s.strip()]
+    deduped: list[str] = []
+    for sentence in sentences:
+        if not deduped or deduped[-1] != sentence:
+            deduped.append(sentence)
+    normalized_transcript = ". ".join(deduped)
+
+    return bool(normalized_transcript) and normalized_transcript in normalized_prompt
+
+
 DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1-mini"
 SUMMARY_MODEL = "gpt-4o"
 TRANSCRIPTION_MODEL = "gpt-4o-transcribe"
@@ -175,6 +203,18 @@ class MainAgentOpenAI(MainAgent):
     def _build_instructions(self) -> str:
         return f"{self._persona}\n\nTask context:\n{self._task_knowledge}"
 
+    def _transcription_prompt(self) -> str:
+        # Factored out of _session_config so _looks_like_prompt_echo can
+        # compare a completed transcript against this exact same string --
+        # the one place this is worded.
+        return (
+            f"The conversation is in English or Italian, "
+            f"sometimes switching between the two. One "
+            f"participant is an AI assistant named "
+            f"{self.name}, often addressed by that name, "
+            f'"assistant", or "bot".'
+        )
+
     def _session_config(self) -> dict:
         """
         Mirrors the Unity package's MainAgentOpenAiPayload: the provider
@@ -203,13 +243,7 @@ class MainAgentOpenAI(MainAgent):
                         # instead: both languages are expected, and the
                         # assistant's own name is worth transcribing
                         # correctly rather than as a phonetic near-miss.
-                        "prompt": (
-                            f"The conversation is in English or Italian, "
-                            f"sometimes switching between the two. One "
-                            f"participant is an AI assistant named "
-                            f"{self.name}, often addressed by that name, "
-                            f'"assistant", or "bot".'
-                        ),
+                        "prompt": self._transcription_prompt(),
                     },
                     "turn_detection": {
                         "type": "server_vad",
@@ -571,9 +605,19 @@ class MainAgentOpenAI(MainAgent):
                         ),
                         tracker=self._usage_tracker,
                     )
+                transcript = event.transcript
+                if _looks_like_prompt_echo(transcript, self._transcription_prompt()):
+                    logger.warning(
+                        "%s discarded a transcript that looked like a "
+                        "prompt echo, not real speech: %r",
+                        self.log_label,
+                        transcript,
+                    )
+                    transcript = ""
+
                 await self._stream_transcript(
                     event.item_id,
-                    event.transcript,
+                    transcript,
                 )
 
             case "response.done":
