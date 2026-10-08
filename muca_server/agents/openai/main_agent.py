@@ -63,6 +63,16 @@ def _looks_like_prompt_echo(transcript: str, prompt: str) -> bool:
 MIN_AVERAGE_LOGPROB = -1.5
 
 
+def _average_logprob(logprobs) -> float | None:
+    """None if there's nothing to average (not every provider response
+    includes logprobs at all)."""
+
+    if not logprobs:
+        return None
+
+    return sum(entry.logprob for entry in logprobs) / len(logprobs)
+
+
 def _looks_like_low_confidence_transcription(logprobs) -> bool:
     """
     Whether the ASR's own per-token confidence for this transcript is low
@@ -74,11 +84,8 @@ def _looks_like_low_confidence_transcription(logprobs) -> bool:
     includes them) means no signal either way, not a reason to discard.
     """
 
-    if not logprobs:
-        return False
-
-    average = sum(entry.logprob for entry in logprobs) / len(logprobs)
-    return average < MIN_AVERAGE_LOGPROB
+    average = _average_logprob(logprobs)
+    return average is not None and average < MIN_AVERAGE_LOGPROB
 
 
 DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1-mini"
@@ -641,6 +648,18 @@ class MainAgentOpenAI(MainAgent):
                         tracker=self._usage_tracker,
                     )
                 transcript = event.transcript
+                # Unconditional, regardless of outcome -- so the raw
+                # per-transcript average can actually be reviewed against
+                # real confirmed-hallucination/confirmed-genuine examples,
+                # to judge whether MIN_AVERAGE_LOGPROB is a sane cutoff,
+                # not just see the ones that already crossed it.
+                average_logprob = _average_logprob(getattr(event, "logprobs", None))
+                logger.debug(
+                    "%s transcript %r has average logprob %s",
+                    self.log_label,
+                    transcript,
+                    average_logprob,
+                )
                 if _looks_like_prompt_echo(transcript, self._transcription_prompt()):
                     logger.warning(
                         "%s discarded a transcript that looked like a "
@@ -649,9 +668,7 @@ class MainAgentOpenAI(MainAgent):
                         transcript,
                     )
                     transcript = ""
-                elif _looks_like_low_confidence_transcription(
-                    getattr(event, "logprobs", None)
-                ):
+                elif average_logprob is not None and average_logprob < MIN_AVERAGE_LOGPROB:
                     logger.warning(
                         "%s discarded a low-confidence transcript, likely "
                         "not real speech: %r",
