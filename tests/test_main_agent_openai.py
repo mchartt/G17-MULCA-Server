@@ -513,10 +513,12 @@ def test_low_confidence_detection_is_a_plain_average_over_logprobs():
     assert not _looks_like_low_confidence_transcription([])
 
 
-async def test_a_low_confidence_transcript_is_discarded():
+async def test_a_low_confidence_transcript_is_logged_but_not_yet_discarded():
     # Found live: coherent, fluent sentences ("I'm reading a book.")
     # hallucinated from pure kitchen noise -- no relation to the bias
     # prompt at all, so _looks_like_prompt_echo alone wouldn't catch it.
+    # Not discarded yet on purpose: MIN_AVERAGE_LOGPROB is an uncalibrated
+    # guess -- only logged until there's live data to check it against.
     agent = make_agent()
     received = []
 
@@ -534,7 +536,7 @@ async def test_a_low_confidence_transcript_is_discarded():
         )
     )
 
-    assert received == [("in-1", "")]
+    assert received == [("in-1", "I'm reading a book.")]
 
 
 async def test_a_confident_transcript_is_unaffected():
