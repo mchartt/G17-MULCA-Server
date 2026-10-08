@@ -1696,3 +1696,26 @@ async def test_needs_web_search_without_a_configured_searcher_is_a_no_op():
     )
 
     assert len(port.instructions) == 1  # didn't crash, still replied
+
+
+async def test_needs_web_search_with_an_empty_query_is_a_no_op():
+    # Found live: needs_web_search=True arrived with no web_search_query
+    # at all often enough to be worth its own guard -- the model set one
+    # flag and not the other.
+    searcher = FakeWebSearcher()
+    policy, port = make_policy(web_searcher=searcher)
+    await policy.start(port)
+
+    await policy.on_utterance(make_utterance(modality="text"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="respond_when_addressed",
+            prompt_fragment="asked about the weather",
+            needs_web_search=True,
+            web_search_query="",
+        ),
+    )
+
+    assert searcher.queries == []
+    assert len(port.instructions) == 1  # didn't crash, still replied

@@ -207,7 +207,7 @@ def build_app():
     # participant_roles_summary never updated and wm.history never
     # truncated in a real deployment.
     summarizer = ChatCompletionsSummarizer(client, usage_tracker=usage_tracker)
-    web_searcher = OpenAIWebSearcher(client)
+    web_searcher = OpenAIWebSearcher(client, usage_tracker=usage_tracker)
 
     def policy_factory(context) -> CoalaPolicy:
         return CoalaPolicy(

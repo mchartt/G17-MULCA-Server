@@ -499,12 +499,13 @@ class CoalaPolicy:
 
         logger.info(
             "%s intervention decision: strategy_id=%r prompt_fragment=%r "
-            "needs_history=%s needs_web_search=%s",
+            "needs_history=%s needs_web_search=%s web_search_query=%r",
             wm.conversation_id,
             strategy_id,
             prompt_fragment,
             needs_history,
             needs_web_search,
+            web_search_query,
         )
 
         # Hard vetoes: not a request the model might ignore, the guarantee.
@@ -591,14 +592,38 @@ class CoalaPolicy:
         # exactly as if needs_web_search had never been set. Independent
         # of the branch above: a question can need both history and a
         # live lookup at once.
-        if (
-            needs_web_search
-            and web_search_query
-            and self._web_searcher is not None
-            and self._pending_utterance is not None
-            and self._pending_utterance.modality == "text"
-        ):
-            await self._retrieve_web_search(wm, web_search_query)
+        if needs_web_search:
+            modality = (
+                self._pending_utterance.modality
+                if self._pending_utterance is not None
+                else None
+            )
+            if not web_search_query:
+                # Found live: needs_web_search=True arrived with an empty
+                # web_search_query often enough to be worth its own log
+                # line -- the model set one flag and not the other,
+                # silently producing no search at all otherwise, with
+                # nothing in the logs to explain why.
+                logger.warning(
+                    "%s needs_web_search was set with no web_search_query "
+                    "-- skipping, nothing to search for",
+                    wm.conversation_id,
+                )
+            elif self._web_searcher is None:
+                logger.info(
+                    "%s needs_web_search set but no web searcher is "
+                    "configured -- skipping",
+                    wm.conversation_id,
+                )
+            elif modality != "text":
+                logger.info(
+                    "%s needs_web_search set for a %s turn -- skipping, "
+                    "voice isn't wired in yet",
+                    wm.conversation_id,
+                    modality,
+                )
+            else:
+                await self._retrieve_web_search(wm, web_search_query)
 
         strategy = self._strategies.get(strategy_id)
         directive = (

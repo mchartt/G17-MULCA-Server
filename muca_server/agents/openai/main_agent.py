@@ -124,6 +124,10 @@ PRICES_PER_MILLION = {
     TRANSCRIPTION_MODEL: (2.5, 0.0, 2.5, 0.0, 10.0, 0.0),
     SUMMARY_MODEL: (2.5, 1.25, 0.0, 0.0, 10.0, 0.0),
     "text-embedding-3-small": (0.02, 0.0, 0.0, 0.0, 0.0, 0.0),
+    # web_search.py's default model -- content tokens only; the tool's own
+    # per-call fee is tracked separately (record_cost's extra_fee_usd),
+    # not token-priced at all.
+    "gpt-4o-mini": (0.15, 0.075, 0.0, 0.0, 0.60, 0.0),
 }
 
 
@@ -805,17 +809,22 @@ def record_cost(
     *,
     agent=None,
     tracker: UsageTracker | None = None,
+    extra_fee_usd: float = 0.0,
 ) -> float:
     """
     Price one OpenAI call -- tokens as (text in, cached text in, audio in,
     cached audio in, text out, audio out) -- log it, add it to the cost
     report, and send it to the session's client as a `usage` event. `kind`
     is what made the call: "main", "intervention", "transcription",
-    "summary" or "embedding". Returns the cost.
+    "summary", "embedding", or "web_search". Returns the cost.
+
+    extra_fee_usd: a flat, non-token-priced fee on top of the above (e.g.
+    the web search tool's own per-call fee, separate from what its result
+    content costs in tokens) -- 0 for every other kind.
     """
 
     prices = PRICES_PER_MILLION.get(model)
-    cost = (
+    cost = extra_fee_usd + (
         sum(n * price for n, price in zip(tokens, prices)) / 1_000_000
         if prices
         else 0.0
