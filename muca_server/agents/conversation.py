@@ -159,9 +159,9 @@ def _wake_phrase_has_question(transcript: str) -> bool:
 #
 # A quiet room: nobody, MUCA included, spoke for this long.
 ENGAGED_SILENCE_MS = 30_000
-# Bounds what one engagement can cost; saying the wake phrase again
-# restarts it.
-ENGAGED_MAX_MS = 300_000
+# Bounds what one engagement can cost -- by then the interruption
+# threshold (below) is at its floor; saying the wake phrase again restarts it.
+ENGAGED_MAX_MS = 180_000
 
 # Being talked over right away means MUCA isn't wanted; being heard out
 # means it is. A talk-over after T seconds of MUCA's audible reply moves
@@ -176,9 +176,9 @@ INTERRUPTION_MIN_WORDS = 2
 # The score that ends the session drops the longer it runs: the start
 # value, minus one per step, never below the floor. Half of it (rounded
 # up) warns the intervention agent first, once.
-INTERRUPTION_THRESHOLD_START = 5
+INTERRUPTION_THRESHOLD_START = 3
 INTERRUPTION_THRESHOLD_STEP_MS = 60_000
-INTERRUPTION_THRESHOLD_FLOOR = 2
+INTERRUPTION_THRESHOLD_FLOOR = 1
 
 # A spoken way out, in either language. With the wake word in it, only a
 # short turn counts ("thanks MUCA") -- a longer one ("thanks MUCA, can you
