@@ -20,12 +20,20 @@ import json
 import logging
 import math
 import socket
+from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-import httpx
-
 logger = logging.getLogger(__name__)
+
+# The session making the current provider calls: its instance label, and
+# where its `usage` events go -- (kind, tokens, cost). Set by
+# Conversation.connect_agent; every task the session starts afterwards
+# inherits it, which is how calls made by objects shared across sessions
+# (the summarizer, the embedder) know whose they are.
+UsageSink = tuple[str, Callable[[str, tuple, float], Awaitable[None]]]
+usage_sink: ContextVar[UsageSink | None] = ContextVar("usage_sink", default=None)
 
 
 @dataclass
@@ -268,6 +276,10 @@ class UsageTracker:
         # 20-bot per-instance breakdown could exceed that.
         if len(text) > 1900:
             text = text[:1900] + "\n... (truncated)"
+        # Only here: httpx comes with the openai extra, and this module is
+        # imported by conversation.py, which a client (MULCA) imports too.
+        import httpx
+
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(

@@ -175,7 +175,7 @@ def build_app():
 
     # Shared across every conversation's store: one client, same as the
     # main/summarizer agents reuse, not a new one per channel.
-    embedder = OpenAIEmbedder(client)
+    embedder = OpenAIEmbedder(client, usage_tracker=usage_tracker)
 
     def store_factory(conversation_id: str):
         path = db_path_for(conversation_id, base_dir=db_dir)
@@ -186,7 +186,7 @@ def build_app():
     # this was never wired in before, so history_summary/
     # participant_roles_summary never updated and wm.history never
     # truncated in a real deployment.
-    summarizer = ChatCompletionsSummarizer(client)
+    summarizer = ChatCompletionsSummarizer(client, usage_tracker=usage_tracker)
 
     def policy_factory(context) -> CoalaPolicy:
         return CoalaPolicy(
@@ -259,6 +259,9 @@ def main() -> None:
     logging.getLogger("muca_server").setLevel(
         os.environ.get("MUCA_LOG_LEVEL", "DEBUG"),
     )
+    # Its INFO line per request prints full URLs, the cost-alert webhook's
+    # secret token included.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     uvicorn.run(build_app(), host=host, port=port)
 
 

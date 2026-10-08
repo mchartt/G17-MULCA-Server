@@ -207,3 +207,44 @@ async def test_malformed_tool_arguments_are_dropped_not_raised():
     await agent._interpret(response_done_event())
 
     assert decisions == [None]
+
+
+class FakeResponse:
+    def __init__(self) -> None:
+        self.created = 0
+        self.cancelled = 0
+
+    async def create(self, **kwargs) -> None:
+        self.created += 1
+
+    async def cancel(self) -> None:
+        self.cancelled += 1
+
+
+class FakeConnection:
+    def __init__(self) -> None:
+        self.response = FakeResponse()
+
+
+async def test_turns_during_a_judgement_are_judged_once_after_it_not_cancelled():
+    """
+    Cancelling a running judgement for a newer turn was billed in full,
+    uncached, cut its tool call short and raced the next response.create.
+    """
+
+    agent = make_agent()
+    decisions = await record_decisions(agent)
+    agent._connection = FakeConnection()
+    responses = agent._connection.response
+
+    for _ in range(3):
+        await agent.trigger_response()
+    assert (responses.created, responses.cancelled) == (1, 0)
+
+    await agent._interpret(response_done_event())
+    assert responses.created == 2
+
+    await agent._interpret(response_done_event())
+    assert responses.created == 2
+    assert decisions == [None, None]
+    assert not agent._response_active

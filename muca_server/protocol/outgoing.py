@@ -161,6 +161,27 @@ class ListeningStateMessage(OutgoingMessage):
     open: bool
 
 
+class UsageMessage(OutgoingMessage):
+    """
+    What one OpenAI call made for this session cost, by the server's own
+    estimate (agents/openai/main_agent.py, record_cost) -- for a client that
+    limits spending. Clients that do not know this event ignore it.
+    """
+
+    event: Literal["usage"] = "usage"
+
+    # What made the call: "main", "intervention", "transcription",
+    # "summary" or "embedding".
+    agent: str
+    fresh_text: int = Field(serialization_alias="freshText")
+    cached_text: int = Field(serialization_alias="cachedText")
+    fresh_audio: int = Field(serialization_alias="freshAudio")
+    cached_audio: int = Field(serialization_alias="cachedAudio")
+    out_text: int = Field(serialization_alias="outText")
+    out_audio: int = Field(serialization_alias="outAudio")
+    cost_usd: float = Field(serialization_alias="costUsd")
+
+
 OutgoingProtocolMessage = (
     StateUpdateMessage
     | AgentMessage
@@ -168,6 +189,7 @@ OutgoingProtocolMessage = (
     | AssistantTextMessage
     | ErrorMessage
     | ListeningStateMessage
+    | UsageMessage
 )
 
 def serialize_outgoing_message(

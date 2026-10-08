@@ -8,7 +8,12 @@ from openai.types.realtime.response_done_event import ResponseDoneEvent
 from openai.types.realtime.response_text_delta_event import ResponseTextDeltaEvent
 
 from muca_server.agents.main_agent import MainAgentEvent
-from muca_server.agents.openai.main_agent import MainAgentOpenAI, log_usage
+from muca_server.agents.openai.main_agent import (
+    MAIN_TOKEN_LIMIT,
+    MainAgentOpenAI,
+    log_usage,
+    trim_context,
+)
 from muca_server.agents.options import MainAgentOptions
 
 
@@ -268,6 +273,36 @@ async def test_only_the_latest_directive_stays_in_the_session():
     assert second["id"] != first["id"]
 
 
+async def test_past_the_token_limit_the_oldest_half_of_the_messages_is_deleted():
+    agent = make_agent()
+    agent._connection = FakeConnection()
+    for item_id, item_type in [
+        ("a", "message"),
+        ("call", "function_call"),
+        ("b", "message"),
+        ("c", "message"),
+        ("d", "message"),
+    ]:
+        await agent._interpret(
+            _Event(
+                "conversation.item.added",
+                item=_Obj(id=item_id, type=item_type),
+            )
+        )
+
+    at_limit = _Obj(usage=_Obj(input_tokens=MAIN_TOKEN_LIMIT))
+    await trim_context(agent, at_limit, MAIN_TOKEN_LIMIT)
+    assert agent._connection.conversation.item.deleted == []
+
+    past_limit = _Obj(usage=_Obj(input_tokens=MAIN_TOKEN_LIMIT + 1))
+    await trim_context(agent, past_limit, MAIN_TOKEN_LIMIT)
+    assert agent._connection.conversation.item.deleted == ["a", "b"]
+    assert agent._item_ids == ["c", "d"]
+
+    await agent._interpret(_Event("conversation.item.deleted", item_id="c"))
+    assert agent._item_ids == ["d"]
+
+
 def test_usage_is_priced_per_modality_and_added_to_the_session_total():
     agent = make_agent(model="gpt-realtime-2.1-mini")
     usage = _Obj(
@@ -520,7 +555,6 @@ def test_the_session_detects_and_transcribes_speech_but_never_answers_alone():
 
     assert turn_detection["create_response"] is False
     assert turn_detection["interrupt_response"] is False
-    assert config["truncation"]["token_limits"]["post_instructions"] == 16_000
     assert config["audio"]["input"]["transcription"]["model"]
     assert config["audio"]["input"]["format"] == {
         "type": "audio/pcm",

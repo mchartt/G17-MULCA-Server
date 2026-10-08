@@ -43,7 +43,7 @@ Every field name is camelCase. The server ignores fields it doesn't know, so the
 | `trigger_response` | `maxTokens?`, `interrupt=true`, `instructions=""`, `targetAgentGuid?` | Makes an agent respond now. A `maxTokens` value ≤ 0 or > 4096 means no limit. |
 | `interrupt` / `interrupt_response` | `targetAgentGuid?` | Stops an agent. For the main agent, the server also cuts its reply at `playbackTimeMs`. |
 | `disconnect` | `targetAgentGuid?` | Without a target, ends the session. With a target, disconnects one observer. |
-| *(no `event`)* `session.update` | `type: "session.update"`, `session: {instructions}` | Replaces the main agent's whole instructions (the server's persona and task), like the first JSON messages dea-multiuser sends after connecting. Send it right after `connect`, before any turn. Only `session.instructions` is applied: the server owns the rest of the provider session (turn detection, audio, transcription). With a `targetAgentGuid` it is ignored. |
+| *(no `event`)* `session.update` | `type: "session.update"`, `session: {instructions?, output_modalities?}` | Configures the main agent, like the first JSON messages dea-multiuser sends after connecting.<br>• `instructions` replaces its whole instructions (the server's persona and task). Send it right after `connect`, before any turn.<br>• `output_modalities` (or dea-multiuser's `modalities`) without `"audio"` makes every reply text, spoken turns included, until a later `session.update` includes `"audio"` again. The assistant keeps listening. It can be sent at any time.<br>Nothing else is applied: the server owns the rest of the provider session (turn detection, audio, transcription). With a `targetAgentGuid` it is ignored. |
 | *(no `event`)* | anything else | A provider passthrough frame, such as Unity's `SendAnythingAsync`. It is ignored, because the server owns every provider session's configuration. |
 
 ## Server → client
@@ -55,6 +55,7 @@ Every field name is camelCase. The server ignores fields it doesn't know, so the
 | `agent_guid` | `guid` | The guid of the observer just created. |
 | `agent_message` | `guid?`, `text` | A raw provider event, as JSON, from the main agent (no `guid`) or an observer. Useful for debugging only. |
 | `error` | `message`, `targetAgentGuid?` | A request failed. The session stays open. |
+| `usage` | `agent`, `freshText`, `cachedText`, `freshAudio`, `cachedAudio`, `outText`, `outAudio`, `costUsd` | One provider call this session made, with its tokens and the server's cost estimate in USD, for a client that limits spending. `agent` is what made the call: `main`, `intervention`, `transcription`, `summary` or `embedding`. Clients that don't need it can ignore it. |
 
 ## Voice
 
