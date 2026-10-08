@@ -1717,6 +1717,7 @@ async def test_a_text_question_needing_web_search_gets_it():
 
     assert searcher.queries == ["weather in Rome today"]
     assert "Rome is warm in October." in port.instructions[-1]
+    assert "one or two short sentences" not in port.instructions[-1].lower()
 
 
 async def test_a_voice_question_needing_web_search_gets_an_ack_then_the_findings():
@@ -1751,6 +1752,9 @@ async def test_a_voice_question_needing_web_search_gets_an_ack_then_the_findings
     # findings reply is deliberately uncapped.
     assert port.instruction_max_tokens[0] == INTERIM_ACK_MAX_TOKENS
     assert port.instruction_max_tokens[1] is None
+    # Asked for extra brevity, voice only -- spoken findings are harder to
+    # follow by ear than the same text would be to skim.
+    assert "one or two short sentences" in port.instructions[1].lower()
 
 
 async def test_the_interim_ack_alone_does_not_resolve_the_turn():

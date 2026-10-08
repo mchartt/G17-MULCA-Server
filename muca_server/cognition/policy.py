@@ -659,6 +659,11 @@ class CoalaPolicy:
         elif needs_history or strategy_id == "provide_summary":
             await self._retrieve(wm, port)
 
+        # Set only when a voice turn's web search actually ran -- gates the
+        # extra brevity instruction appended to the directive below, voice
+        # only, so a text reply's own web-search answer is unaffected.
+        searched_for_voice = False
+
         # Independent of the branch above: a question can need both
         # history and a live lookup at once.
         if needs_web_search:
@@ -719,6 +724,7 @@ class CoalaPolicy:
                     )
                 self._interim_ack_done = None
                 await self._retrieve_web_search(wm, web_search_query)
+                searched_for_voice = True
             else:
                 await self._retrieve_web_search(wm, web_search_query)
 
@@ -730,6 +736,18 @@ class CoalaPolicy:
             if strategy is not None
             else prompt_fragment or ""
         )
+        if searched_for_voice:
+            # Spoken, not read -- a long recitation of search findings is
+            # much harder to follow by ear than the same text would be to
+            # skim. Appended only here, after the real findings directive
+            # is otherwise fully built, so a text reply's own web-search
+            # answer (which has no such length pressure) is untouched.
+            directive += (
+                " Report the findings in one or two short sentences, the "
+                "single most relevant fact or number only -- this is "
+                "spoken aloud, not read, so skip caveats, source lists, "
+                "and secondary details unless they directly asked for them."
+            )
 
         await port.instruct_main_agent(
             self._render_prompt(wm, directive=directive, port=port),
