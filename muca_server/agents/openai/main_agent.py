@@ -24,6 +24,17 @@ from ...usage_report import UsageTracker, usage_sink
 logger = logging.getLogger(__name__)
 
 
+# Below this many words, a substring match against the bias prompt is
+# meaningless rather than suspicious -- found live: a bare "MULCA." or
+# "assistant" is *always* a substring of the prompt (it contains those
+# exact words), so without a floor this discarded genuine short wake-word
+# attempts as if they were echoes, not just the real multi-sentence echo
+# it was built to catch. Picked well above the 1-3 words a real address
+# ("MULCA", "Hey MULCA", "assistant") normally is, and well below the
+# ~12-word sentence the confirmed real echoes actually were.
+MIN_PROMPT_ECHO_WORDS = 6
+
+
 def _looks_like_prompt_echo(transcript: str, prompt: str) -> bool:
     """
     Whether `transcript` looks like the ASR model echoing its own
@@ -36,7 +47,9 @@ def _looks_like_prompt_echo(transcript: str, prompt: str) -> bool:
     Cheap, deterministic string containment -- no model call, no
     embeddings: dedupe consecutive repeated sentences (the exact pattern
     seen live), then check whether what's left is substantially the bias
-    prompt itself.
+    prompt itself. Requires MIN_PROMPT_ECHO_WORDS words before considering
+    it at all, so a short, genuine wake-word utterance that merely shares
+    a word with the prompt is never mistaken for echoing it.
     """
 
     normalized_prompt = " ".join(prompt.lower().split())
@@ -48,7 +61,10 @@ def _looks_like_prompt_echo(transcript: str, prompt: str) -> bool:
             deduped.append(sentence)
     normalized_transcript = ". ".join(deduped)
 
-    return bool(normalized_transcript) and normalized_transcript in normalized_prompt
+    if len(normalized_transcript.split()) < MIN_PROMPT_ECHO_WORDS:
+        return False
+
+    return normalized_transcript in normalized_prompt
 
 
 # A rough "don't trust this as real speech" cutoff on the ASR's own

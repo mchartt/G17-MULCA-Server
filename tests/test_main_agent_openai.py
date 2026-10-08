@@ -474,6 +474,16 @@ def test_prompt_echo_detection_is_deterministic_string_matching():
     assert not _looks_like_prompt_echo("what time is the meeting", prompt)
     assert not _looks_like_prompt_echo("", prompt)
 
+    # Found live: a bare "MULCA." or "assistant" is *always* a substring
+    # of the prompt (it contains those exact words) -- without a minimum
+    # length, these were being discarded as if they were echoes, silently
+    # swallowing genuine short wake-word attempts instead of just the real
+    # multi-sentence echo this was built to catch.
+    assert not _looks_like_prompt_echo("MULCA.", prompt)
+    assert not _looks_like_prompt_echo("MULCA", prompt)
+    assert not _looks_like_prompt_echo("assistant", prompt)
+    assert not _looks_like_prompt_echo("Hey MULCA", prompt)
+
 
 async def test_a_transcript_that_echoes_the_bias_prompt_is_discarded():
     # Found live: the ASR model occasionally hallucinates by echoing its
