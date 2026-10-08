@@ -29,6 +29,7 @@ from ..protocol import (
     DisconnectMessage,
     EndSession,
     InterruptMessage,
+    ListeningStateMessage,
     OutgoingProtocolMessage,
     ParticipantsMessage,
     PlaybackFrameMessage,
@@ -66,12 +67,6 @@ DEFAULT_SILENCE_TIMEOUT_MS = 400
 
 # How often the conversation re-reads the clock (silence, playback drain).
 TICK_MS = 100
-
-# push_to_talk mode only: how long a listening window stays open after the
-# last judged turn before it auto-closes -- a judgment call, unrelated to
-# DEFAULT_SILENCE_TIMEOUT_MS above (that one is about the client's audio
-# frame cadence, not about how long to keep the window open between turns).
-DEFAULT_PTT_SILENCE_MS = 5_000
 
 # How long a closed spoken turn waits for its transcript to come back.
 TRANSCRIPT_WAIT_SECONDS = 3.0
@@ -127,19 +122,19 @@ class Conversation:
         model_settings: ModelSettings | None = None,
         usage_tracker: UsageTracker | None = None,
         listening_mode: Literal["ambient", "push_to_talk"] = "ambient",
-        ptt_silence_ms: int = DEFAULT_PTT_SILENCE_MS,
     ) -> None:
         self._state = state
         self._outbound_queue = outbound_queue
         self._model_settings = model_settings
         self._usage_tracker = usage_tracker
-        # push_to_talk only: see the module-level note above
-        # DEFAULT_PTT_SILENCE_MS for what this mode does and does not
-        # change. Ambient (the default) is entirely unaffected by these.
+        # push_to_talk only; ambient (the default) is entirely unaffected.
+        # A pure toggle, no auto-close timer -- found live that a timer
+        # alongside manual open/close fought the manual control (a window
+        # could close itself mid-conversation well before the next press),
+        # which felt like the toggle was broken rather than working as
+        # designed.
         self._listening_mode = listening_mode
-        self._ptt_silence_ms = ptt_silence_ms
         self._listening_window_open = False
-        self._listening_window_timer: asyncio.Task[None] | None = None
         if model_settings is not None:
             model_settings.watch(outbound_queue)
         # This session's own models, from the handshake; empty means the
@@ -579,58 +574,29 @@ class Conversation:
     async def arm_listening(self, message: ArmListeningMessage) -> None:
         """
         push_to_talk mode: a participant pressed the button -- a toggle,
-        same button for "start talking" and "stop talking". A no-op in
-        ambient mode -- every turn is already judged there.
+        same button for "start talking" and "stop talking", open until
+        pressed again (no auto-close timer: found live that one alongside
+        manual control just fought it, closing a window mid-conversation
+        well before the next press). A no-op in ambient mode -- every turn
+        is already judged there.
 
         The server is the sole source of truth for which of the two a
-        given press means: the button itself carries no state (every
-        press sends the exact same message), so the client never has to
-        track or guess whether a window is currently open, including
-        across the auto-close-on-silence timer the client can't see.
+        given press means (the button itself carries no state -- every
+        press sends the exact same message), and reports the result back
+        via ListeningStateMessage so the client can show it accurately
+        rather than guessing or claiming a fixed direction.
         """
 
         if self._listening_mode != "push_to_talk":
             return
 
-        if self._listening_window_open:
-            if self._listening_window_timer is not None:
-                self._listening_window_timer.cancel()
-                self._listening_window_timer = None
-            self._listening_window_open = False
-            logger.info(
-                "%s listening window closed (press)",
-                self._conversation_id,
-            )
-            return
-
-        self._listening_window_open = True
-        self._restart_listening_timer()
+        self._listening_window_open = not self._listening_window_open
         logger.info(
-            "%s listening window opened (press)",
+            "%s listening window %s (press)",
             self._conversation_id,
+            "opened" if self._listening_window_open else "closed",
         )
-
-    def _restart_listening_timer(self) -> None:
-        if self._listening_window_timer is not None:
-            self._listening_window_timer.cancel()
-
-        task = asyncio.create_task(self._close_listening_window_after_silence())
-        self._listening_window_timer = task
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-
-    async def _close_listening_window_after_silence(self) -> None:
-        try:
-            await asyncio.sleep(self._ptt_silence_ms / 1000)
-        except asyncio.CancelledError:
-            return
-
-        self._listening_window_open = False
-        logger.info(
-            "%s listening window closed (%dms silence)",
-            self._conversation_id,
-            self._ptt_silence_ms,
-        )
+        await self._send(ListeningStateMessage(open=self._listening_window_open))
 
     async def disconnect_agent(
         self,
@@ -908,12 +874,12 @@ class Conversation:
         # push_to_talk: outside an open window, resolve exactly like
         # "nobody is listening" below -- the utterance still updates wm
         # history/the episodic log via on_intervention_signal, it just never
-        # actually reaches the intervention agent to be judged. Inside an
-        # open window, judged turns restart the window's own silence timer
-        # (speaking again resets how long the window stays open). Voice
-        # only: this is a voice-UX concept (the cost/accuracy problem it
-        # fixes was continuous audio judgment), so a text message or DM on
-        # a push_to_talk link is judged normally, same as always.
+        # actually reaches the intervention agent to be judged. The window
+        # itself stays open until explicitly toggled closed again (no
+        # auto-close timer). Voice only: this is a voice-UX concept (the
+        # cost/accuracy problem it fixes was continuous audio judgment), so
+        # a text message or DM on a push_to_talk link is judged normally,
+        # same as always.
         #
         # utterance.always_reply (not self._listening_window_open directly)
         # is the source of truth here -- it was snapshotted in
@@ -926,12 +892,10 @@ class Conversation:
             consult_observers
             and self._listening_mode == "push_to_talk"
             and utterance.modality == "audio"
+            and not utterance.always_reply
         ):
-            if utterance.always_reply:
-                self._restart_listening_timer()
-            else:
-                await self._policy.on_intervention_signal(NO_OBSERVER, None)
-                consult_observers = False
+            await self._policy.on_intervention_signal(NO_OBSERVER, None)
+            consult_observers = False
 
         if consult_observers:
             if self._listening_to_user(utterance.speaker_id):

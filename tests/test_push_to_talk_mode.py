@@ -158,7 +158,6 @@ def utterance(text: str = "hello", *, always_reply: bool = False) -> Utterance:
 async def make_conversation(
     *,
     listening_mode: str = "push_to_talk",
-    ptt_silence_ms: int = 50,
     strategies: StrategyStore = STRATEGIES,
     auxiliary_cls: type = FakeInterventionAgent,
 ):
@@ -174,7 +173,6 @@ async def make_conversation(
         agent_factory=factory,
         policy=policy,
         listening_mode=listening_mode,
-        ptt_silence_ms=ptt_silence_ms,
     )
     await conversation.start()
     await conversation.create_auxiliary_agent(create_auxiliary())
@@ -212,7 +210,7 @@ async def test_a_second_press_closes_the_window_immediately():
     # The button carries no state of its own -- every press sends the
     # same message, and the server (not the client) decides whether that
     # means "open" or "close" based on its own current state.
-    conversation, _ = await make_conversation(ptt_silence_ms=5_000)
+    conversation, _ = await make_conversation()
 
     await conversation.arm_listening(arm())
     assert conversation._listening_window_open is True
@@ -220,37 +218,21 @@ async def test_a_second_press_closes_the_window_immediately():
     await conversation.arm_listening(arm())
     assert conversation._listening_window_open is False
 
-    # The pending 5s silence-timer from the first press must not still
-    # fire later and flip this back open (or log a stale "closed").
-    await asyncio.sleep(0.05)
-    assert conversation._listening_window_open is False
 
-
-async def test_the_window_closes_itself_after_silence():
-    conversation, _ = await make_conversation(ptt_silence_ms=20)
+async def test_the_window_stays_open_with_no_auto_close_timer():
+    # Found live: an auto-close timer alongside manual open/close fought
+    # the manual control, closing a window mid-conversation well before
+    # the next press -- removed entirely. Once opened, a window now stays
+    # open indefinitely, across any number of judged turns, until an
+    # explicit press closes it.
+    conversation, _ = await make_conversation()
 
     await conversation.arm_listening(arm())
+    for _ in range(3):
+        await conversation._judge(utterance(always_reply=True))
+        await conversation.wait_until_idle()
+
     assert conversation._listening_window_open is True
-
-    await asyncio.sleep(0.05)
-
-    assert conversation._listening_window_open is False
-
-
-async def test_a_judged_turn_inside_the_window_restarts_its_timer():
-    conversation, _ = await make_conversation(ptt_silence_ms=40)
-
-    await conversation.arm_listening(arm())
-    await asyncio.sleep(0.03)
-    # always_reply=True: see the comment in the test above.
-    await conversation._judge(utterance(always_reply=True))  # restarts the 40ms timer
-    await conversation.wait_until_idle()
-
-    await asyncio.sleep(0.03)
-    assert conversation._listening_window_open is True  # would be closed otherwise
-
-    await asyncio.sleep(0.03)
-    assert conversation._listening_window_open is False
 
 
 async def test_text_turns_are_judged_normally_even_with_a_closed_window():

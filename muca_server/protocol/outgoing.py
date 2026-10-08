@@ -149,12 +149,25 @@ class ErrorMessage(OutgoingMessage):
     )
 
 
+class ListeningStateMessage(OutgoingMessage):
+    """
+    push_to_talk mode only: sent right after an ArmListeningMessage toggle,
+    reporting the window's new state -- the client never sends one itself
+    (no auto-close timer to drift out of sync with, but still: the server
+    is the only side that knows for sure).
+    """
+
+    event: Literal["listening_state"] = "listening_state"
+    open: bool
+
+
 OutgoingProtocolMessage = (
     StateUpdateMessage
     | AgentMessage
     | AgentGuidMessage
     | AssistantTextMessage
     | ErrorMessage
+    | ListeningStateMessage
 )
 
 def serialize_outgoing_message(

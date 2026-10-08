@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
 from .agents import MainAgentOptions
-from .agents.conversation import DEFAULT_PTT_SILENCE_MS, DEFAULT_SILENCE_TIMEOUT_MS
+from .agents.conversation import DEFAULT_SILENCE_TIMEOUT_MS
 from .agents.openai import ChatCompletionsSummarizer, OpenAIAgentFactory, OpenAIEmbedder
 from .agents.openai.model_settings import ModelSettings
 from .usage_report import UsageTracker
@@ -64,7 +64,6 @@ ASSISTANT_NAME = "MULCA"
 # ArmListeningMessage (conversation.py's arm_listening/_judge) -- it never
 # hears raw audio at all in that mode, only the main agent's transcript.
 LISTENING_MODE_ENV_VAR = "MUCA_LISTENING_MODE"
-PTT_SILENCE_MS_ENV_VAR = "MUCA_PTT_SILENCE_MS"
 
 # Anchored to this package's own location, not the current working
 # directory -- a relative default here would mean restarting the server
@@ -108,13 +107,7 @@ def build_app():
     # per-conversation via ConnectAgentMessage.listening_mode (/mulca link
     # mode:...). Logged because it's read once at startup from the
     # environment: a running process never picks up a later .env edit.
-    logger.info(
-        "Default listening mode: %s%s",
-        listening_mode,
-        f" (window auto-closes after {os.environ.get(PTT_SILENCE_MS_ENV_VAR, DEFAULT_PTT_SILENCE_MS)}ms silence)"
-        if listening_mode == "push_to_talk"
-        else "",
-    )
+    logger.info("Default listening mode: %s", listening_mode)
 
     client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
     strategy_store = load_strategy_store(active_strategy_ids)
@@ -231,9 +224,6 @@ def build_app():
             )
         ),
         listening_mode=listening_mode,
-        ptt_silence_ms=int(
-            os.environ.get(PTT_SILENCE_MS_ENV_VAR, DEFAULT_PTT_SILENCE_MS)
-        ),
     )
 
     return create_app(components_factory=components_factory)
