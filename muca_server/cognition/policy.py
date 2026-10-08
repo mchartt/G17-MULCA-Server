@@ -999,6 +999,20 @@ class CoalaPolicy:
             else ""
         )
 
+        # The actual live roster (who is in the voice call right now,
+        # whether or not they've said anything), not an inference from who
+        # has spoken -- found live, "who is in the chat" was being
+        # answered from the speaker-tagged transcript alone (only the
+        # people heard from), missing anyone present but silent. Every
+        # turn, not gated: the roster can change (join/leave) between any
+        # two turns, same reasoning as current_time_block above.
+        voice_roster = port.voice_participants()
+        voice_roster_block = (
+            f"Currently in the voice channel: {', '.join(voice_roster.values())}\n\n"
+            if voice_roster
+            else ""
+        )
+
         summary_block = (
             (
                 "Summary of the conversation so far:\n"
@@ -1065,6 +1079,7 @@ class CoalaPolicy:
 
         return (
             f"{current_time_block}"
+            f"{voice_roster_block}"
             f"{summary_block}"
             f"{recent_block}"
             f"{linked_tail_block}"

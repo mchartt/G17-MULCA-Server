@@ -221,6 +221,49 @@ async def test_the_directive_is_grounded_in_the_latest_utterances_own_timestamp(
     assert "2026-03-08" in port.instructions[0]
 
 
+async def test_the_directive_carries_the_live_voice_roster_not_just_who_spoke():
+    # "who is in the chat" was being answered from the speaker-tagged
+    # transcript alone (only people actually heard from), missing anyone
+    # present in the voice channel but silent so far -- the real roster
+    # (port.voice_participants()) is a separate, already-tracked thing.
+    policy, port = make_policy()
+    await policy.start(port)
+    port._voice_participants = {1: "Ada", 7: "Mats", 9: "Grace"}
+
+    await policy.on_utterance(make_utterance())
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="respond_when_addressed",
+            prompt_fragment="they asked who's here",
+        ),
+    )
+
+    assert len(port.instructions) == 1
+    assert "Ada" in port.instructions[0]
+    assert "Mats" in port.instructions[0]
+    assert "Grace" in port.instructions[0]
+
+
+async def test_an_empty_voice_roster_adds_nothing_to_the_directive():
+    # A text-only link (nobody in a voice channel at all) shouldn't carry
+    # an empty "Currently in the voice channel:" line.
+    policy, port = make_policy()
+    await policy.start(port)
+
+    await policy.on_utterance(make_utterance())
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="respond_when_addressed",
+            prompt_fragment="they asked a direct question",
+        ),
+    )
+
+    assert len(port.instructions) == 1
+    assert "Currently in the voice channel" not in port.instructions[0]
+
+
 async def test_a_selected_strategy_instructs_the_main_agent():
     policy, port = make_policy()
     await policy.start(port)
