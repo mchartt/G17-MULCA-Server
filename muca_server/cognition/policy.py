@@ -574,6 +574,24 @@ class CoalaPolicy:
             else prompt_fragment or ""
         )
 
+        # A voice turn's main agent is never otherwise given this utterance
+        # as text at all -- only an observer's own prompt_fragment might
+        # mention who said what, and only if it happens to ("high-level
+        # rationale/target only", not a guaranteed quote) -- unlike a text
+        # turn, which the main agent always sees verbatim via send_text
+        # (_take_text_turn). Make it explicit here too, same pattern as
+        # check_forced_intervention's own directive, rather than relying on
+        # the main agent's own live hearing of the raw audio (confirmed
+        # unreliable) or the observer's paraphrase (not guaranteed).
+        if (
+            self._pending_utterance is not None
+            and self._pending_utterance.modality == "audio"
+        ):
+            directive = (
+                f"{self._pending_utterance.label()} said: "
+                f'"{self._pending_utterance.content}". {directive}'
+            )
+
         await port.instruct_main_agent(
             self._render_prompt(wm, directive=directive, port=port),
         )
