@@ -647,37 +647,18 @@ async def test_a_repeated_wake_phrase_restarts_the_session():
 
 
 def test_dismissal_matching():
-    # With the wake word: in a short turn, however long ago MUCA spoke.
-    assert _matches_dismissal(
-        "thank you very much muca",
-        assistant_spoke_recently=False,
-    )
-    # A longer one is a request, even right after MUCA spoke.
-    assert not _matches_dismissal(
-        "thanks muca, can you also check the budget",
-        assistant_spoke_recently=True,
-    )
-    # Standalone: in a short turn, or right after MUCA spoke.
-    assert _matches_dismissal("ok that's all", assistant_spoke_recently=False)
-    assert _matches_dismissal(
-        "grazie, adesso passiamo al prossimo punto",
-        assistant_spoke_recently=True,
-    )
-    # People thanking each other, mid-discussion.
-    assert not _matches_dismissal(
-        "thanks Ada, now let us move on to the budget",
-        assistant_spoke_recently=False,
-    )
-    assert not _matches_dismissal("let us move on", assistant_spoke_recently=True)
-    # "Stop" and the like, with the name or alone, in either language.
-    for transcript in ("MULCA stop", "stop, muca", "muca stai zitto", "basta così mulca"):
-        assert _matches_dismissal(transcript, assistant_spoke_recently=False)
-    assert not _matches_dismissal(
-        "stop sharing your screen and look at this, Ada",
-        assistant_spoke_recently=False,
-    )
-    # New phrasings, standalone or with the name.
+    # As flexible as _matches_wake_phrase: a plain substring search, no
+    # length ceiling, regardless of the name's presence or anything else
+    # in the sentence -- a versatile, longer way of saying goodbye matches
+    # exactly as well as a short one.
     for transcript in (
+        "thank you very much muca",
+        "ok that's all",
+        "grazie, adesso passiamo al prossimo punto",
+        "MULCA stop",
+        "stop, muca",
+        "muca stai zitto",
+        "basta così mulca",
         "stop mulca",
         "go to sleep",
         "end session",
@@ -686,8 +667,18 @@ def test_dismissal_matching():
         "that's enough",
         "fine sessione",
         "fine della sessione mulca",
+        "go ahead and wrap it up, thanks for all the help today",
     ):
-        assert _matches_dismissal(transcript, assistant_spoke_recently=False)
+        assert _matches_dismissal(transcript)
+    assert not _matches_dismissal("let us move on")
+    # Known, accepted cost of this flexibility (see DISMISSAL_PATTERN's own
+    # comment): a longer sentence that happens to contain a dismissal word
+    # now also matches, even when it wasn't really goodbye -- the mirror
+    # image of _matches_wake_phrase's own "any sentence naming MULCA opens
+    # a window" trade-off.
+    assert _matches_dismissal("thanks muca, can you also check the budget")
+    assert _matches_dismissal("thanks Ada, now let us move on to the budget")
+    assert _matches_dismissal("stop sharing your screen and look at this, Ada")
 
 
 async def test_a_dismissal_ends_the_session_unanswered_and_never_starts_one():

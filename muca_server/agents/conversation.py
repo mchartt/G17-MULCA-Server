@@ -187,11 +187,18 @@ INTERRUPTION_THRESHOLD_START = 3
 INTERRUPTION_THRESHOLD_STEP_MS = 60_000
 INTERRUPTION_THRESHOLD_FLOOR = 1
 
-# A spoken way out, in either language. With the wake word in it, only a
-# short turn counts ("thanks MUCA") -- a longer one ("thanks MUCA, can you
-# also check X") is a request, not goodbye. Standalone phrases only count
-# right after MUCA spoke or in a short turn -- otherwise people thanking
-# each other would end the session.
+# A spoken way out, in either language. Deliberately as flexible as
+# _matches_wake_phrase above, same reasoning: a plain substring search, no
+# length ceiling, no "did MULCA just speak" context check -- wake already
+# accepts that trade-off (any sentence naming MULCA opens a window,
+# regardless of length or what else is in it), so dismissal accepts the
+# mirror-image one for closing. Found live: a word-count ceiling meant a
+# versatile, longer way of saying goodbye ("go ahead and wrap it up,
+# thanks for the help") never matched at all, while the wake side had no
+# such limit. The known cost of dropping it: "thanks Ada, now let's move
+# on to the budget" now also ends an engaged session, same as "mulca,
+# that bot answer was great" would already falsely open one -- accepted
+# for both, not just one.
 DISMISSAL_PATTERN = re.compile(
     r"\b(that'?s (all|it|enough)|we'?re done|you can go|go to sleep"
     r"|end( the| this)? session|stop|be quiet"
@@ -200,20 +207,10 @@ DISMISSAL_PATTERN = re.compile(
     r"|vai a dormire|fine( della)? sessione)\b",
     re.IGNORECASE,
 )
-DISMISSAL_RECENT_MS = 15_000
-DISMISSAL_MAX_WORDS = 4
-DISMISSAL_WITH_NAME_MAX_WORDS = 6
 
 
-def _matches_dismissal(transcript: str, *, assistant_spoke_recently: bool) -> bool:
-    if DISMISSAL_PATTERN.search(transcript) is None:
-        return False
-
-    words = len(transcript.split())
-    if _matches_wake_phrase(transcript):
-        return words <= DISMISSAL_WITH_NAME_MAX_WORDS
-
-    return assistant_spoke_recently or words <= DISMISSAL_MAX_WORDS
+def _matches_dismissal(transcript: str) -> bool:
+    return DISMISSAL_PATTERN.search(transcript) is not None
 
 # Unity's receive loop reads 16 KB per frame; 3000 float32 samples, base64
 # encoded, keep a state_update well under that.
@@ -286,7 +283,6 @@ class Conversation:
         # How far into MUCA's audible reply it was talked over, until the
         # interrupting turn closes and shows whether it counts.
         self._pending_interruption_ms: int | None = None
-        self._last_assistant_speech_ms = 0
         # Who said a bare wake phrase: their next turn is the question it
         # was said for, so it always gets a reply.
         self._followup_speaker: int | None = None
@@ -1243,13 +1239,7 @@ class Conversation:
 
         # "wake": a dismissal wins over the wake phrase -- it ends an
         # engaged session unanswered, and never starts one.
-        if self._listening_mode == "wake" and _matches_dismissal(
-            transcript,
-            assistant_spoke_recently=(
-                _now_ms() - self._last_assistant_speech_ms
-                <= DISMISSAL_RECENT_MS
-            ),
-        ):
+        if self._listening_mode == "wake" and _matches_dismissal(transcript):
             await self._disengage("dismissed")
             is_wake_phrase = False
             is_followup = False
@@ -1811,7 +1801,6 @@ class Conversation:
         self._reset_assistant_audio()
 
         # Heard out in full: MUCA is wanted after all.
-        self._last_assistant_speech_ms = _now_ms()
         self._interruption_score = 0
         self._warned_about_interruptions = False
 
@@ -1839,7 +1828,6 @@ class Conversation:
         now = _now_ms()
         if self._engaged() and self._assistant_turn_open():
             self._pending_interruption_ms = now - self.turns[-1].start_time
-        self._last_assistant_speech_ms = now
 
         # This fires whenever the user starts talking while the assistant's
         # reply is still audible on the client, even if generation (and
