@@ -2,6 +2,7 @@ from .embeddings import OpenAIEmbedder
 from .factory import OpenAIAgentFactory
 from .intervention_agent import InterventionAgentOpenAI
 from .main_agent import ChatCompletionsSummarizer, MainAgentOpenAI
+from .web_search import OpenAIWebSearcher
 
 __all__ = [
     "ChatCompletionsSummarizer",
@@ -9,4 +10,5 @@ __all__ = [
     "MainAgentOpenAI",
     "OpenAIAgentFactory",
     "OpenAIEmbedder",
+    "OpenAIWebSearcher",
 ]

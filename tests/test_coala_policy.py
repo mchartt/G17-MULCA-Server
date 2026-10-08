@@ -1625,3 +1625,74 @@ async def test_a_dm_history_lookup_reads_the_linked_groups_log_only():
     dm_log, _ = stores["dm:1"]
     dm_records = await dm_log.recall_recent("dm:1", 10)
     assert [r.content for r in dm_records] == ["when is it due?"]
+
+
+class FakeWebSearcher:
+    def __init__(self, result: str = "Rome is warm in October.") -> None:
+        self.queries: list[str] = []
+        self._result = result
+
+    async def search(self, query: str) -> str:
+        self.queries.append(query)
+        return self._result
+
+
+async def test_a_text_question_needing_web_search_gets_it():
+    searcher = FakeWebSearcher()
+    policy, port = make_policy(web_searcher=searcher)
+    await policy.start(port)
+
+    await policy.on_utterance(make_utterance(modality="text"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="respond_when_addressed",
+            prompt_fragment="asked about the weather",
+            needs_web_search=True,
+            web_search_query="weather in Rome today",
+        ),
+    )
+
+    assert searcher.queries == ["weather in Rome today"]
+    assert "Rome is warm in October." in port.instructions[-1]
+
+
+async def test_a_voice_question_needing_web_search_does_not_get_it_yet():
+    # First cut: voice doesn't attempt the two-stage "let me look that
+    # up... <answer>" flow yet, so it's treated exactly as if
+    # needs_web_search had never been set.
+    searcher = FakeWebSearcher()
+    policy, port = make_policy(web_searcher=searcher)
+    await policy.start(port)
+
+    await policy.on_utterance(make_utterance(modality="audio"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="respond_when_addressed",
+            prompt_fragment="asked about the weather",
+            needs_web_search=True,
+            web_search_query="weather in Rome today",
+        ),
+    )
+
+    assert searcher.queries == []
+    assert "Rome is warm in October." not in port.instructions[-1]
+
+
+async def test_needs_web_search_without_a_configured_searcher_is_a_no_op():
+    policy, port = make_policy()  # no web_searcher given
+    await policy.start(port)
+
+    await policy.on_utterance(make_utterance(modality="text"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="respond_when_addressed",
+            prompt_fragment="asked about the weather",
+            needs_web_search=True,
+            web_search_query="weather in Rome today",
+        ),
+    )
+
+    assert len(port.instructions) == 1  # didn't crash, still replied

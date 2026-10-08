@@ -346,6 +346,7 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
             needs_web_search=bool(
                 args.get("needs_web_search", False),
             ),
+            web_search_query=args.get("web_search_query", ""),
         )
 
     def _tool_definition(self) -> dict:
@@ -372,12 +373,22 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
                     },
                     "needs_history": {"type": "boolean"},
                     "needs_web_search": {"type": "boolean"},
+                    "web_search_query": {
+                        "type": "string",
+                        "description": (
+                            "Only when needs_web_search is true: the "
+                            "actual query to search for, in your own "
+                            "words -- not the triggering message's raw "
+                            "phrasing. Empty otherwise."
+                        ),
+                    },
                 },
                 "required": [
                     "strategy_id",
                     "prompt_fragment",
                     "needs_history",
                     "needs_web_search",
+                    "web_search_query",
                 ],
             },
         }
@@ -406,11 +417,13 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
             "phrasing itself. Plus two independent flags: needs_history "
             "if answering well requires looking up something from earlier "
             "in the conversation; needs_web_search if answering requires "
-            "current information from outside this conversation. Both "
-            "default to false. If no strategy should fire, produce no "
-            "output and do not call the tool. Never produce a "
-            "conversational reply yourself; your only job is this "
-            "judgment call.\n\n"
+            "current information from outside this conversation -- when "
+            "true, also set web_search_query to the actual query to "
+            "search for, in your own words, not the triggering message's "
+            "raw phrasing. Both flags default to false. If no strategy "
+            "should fire, produce no output and do not call the tool. "
+            "Never produce a conversational reply yourself; your only "
+            "job is this judgment call.\n\n"
             "Available strategies:\n"
             f"{self._strategies.catalog_for_prompt()}\n\n"
             "This session keeps growing for as long as the conversation "

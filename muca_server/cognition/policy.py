@@ -20,7 +20,13 @@ from .forced_intervention import check_forced_intervention
 from .memory.in_memory import InMemoryEpisodicStore, InMemorySnapshotStore
 from .memory.ports import Embedder, EpisodicStore, SnapshotStore
 from .memory.records import EpisodicRecord, MemorySnapshot, StoredUtterance
-from .ports import ConversationPort, InterventionSignal, Summarizer, Utterance
+from .ports import (
+    ConversationPort,
+    InterventionSignal,
+    Summarizer,
+    Utterance,
+    WebSearcher,
+)
 from .query_extraction import extract_query
 from .strategies import StrategyStore
 from .trigger_variables import compute_trigger_variables
@@ -81,6 +87,7 @@ class CoalaPolicy:
         | None = None,
         summarizer: Summarizer | None = None,
         embedder: Embedder | None = None,
+        web_searcher: WebSearcher | None = None,
         management_cycle_interval: int = MANAGEMENT_CYCLE_INTERVAL,
         retrieval_limit: int = RETRIEVAL_LIMIT,
         similarity_retrieval_limit: int = SIMILARITY_RETRIEVAL_LIMIT,
@@ -91,6 +98,11 @@ class CoalaPolicy:
         self._assistant_name = assistant_name
         self._episodic_store = episodic_store
         self._snapshot_store = snapshot_store
+        # None is a legitimate, supported configuration (no search
+        # provider wired in at all), not just an unset default -- a signal
+        # asking for it then is treated the same as the provider failing,
+        # not an error.
+        self._web_searcher = web_searcher
         # Deferred store selection: which DB backs this conversation can
         # depend on its conversation_id (e.g. one SQLite file per Discord
         # channel), which isn't known until start() -- policy_factory builds
@@ -483,6 +495,7 @@ class CoalaPolicy:
         prompt_fragment = signal.prompt_fragment if signal else None
         needs_history = bool(signal and signal.needs_history)
         needs_web_search = bool(signal and signal.needs_web_search)
+        web_search_query = signal.web_search_query if signal else ""
 
         logger.info(
             "%s intervention decision: strategy_id=%r prompt_fragment=%r "
@@ -570,6 +583,22 @@ class CoalaPolicy:
             await self._retrieve_similar(wm, port, query)
         elif needs_history or strategy_id == "provide_summary":
             await self._retrieve(wm, port)
+
+        # Text only, for this first cut -- a voice reply saying "let me
+        # look that up" before the real answer, then speaking it once this
+        # resolves, is a two-stage conversational flow this doesn't
+        # attempt yet; a voice utterance just gets a normal reply instead,
+        # exactly as if needs_web_search had never been set. Independent
+        # of the branch above: a question can need both history and a
+        # live lookup at once.
+        if (
+            needs_web_search
+            and web_search_query
+            and self._web_searcher is not None
+            and self._pending_utterance is not None
+            and self._pending_utterance.modality == "text"
+        ):
+            await self._retrieve_web_search(wm, web_search_query)
 
         strategy = self._strategies.get(strategy_id)
         directive = (
@@ -778,6 +807,23 @@ class CoalaPolicy:
         wm.set_retrieved_context(
             "\n".join(lines) or "(no prior conversation found)",
         )
+
+    async def _retrieve_web_search(
+        self,
+        wm: WorkingMemory,
+        query: str,
+    ) -> None:
+        """
+        Live lookup for current information this conversation has no other
+        way to know -- separate from _retrieve/_retrieve_similar above,
+        which both only ever look backward into this same conversation's
+        own memory. self._web_searcher is already confirmed non-None by
+        the caller.
+        """
+
+        assert self._web_searcher is not None
+        result = await self._web_searcher.search(query)
+        wm.set_web_search_context(result)
 
     async def _retrieve_similar(
         self,
@@ -1102,6 +1148,12 @@ class CoalaPolicy:
             else ""
         )
 
+        web_search_block = (
+            f"Web search results:\n{wm.web_search_context}\n\n"
+            if wm.web_search_context
+            else ""
+        )
+
         directive_label = (
             "High-level guidance from a lightweight judgment step -- this "
             "is the rationale and rough target, not literal wording. Use "
@@ -1117,6 +1169,7 @@ class CoalaPolicy:
             f"{recent_block}"
             f"{linked_tail_block}"
             f"{retrieved_block}"
+            f"{web_search_block}"
             f"{directive_label}\n"
             f"{directive or 'Respond naturally as the ongoing conversation warrants.'}"
         )

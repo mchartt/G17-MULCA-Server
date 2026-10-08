@@ -49,6 +49,12 @@ class WorkingMemory:
     # Long-term memory pulled in for this turn only.
     retrieved_context: str | None = None
 
+    # Live web search results pulled in for this turn only -- kept
+    # separate from retrieved_context above, not reused for it: that one
+    # is specifically labeled "Retrieved conversation history" in the
+    # rendered prompt, which would be a wrong, confusing label for this.
+    web_search_context: str | None = None
+
     # {strategy_id: total_message_count when it last fired}.
     recent_actions: dict[str, int] = field(default_factory=dict)
     # {strategy_id: time.time() when it last fired} -- the secondary,
@@ -174,6 +180,9 @@ class WorkingMemory:
     def set_retrieved_context(self, text: str | None) -> None:
         self.retrieved_context = text
 
+    def set_web_search_context(self, text: str | None) -> None:
+        self.web_search_context = text
+
     def clear_turn_output(self) -> None:
         """
         Forget this turn's directive.
@@ -186,6 +195,7 @@ class WorkingMemory:
         self.latest_prompt_fragment = None
         self.forced_context = None
         self.retrieved_context = None
+        self.web_search_context = None
 
     def transcript(
         self,
