@@ -56,6 +56,13 @@ class InterventionSignal:
     prompt_fragment: str
     needs_history: bool = False
     needs_web_search: bool = False
+    # The observer's own query, not re-derived heuristically from the raw
+    # message the way "remember"'s extract_query is -- a web search query
+    # ("current weather in Rome") looks nothing like the triggering
+    # question's own phrasing ("what should I pack"), so the model that
+    # already read the message writes it directly instead. Empty unless
+    # needs_web_search is true.
+    web_search_query: str = ""
 
 
 class ConversationPort(Protocol):
@@ -116,6 +123,22 @@ class Summarizer(Protocol):
         previous_roles: str,
     ) -> tuple[str, str]:
         """Returns (history_summary, participant_roles_summary)."""
+        ...
+
+
+class WebSearcher(Protocol):
+    """
+    Interface which defines looking something up outside this conversation.
+
+    Kept separate from CognitionPolicy for the same reason as Summarizer:
+    it is the one piece of this pipeline that has to call out to a real
+    search provider, so an implementation lives beside a provider agent,
+    not in cognition itself.
+    """
+
+    async def search(self, query: str) -> str:
+        """A short, directly usable summary of what was found, with
+        sources -- not raw results for the caller to parse further."""
         ...
 
 

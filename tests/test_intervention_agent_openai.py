@@ -112,6 +112,41 @@ async def test_a_tool_call_then_response_done_yields_a_signal():
     ]
 
 
+async def test_needs_web_search_carries_its_own_query():
+    agent = make_agent()
+    decisions = await record_decisions(agent)
+
+    await agent._interpret(
+        tool_call_event(
+            arguments={
+                "strategy_id": "respond_when_addressed",
+                "prompt_fragment": "asked about the weather",
+                "needs_history": False,
+                "needs_web_search": True,
+                "web_search_query": "weather in Rome today",
+            }
+        )
+    )
+    await agent._interpret(response_done_event())
+
+    assert decisions == [
+        InterventionSignal(
+            strategy_id="respond_when_addressed",
+            prompt_fragment="asked about the weather",
+            needs_web_search=True,
+            web_search_query="weather in Rome today",
+        )
+    ]
+
+
+def test_the_tool_definition_includes_web_search_query():
+    agent = make_agent()
+
+    properties = agent._tool_definition()["parameters"]["properties"]
+
+    assert properties["web_search_query"]["type"] == "string"
+
+
 async def test_response_done_with_no_tool_call_means_no_intervention():
     agent = make_agent()
     decisions = await record_decisions(agent)

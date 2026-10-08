@@ -64,6 +64,24 @@ async def test_a_call_is_priced_reported_and_sent_to_the_session():
     assert sent == [("summary", (1_000_000, 0, 0, 0, 100_000, 0), cost)]
 
 
+async def test_extra_fee_usd_adds_a_flat_amount_on_top_of_token_cost():
+    # The web search tool's own per-call fee, separate from (and on top
+    # of) whatever its result content costs in ordinary model tokens.
+    usage_sink.set(None)
+    tracker = FakeTracker()
+
+    cost = record_cost(
+        "web_search",
+        "gpt-4o-mini",
+        (0, 0, 0, 0, 0, 0),
+        tracker=tracker,
+        extra_fee_usd=0.01,
+    )
+
+    assert cost == pytest.approx(0.01)
+    assert tracker.recorded == [("web_search", "", (0, 0, 0, 0, 0, 0), cost)]
+
+
 async def test_without_a_session_nothing_is_sent():
     usage_sink.set(None)
 
