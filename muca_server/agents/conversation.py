@@ -200,7 +200,7 @@ INTERRUPTION_THRESHOLD_FLOOR = 1
 # that bot answer was great" would already falsely open one -- accepted
 # for both, not just one.
 DISMISSAL_PATTERN = re.compile(
-    r"\b(that'?s (all|it|enough)|we'?re done|you can go|go to sleep"
+    r"\b(that'?s (all|it|enough)|we'?re done|you can go|go to sleep|sleep"
     r"|end( the| this)? session|stop|be quiet"
     r"|shut up|go away|thank(s| you)|grazie|basta( così)?|ho finito"
     r"|abbiamo finito|puoi andare|smettila|fermati|(stai )?zitt[oa]|silenzio"

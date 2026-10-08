@@ -661,6 +661,8 @@ def test_dismissal_matching():
         "basta così mulca",
         "stop mulca",
         "go to sleep",
+        "sleep",
+        "mulca, sleep",
         "end session",
         "end the session",
         "mulca, end session",
