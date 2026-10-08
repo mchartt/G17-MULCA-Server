@@ -669,6 +669,13 @@ def test_dismissal_matching():
         assistant_spoke_recently=False,
     )
     assert not _matches_dismissal("let us move on", assistant_spoke_recently=True)
+    # "Stop" and the like, with the name or alone, in either language.
+    for transcript in ("MULCA stop", "stop, muca", "muca stai zitto", "basta così mulca"):
+        assert _matches_dismissal(transcript, assistant_spoke_recently=False)
+    assert not _matches_dismissal(
+        "stop sharing your screen and look at this, Ada",
+        assistant_spoke_recently=False,
+    )
 
 
 async def test_a_dismissal_ends_the_session_unanswered_and_never_starts_one():
