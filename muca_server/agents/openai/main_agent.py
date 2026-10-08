@@ -51,6 +51,36 @@ def _looks_like_prompt_echo(transcript: str, prompt: str) -> bool:
     return bool(normalized_transcript) and normalized_transcript in normalized_prompt
 
 
+# A rough "don't trust this as real speech" cutoff on the ASR's own
+# per-token confidence. Hallucinated transcripts (invented over
+# near-silent/noisy audio -- confirmed live: coherent, fluent sentences
+# ("I'm reading a book.") generated from pure kitchen noise, not just the
+# bias-prompt echo _looks_like_prompt_echo already catches) are typically
+# produced with much lower confidence than genuine transcription, even
+# when fluent. A starting point, not calibrated against a real sample yet
+# -- tune once there's confirmed-hallucination data to compare against
+# confirmed-genuine (including quiet/accented) speech.
+MIN_AVERAGE_LOGPROB = -1.5
+
+
+def _looks_like_low_confidence_transcription(logprobs) -> bool:
+    """
+    Whether the ASR's own per-token confidence for this transcript is low
+    enough to doubt it's real speech, rather than something hallucinated.
+    Unlike _looks_like_prompt_echo (one specific known string), this
+    catches hallucinated content with no relation to any prompt text at
+    all -- the general case, at the cost of needing a threshold rather
+    than an exact match. None/empty logprobs (not every provider response
+    includes them) means no signal either way, not a reason to discard.
+    """
+
+    if not logprobs:
+        return False
+
+    average = sum(entry.logprob for entry in logprobs) / len(logprobs)
+    return average < MIN_AVERAGE_LOGPROB
+
+
 DEFAULT_REALTIME_MODEL = "gpt-realtime-2.1-mini"
 SUMMARY_MODEL = "gpt-4o"
 TRANSCRIPTION_MODEL = "gpt-4o-transcribe"
@@ -227,6 +257,11 @@ class MainAgentOpenAI(MainAgent):
             "type": "realtime",
             "output_modalities": ["audio"],
             "instructions": self._build_instructions(),
+            # Otherwise a completed-transcription event's own logprobs is
+            # always None, silently disabling
+            # _looks_like_low_confidence_transcription entirely -- it has
+            # nothing to check against.
+            "include": ["item.input_audio_transcription.logprobs"],
             "audio": {
                 "input": {
                     "format": {
@@ -610,6 +645,16 @@ class MainAgentOpenAI(MainAgent):
                     logger.warning(
                         "%s discarded a transcript that looked like a "
                         "prompt echo, not real speech: %r",
+                        self.log_label,
+                        transcript,
+                    )
+                    transcript = ""
+                elif _looks_like_low_confidence_transcription(
+                    getattr(event, "logprobs", None)
+                ):
+                    logger.warning(
+                        "%s discarded a low-confidence transcript, likely "
+                        "not real speech: %r",
                         self.log_label,
                         transcript,
                     )

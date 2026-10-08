@@ -11,6 +11,7 @@ from muca_server.agents.main_agent import MainAgentEvent
 from muca_server.agents.openai.main_agent import (
     MAIN_TOKEN_LIMIT,
     MainAgentOpenAI,
+    _looks_like_low_confidence_transcription,
     _looks_like_prompt_echo,
     log_usage,
     trim_context,
@@ -498,6 +499,85 @@ async def test_a_transcript_that_echoes_the_bias_prompt_is_discarded():
     )
 
     assert received == [("in-1", "")]
+
+
+def test_low_confidence_detection_is_a_plain_average_over_logprobs():
+    confident = [_Obj(logprob=-0.1), _Obj(logprob=-0.2), _Obj(logprob=-0.05)]
+    unconfident = [_Obj(logprob=-2.0), _Obj(logprob=-3.5), _Obj(logprob=-1.8)]
+
+    assert not _looks_like_low_confidence_transcription(confident)
+    assert _looks_like_low_confidence_transcription(unconfident)
+
+    # No signal either way -- not a reason to discard.
+    assert not _looks_like_low_confidence_transcription(None)
+    assert not _looks_like_low_confidence_transcription([])
+
+
+async def test_a_low_confidence_transcript_is_discarded():
+    # Found live: coherent, fluent sentences ("I'm reading a book.")
+    # hallucinated from pure kitchen noise -- no relation to the bias
+    # prompt at all, so _looks_like_prompt_echo alone wouldn't catch it.
+    agent = make_agent()
+    received = []
+
+    async def record(item_id, transcript):
+        received.append((item_id, transcript))
+
+    agent.on_transcript = record
+
+    await agent._interpret(
+        _Event(
+            "conversation.item.input_audio_transcription.completed",
+            item_id="in-1",
+            transcript="I'm reading a book.",
+            logprobs=[_Obj(logprob=-3.0), _Obj(logprob=-2.5)],
+        )
+    )
+
+    assert received == [("in-1", "")]
+
+
+async def test_a_confident_transcript_is_unaffected():
+    agent = make_agent()
+    received = []
+
+    async def record(item_id, transcript):
+        received.append((item_id, transcript))
+
+    agent.on_transcript = record
+
+    await agent._interpret(
+        _Event(
+            "conversation.item.input_audio_transcription.completed",
+            item_id="in-1",
+            transcript="what time is the meeting",
+            logprobs=[_Obj(logprob=-0.1), _Obj(logprob=-0.2)],
+        )
+    )
+
+    assert received == [("in-1", "what time is the meeting")]
+
+
+async def test_a_transcript_with_no_logprobs_at_all_is_unaffected():
+    # Not every provider response includes them -- no signal either way,
+    # not a reason to discard.
+    agent = make_agent()
+    received = []
+
+    async def record(item_id, transcript):
+        received.append((item_id, transcript))
+
+    agent.on_transcript = record
+
+    await agent._interpret(
+        _Event(
+            "conversation.item.input_audio_transcription.completed",
+            item_id="in-1",
+            transcript="what time is the meeting",
+        )
+    )
+
+    assert received == [("in-1", "what time is the meeting")]
 
 
 async def test_speech_started_remembers_the_input_item():
