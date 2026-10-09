@@ -244,6 +244,7 @@ class CoalaPolicy:
                 wm.participant_roles_summary = (
                     snapshot.participant_roles_summary
                 )
+                wm.action_points = snapshot.action_points
                 wm.total_message_count = snapshot.total_message_count
                 wm.history = [
                     stored.restore()
@@ -294,6 +295,7 @@ class CoalaPolicy:
                 participant_roles_summary=(
                     self._wm.participant_roles_summary
                 ),
+                action_points=self._wm.action_points,
                 history_tail=[
                     StoredUtterance.of(utterance)
                     for utterance in self._wm.history
@@ -543,6 +545,7 @@ class CoalaPolicy:
             wm.participant_roles_summary = (
                 linked_snapshot.participant_roles_summary
             )
+            wm.action_points = linked_snapshot.action_points
             wm.linked_history_tail = [
                 stored.restore() for stored in linked_snapshot.history_tail
             ]
@@ -750,7 +753,12 @@ class CoalaPolicy:
             )
 
         await port.instruct_main_agent(
-            self._render_prompt(wm, directive=directive, port=port),
+            self._render_prompt(
+                wm,
+                directive=directive,
+                port=port,
+                force_summary=strategy_id == "provide_summary",
+            ),
         )
 
         await self._finish_turn(
@@ -852,8 +860,10 @@ class CoalaPolicy:
         summary_part = (
             "Summary of the conversation so far:\n"
             f"{wm.history_summary}\n\n"
-            "Participants and roles observed so far:\n"
+            "Participants' main contributions so far:\n"
             f"{wm.participant_roles_summary or '(none yet)'}\n\n"
+            "Open action points:\n"
+            f"{wm.action_points or '(none yet)'}\n\n"
             if wm.history_summary
             else ""
         )
@@ -1137,16 +1147,18 @@ class CoalaPolicy:
     ) -> None:
         assert self._summarizer is not None
 
-        history_summary, roles_summary = (
+        history_summary, roles_summary, action_points = (
             await self._summarizer.summarize(
                 transcript=wm.transcript(exclude_assistant=True),
                 previous_summary=wm.history_summary,
                 previous_roles=wm.participant_roles_summary,
+                previous_action_points=wm.action_points,
             )
         )
         wm.apply_management_cycle(
             history_summary,
             roles_summary,
+            action_points,
             tail_size=self._management_cycle_interval,
         )
         await self._save_snapshot()
@@ -1160,6 +1172,7 @@ class CoalaPolicy:
                     trigger_variables=dict(wm.trigger_variables),
                     history_summary=history_summary,
                     participant_roles_summary=roles_summary,
+                    action_points=action_points,
                 )
             )
 
@@ -1169,6 +1182,7 @@ class CoalaPolicy:
         *,
         directive: str,
         port: ConversationPort,
+        force_summary: bool = False,
     ) -> str:
         """
         Assemble this turn's payload for the main agent -- everything
@@ -1177,6 +1191,19 @@ class CoalaPolicy:
         resending them here every turn would just be waste, not safety).
         Pushed as a conversation item, not a session-instructions
         overwrite -- see MainAgentOpenAI._trigger_response.
+
+        force_summary: provide_summary's own case -- a recap explicitly
+        benefits from the compressed, decision-prioritized overview (plus
+        contributions-by-person and open action points) every time it's
+        asked for, not just once per connection the way summary_block is
+        otherwise gated (the live session already natively remembers the
+        raw messages that went into it, so re-sending it on every turn
+        would normally be waste -- but an explicit "summarize this"
+        request is exactly the case where that redundancy is the point:
+        recent_block's raw tail alone can miss anything the management
+        cycle already folded into the summary). Does not affect
+        self._full_context_sent_at -- a forced render here says nothing
+        about whether the live session has organically seen this before.
         """
 
         # A DM mirrors a *different* conversation's summary
@@ -1246,10 +1273,12 @@ class CoalaPolicy:
             (
                 "Summary of the conversation so far:\n"
                 f"{wm.history_summary or '(none yet)'}\n\n"
-                "Participants and roles observed so far:\n"
+                "Participants' main contributions so far:\n"
                 f"{wm.participant_roles_summary or '(none yet)'}\n\n"
+                "Open action points:\n"
+                f"{wm.action_points or '(none yet)'}\n\n"
             )
-            if needs_full_context
+            if needs_full_context or force_summary
             else ""
         )
 

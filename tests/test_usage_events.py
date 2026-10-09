@@ -119,7 +119,7 @@ async def test_the_summarizer_and_the_embedder_report_their_calls():
         prompt_tokens_details=SimpleNamespace(cached_tokens=400),
     )
     content = json.dumps(
-        {"history_summary": "h", "participant_roles_summary": "r"},
+        {"history_summary": "h", "participant_roles_summary": "r", "action_points": "a"},
     )
 
     async def chat_create(**kwargs):
@@ -144,6 +144,7 @@ async def test_the_summarizer_and_the_embedder_report_their_calls():
         transcript="Ada: hi",
         previous_summary="",
         previous_roles="",
+        previous_action_points="",
     )
     await OpenAIEmbedder(client).embed("hi")
     await asyncio.sleep(0)

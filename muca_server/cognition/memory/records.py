@@ -47,6 +47,7 @@ class EpisodicRecord(BaseModel):
     # assistant's output for these; they get their own fields here.
     history_summary: str | None = None
     participant_roles_summary: str | None = None
+    action_points: str | None = None
 
 
 class StoredUtterance(BaseModel):
@@ -90,6 +91,7 @@ class MemorySnapshot(BaseModel):
 
     history_summary: str = ""
     participant_roles_summary: str = ""
+    action_points: str = ""
     history_tail: list[StoredUtterance] = Field(
         default_factory=list,
     )

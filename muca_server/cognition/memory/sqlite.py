@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS episodic_log (
     prompt_fragment TEXT,
     assistant_output TEXT,
     history_summary TEXT,
-    participant_roles_summary TEXT
+    participant_roles_summary TEXT,
+    action_points TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_episodic_log_conversation
     ON episodic_log (conversation_id, timestamp);
@@ -77,6 +78,7 @@ CREATE TABLE IF NOT EXISTS memory_snapshot (
     conversation_id TEXT PRIMARY KEY,
     history_summary TEXT NOT NULL DEFAULT '',
     participant_roles_summary TEXT NOT NULL DEFAULT '',
+    action_points TEXT NOT NULL DEFAULT '',
     history_tail TEXT NOT NULL DEFAULT '[]',
     total_message_count INTEGER NOT NULL DEFAULT 0,
     updated_at REAL NOT NULL DEFAULT 0,
@@ -108,6 +110,10 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         )
         await db.commit()
 
+    if "action_points" not in columns:
+        await db.execute("ALTER TABLE episodic_log ADD COLUMN action_points TEXT")
+        await db.commit()
+
     snapshot_cursor = await db.execute("PRAGMA table_info(memory_snapshot)")
     snapshot_columns = {row[1] for row in await snapshot_cursor.fetchall()}
 
@@ -125,6 +131,13 @@ async def _migrate(db: aiosqlite.Connection) -> None:
     if "full_context_sent_at" not in snapshot_columns:
         await db.execute(
             "ALTER TABLE memory_snapshot ADD COLUMN full_context_sent_at REAL"
+        )
+        await db.commit()
+
+    if "action_points" not in snapshot_columns:
+        await db.execute(
+            "ALTER TABLE memory_snapshot ADD COLUMN action_points "
+            "TEXT NOT NULL DEFAULT ''"
         )
         await db.commit()
 
@@ -161,8 +174,8 @@ class SqliteEpisodicStore:
                     timestamp, conversation_id, intervention_path, speaker,
                     content, modality, trigger_variables, strategy_id,
                     prompt_fragment, assistant_output, history_summary,
-                    participant_roles_summary
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    participant_roles_summary, action_points
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.timestamp,
@@ -177,6 +190,7 @@ class SqliteEpisodicStore:
                     record.assistant_output,
                     record.history_summary,
                     record.participant_roles_summary,
+                    record.action_points,
                 ),
             )
             episodic_log_id = cursor.lastrowid
@@ -274,6 +288,7 @@ class SqliteEpisodicStore:
                 assistant_output=by_id[i]["assistant_output"],
                 history_summary=by_id[i]["history_summary"],
                 participant_roles_summary=by_id[i]["participant_roles_summary"],
+                action_points=by_id[i]["action_points"],
             )
             for i in top_ids
         ]
@@ -315,6 +330,7 @@ class SqliteEpisodicStore:
                 assistant_output=row["assistant_output"],
                 history_summary=row["history_summary"],
                 participant_roles_summary=row["participant_roles_summary"],
+                action_points=row["action_points"],
             )
             for row in reversed(rows)
         ]
@@ -346,6 +362,7 @@ class SqliteSnapshotStore:
         return MemorySnapshot(
             history_summary=row["history_summary"],
             participant_roles_summary=row["participant_roles_summary"],
+            action_points=row["action_points"],
             history_tail=[
                 StoredUtterance(**item)
                 for item in json.loads(row["history_tail"])
@@ -368,12 +385,13 @@ class SqliteSnapshotStore:
                 """
                 INSERT INTO memory_snapshot (
                     conversation_id, history_summary, participant_roles_summary,
-                    history_tail, total_message_count, updated_at,
+                    action_points, history_tail, total_message_count, updated_at,
                     recent_actions, recent_action_at, full_context_sent_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(conversation_id) DO UPDATE SET
                     history_summary = excluded.history_summary,
                     participant_roles_summary = excluded.participant_roles_summary,
+                    action_points = excluded.action_points,
                     history_tail = excluded.history_tail,
                     total_message_count = excluded.total_message_count,
                     updated_at = excluded.updated_at,
@@ -385,6 +403,7 @@ class SqliteSnapshotStore:
                     conversation_id,
                     snapshot.history_summary,
                     snapshot.participant_roles_summary,
+                    snapshot.action_points,
                     json.dumps(
                         [utterance.model_dump() for utterance in snapshot.history_tail]
                     ),

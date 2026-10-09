@@ -48,12 +48,36 @@ async def test_recall_recent_excludes_management_cycle_rows(tmp_path):
             intervention_path="management_cycle",
             history_summary="the summary",
             participant_roles_summary="the roles",
+            action_points="the action points",
         )
     )
 
     rows = await store.recall_recent("c1", 50)
 
     assert [r.content for r in rows] == ["a real message"]
+
+
+async def test_a_management_cycle_rows_three_summary_fields_round_trip(tmp_path):
+    db_path = tmp_path / "test.db"
+    store = SqliteEpisodicStore(db_path)
+
+    await store.log(
+        record(
+            intervention_path="management_cycle",
+            history_summary="the summary",
+            participant_roles_summary="the roles",
+            action_points="the action points",
+        )
+    )
+
+    async with aiosqlite.connect(db_path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT * FROM episodic_log")
+        [row] = await cursor.fetchall()
+
+    assert row["history_summary"] == "the summary"
+    assert row["participant_roles_summary"] == "the roles"
+    assert row["action_points"] == "the action points"
 
 
 async def test_recall_recent_is_chronological_and_limited(tmp_path):
@@ -113,6 +137,7 @@ async def test_snapshot_save_and_load_round_trips_every_field(tmp_path):
     snapshot = MemorySnapshot(
         history_summary="a dense summary",
         participant_roles_summary="Ada: asks good questions",
+        action_points="Grace to send the forecast link",
         history_tail=[
             StoredUtterance(
                 speaker_id=1,
@@ -167,6 +192,77 @@ async def test_a_snapshot_file_from_before_cooldown_columns_existed_still_loads(
     assert loaded.recent_actions == {}
     assert loaded.full_context_sent_at is None
     assert loaded.recent_action_at == {}
+    assert loaded.action_points == ""
+
+
+async def test_a_snapshot_file_from_before_action_points_existed_still_loads(
+    tmp_path,
+):
+    # Simulates a real pre-existing DB file (post cooldown columns, pre
+    # action_points) -- same migration pattern, one column later.
+    db_path = tmp_path / "test.db"
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """
+            CREATE TABLE memory_snapshot (
+                conversation_id TEXT PRIMARY KEY,
+                history_summary TEXT NOT NULL DEFAULT '',
+                participant_roles_summary TEXT NOT NULL DEFAULT '',
+                history_tail TEXT NOT NULL DEFAULT '[]',
+                total_message_count INTEGER NOT NULL DEFAULT 0,
+                updated_at REAL NOT NULL DEFAULT 0,
+                recent_actions TEXT NOT NULL DEFAULT '{}',
+                recent_action_at TEXT NOT NULL DEFAULT '{}',
+                full_context_sent_at REAL
+            )
+            """
+        )
+        await db.execute(
+            "INSERT INTO memory_snapshot (conversation_id, total_message_count) "
+            "VALUES ('c1', 5)"
+        )
+        await db.commit()
+
+    loaded = await SqliteSnapshotStore(db_path).load("c1")
+
+    assert loaded.total_message_count == 5
+    assert loaded.action_points == ""
+
+
+async def test_an_episodic_log_file_from_before_action_points_existed_still_loads(
+    tmp_path,
+):
+    db_path = tmp_path / "test.db"
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """
+            CREATE TABLE episodic_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                conversation_id TEXT NOT NULL,
+                intervention_path TEXT NOT NULL,
+                speaker TEXT NOT NULL DEFAULT '',
+                content TEXT NOT NULL DEFAULT '',
+                modality TEXT NOT NULL DEFAULT 'text',
+                trigger_variables TEXT NOT NULL DEFAULT '{}',
+                strategy_id TEXT,
+                prompt_fragment TEXT,
+                assistant_output TEXT,
+                history_summary TEXT,
+                participant_roles_summary TEXT
+            )
+            """
+        )
+        await db.execute(
+            "INSERT INTO episodic_log (timestamp, conversation_id, "
+            "intervention_path, content) VALUES (1.0, 'c1', 'none', 'hi')"
+        )
+        await db.commit()
+
+    [row] = await SqliteEpisodicStore(db_path).recall_recent("c1", 50)
+
+    assert row.content == "hi"
+    assert row.action_points is None
 
 
 async def test_saving_again_overwrites_rather_than_duplicates(tmp_path):

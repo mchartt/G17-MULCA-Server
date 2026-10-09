@@ -571,6 +571,57 @@ async def test_provide_summary_always_retrieves_regardless_of_the_signal():
     assert "the sky is blue" in port.instructions[0]
 
 
+async def test_provide_summary_always_includes_the_overall_summary_even_once_stale():
+    # summary_block is normally sent only once per connection (the live
+    # session already natively remembers the raw messages that went into
+    # it) -- but an explicit "summarize this" request benefits from the
+    # compressed overview (and contributions/action points) every time,
+    # since the retrieved raw tail alone can miss anything already folded
+    # into the summary by an earlier management cycle.
+    strategies = StrategyStore(
+        {
+            "respond_when_addressed": Strategy(
+                id="respond_when_addressed",
+                trigger_description="",
+                prompt_template="Answer. {prompt_fragment}",
+            ),
+            "provide_summary": Strategy(
+                id="provide_summary",
+                trigger_description="",
+                prompt_template="Summarize. {prompt_fragment}",
+            ),
+        }
+    )
+    policy = CoalaPolicy(strategy_store=strategies)
+    port = FakePort()
+    await policy.start(port)
+    policy._wm.history_summary = "the group discussed the deadline"
+    policy._wm.participant_roles_summary = "Ada: proposed the deadline"
+    policy._wm.action_points = "Grace to send the forecast link"
+
+    # An ordinary turn first -- consumes needs_full_context for this
+    # connection, same as any other reply would.
+    await policy.on_utterance(make_utterance(content="hi"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
+    )
+    assert "the group discussed the deadline" in port.instructions[0]
+
+    # A later provide_summary turn still gets it, even though a plain
+    # turn at this point would not (needs_full_context is long since
+    # consumed).
+    await policy.on_utterance(make_utterance(content="can you summarize?"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="provide_summary", prompt_fragment=""),
+    )
+
+    assert "the group discussed the deadline" in port.instructions[1]
+    assert "Ada: proposed the deadline" in port.instructions[1]
+    assert "Grace to send the forecast link" in port.instructions[1]
+
+
 async def test_provide_summary_retrieves_text_and_voice_turns_together():
     """
     Retrieval has no modality concept at all -- text and voice turns share
@@ -801,12 +852,15 @@ async def test_the_summarizer_never_sees_the_assistants_own_turns():
         def __init__(self):
             self.seen_transcripts = []
 
-        async def summarize(self, *, transcript, previous_summary, previous_roles):
+        async def summarize(
+            self, *, transcript, previous_summary, previous_roles, previous_action_points
+        ):
             self.seen_transcripts.append(transcript)
             return await super().summarize(
                 transcript=transcript,
                 previous_summary=previous_summary,
                 previous_roles=previous_roles,
+                previous_action_points=previous_action_points,
             )
 
     summarizer = RecordingSummarizer()
@@ -870,8 +924,10 @@ async def test_text_and_voice_participation_are_measured_separately():
 
 
 class FakeSummarizer:
-    async def summarize(self, *, transcript, previous_summary, previous_roles):
-        return "a summary", "some roles"
+    async def summarize(
+        self, *, transcript, previous_summary, previous_roles, previous_action_points
+    ):
+        return "a summary", "some roles", "some action points"
 
 
 async def test_store_factory_is_called_with_conversation_id_once_start_runs():
@@ -911,6 +967,7 @@ async def test_a_management_cycle_saves_a_snapshot_not_just_close():
     assert saved is not None
     assert saved.history_summary == "a summary"
     assert saved.participant_roles_summary == "some roles"
+    assert saved.action_points == "some action points"
 
 
 async def test_the_verbatim_tail_is_bounded_by_management_cycle_interval_not_a_fixed_constant():
@@ -1465,11 +1522,15 @@ async def test_observer_catchup_text_also_carries_the_compressed_summary():
     policy, port = make_policy()
     await policy.start(port)
     policy._wm.history_summary = "Previously, the team discussed the deadline."
+    policy._wm.participant_roles_summary = "Ada: proposed the deadline"
+    policy._wm.action_points = "Grace to send the forecast link"
     await policy.on_utterance(make_utterance(content="let's also fix the budget"))
 
     catchup = policy.observer_catchup_text()
 
     assert "Previously, the team discussed the deadline." in catchup
+    assert "Ada: proposed the deadline" in catchup
+    assert "Grace to send the forecast link" in catchup
     assert "let's also fix the budget" in catchup
 
 

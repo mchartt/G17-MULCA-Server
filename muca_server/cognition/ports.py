@@ -143,8 +143,11 @@ class Summarizer(Protocol):
         transcript: str,
         previous_summary: str,
         previous_roles: str,
-    ) -> tuple[str, str]:
-        """Returns (history_summary, participant_roles_summary)."""
+        previous_action_points: str,
+    ) -> tuple[str, str, str]:
+        """
+        Returns (history_summary, participant_roles_summary, action_points).
+        """
         ...
 
 

@@ -184,10 +184,12 @@ _MANAGEMENT_SCHEMA = {
         "properties": {
             "history_summary": {"type": "string"},
             "participant_roles_summary": {"type": "string"},
+            "action_points": {"type": "string"},
         },
         "required": [
             "history_summary",
             "participant_roles_summary",
+            "action_points",
         ],
         "additionalProperties": False,
     },
@@ -932,7 +934,8 @@ class ChatCompletionsSummarizer:
         transcript: str,
         previous_summary: str,
         previous_roles: str,
-    ) -> tuple[str, str]:
+        previous_action_points: str,
+    ) -> tuple[str, str, str]:
         response = await self._client.chat.completions.create(
             model=self._model,
             messages=[
@@ -944,16 +947,37 @@ class ChatCompletionsSummarizer:
                         "-- not a human. Optimize for information density: "
                         "concrete facts, names, numbers, and decisions, "
                         "not a list of topics that were merely mentioned. "
-                        "If something has to be compressed away to stay "
-                        "within budget, prioritize in this order: (1) key "
-                        "decisions and their outcomes, (2) important "
-                        "process information -- who proposed or argued for "
-                        "what, and why a decision was made the way it was, "
-                        "not just what was decided, (3) the most important "
-                        "task-specific details (e.g. agreed-on design "
-                        "choices, numbers, constraints) that people "
-                        "shouldn't have to repeat themselves on later. "
-                        "Target roughly 1500 words for history_summary."
+                        "You track three separate things, each its own "
+                        "field, and each kept up to date every cycle:\n\n"
+                        "history_summary: the high-level process of the "
+                        "conversation and its decisions. If something has "
+                        "to be compressed away to stay within budget, "
+                        "prioritize in this order: (1) key decisions and "
+                        "their outcomes, (2) important process information "
+                        "-- who proposed or argued for what, and why a "
+                        "decision was made the way it was, not just what "
+                        "was decided, (3) the most important task-specific "
+                        "details (e.g. agreed-on design choices, numbers, "
+                        "constraints) that people shouldn't have to repeat "
+                        "themselves on later. Target roughly 1500 words.\n\n"
+                        "participant_roles_summary: each participant's main "
+                        "contributions so far, by name -- what they "
+                        "specifically proposed, built, argued for, or "
+                        "decided, not just a role label like \"the "
+                        "designer\". Someone who has barely contributed "
+                        "should read as barely contributing, not be padded "
+                        "out to match the others.\n\n"
+                        "action_points: open, outstanding items raised in "
+                        "the conversation that haven't been resolved yet -- "
+                        "who's doing what next, open questions nobody has "
+                        "answered, things the group agreed to follow up on. "
+                        "Distinct from history_summary's decisions: a "
+                        "decision already made is not an action point "
+                        "unless it also implies unfinished follow-through. "
+                        "Remove an item once the conversation resolves it "
+                        "(decided, done, or dropped) -- this is a live "
+                        "list of what's still open, not a history of "
+                        "everything ever raised."
                     ),
                 },
                 {
@@ -963,13 +987,16 @@ class ChatCompletionsSummarizer:
                         f"cycle):\n{previous_summary or '(none yet)'}\n\n"
                         "Previous participant/roles summary:\n"
                         f"{previous_roles or '(none yet)'}\n\n"
+                        "Previous action points:\n"
+                        f"{previous_action_points or '(none yet)'}\n\n"
                         f"New messages since then:\n{transcript}\n\n"
-                        "Produce an updated history_summary that "
-                        "incorporates the new messages into the previous "
-                        "summary (not just the new messages alone -- "
-                        "earlier content that isn't repeated below must "
-                        "still be retained), and an updated "
-                        "participant_roles_summary."
+                        "Produce updated history_summary, "
+                        "participant_roles_summary, and action_points "
+                        "fields, each incorporating the new messages into "
+                        "its own previous version above (not just the new "
+                        "messages alone -- earlier content that isn't "
+                        "repeated below must still be retained, except "
+                        "action points the new messages resolve)."
                     ),
                 },
             ],
@@ -993,4 +1020,5 @@ class ChatCompletionsSummarizer:
         return (
             result["history_summary"],
             result["participant_roles_summary"],
+            result["action_points"],
         )

@@ -65,6 +65,11 @@ class WorkingMemory:
     total_message_count: int = 0
     history_summary: str = ""
     participant_roles_summary: str = ""
+    # Open, outstanding items raised in the conversation (and who's
+    # responsible, when stated) that haven't been resolved yet -- distinct
+    # from history_summary's own "key decisions and their outcomes", which
+    # is about what was already decided, not what's still pending.
+    action_points: str = ""
 
     # A DM's mirror of its linked group's own raw tail (CoalaPolicy
     # ._apply_linked_group_context) -- kept separate from `history` above,
@@ -83,6 +88,7 @@ class WorkingMemory:
         self,
         history_summary: str,
         participant_roles_summary: str,
+        action_points: str,
         *,
         tail_size: int,
     ) -> None:
@@ -98,6 +104,7 @@ class WorkingMemory:
 
         self.history_summary = history_summary
         self.participant_roles_summary = participant_roles_summary
+        self.action_points = action_points
         self.history = self.history[-tail_size:]
 
     def trim_history(self, *, tail_size: int) -> None:

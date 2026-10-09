@@ -27,19 +27,22 @@ async def test_group_summary_uses_a_json_schema_response():
         {
             "history_summary": "they discussed the weather",
             "participant_roles_summary": "Ada leads",
+            "action_points": "Grace to send the forecast link",
         }
     )
     client = FakeClient(content)
     summarizer = ChatCompletionsSummarizer(client)
 
-    history, roles = await summarizer.summarize(
+    history, roles, action_points = await summarizer.summarize(
         transcript="Ada: hi\nGrace: hello",
         previous_summary="",
         previous_roles="",
+        previous_action_points="",
     )
 
     assert history == "they discussed the weather"
     assert roles == "Ada leads"
+    assert action_points == "Grace to send the forecast link"
 
     call = client.chat.completions.calls[0]
     assert call["response_format"]["type"] == "json_schema"
