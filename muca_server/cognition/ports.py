@@ -74,6 +74,17 @@ class InterventionSignal:
     # needs_web_search is true.
     web_search_query: str = ""
 
+    # Independent riders on top of strategy_id: a short overlay from a
+    # *different* strategy, spliced onto this turn's directive rather than
+    # replacing it -- e.g. answering a direct question (strategy_id=
+    # respond_when_addressed) that also contained offensive language
+    # (flag_offensive_language=True). Only meaningful when strategy_id
+    # names a different strategy; if nothing else fires, the observer
+    # selects the rider's own strategy as strategy_id instead, the
+    # existing standalone path. See CoalaPolicy.on_intervention_signal.
+    flag_offensive_language: bool = False
+    nudge_participation: bool = False
+
 
 class ConversationPort(Protocol):
     """Interface which defines what cognition can ask of its conversation."""

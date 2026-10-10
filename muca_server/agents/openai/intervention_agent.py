@@ -347,6 +347,12 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
                 args.get("needs_web_search", False),
             ),
             web_search_query=args.get("web_search_query", ""),
+            flag_offensive_language=bool(
+                args.get("flag_offensive_language", False),
+            ),
+            nudge_participation=bool(
+                args.get("nudge_participation", False),
+            ),
         )
 
     def _tool_definition(self) -> dict:
@@ -382,6 +388,30 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
                             "phrasing. Empty otherwise."
                         ),
                     },
+                    "flag_offensive_language": {
+                        "type": "boolean",
+                        "description": (
+                            "True if the triggering message also contains "
+                            "offensive or disrespectful language, AND "
+                            "strategy_id is something other than "
+                            "pleasant_conversation -- a brief aside gets "
+                            "spliced onto that reply. If nothing else is "
+                            "firing, select pleasant_conversation as "
+                            "strategy_id instead of using this flag."
+                        ),
+                    },
+                    "nudge_participation": {
+                        "type": "boolean",
+                        "description": (
+                            "True if a quiet participant is worth a brief "
+                            "invitation alongside a different primary "
+                            "reply, AND strategy_id is something other "
+                            "than participation_equality_text. If nothing "
+                            "else is firing, select "
+                            "participation_equality_text as strategy_id "
+                            "instead of using this flag."
+                        ),
+                    },
                 },
                 "required": [
                     "strategy_id",
@@ -389,6 +419,8 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
                     "needs_history",
                     "needs_web_search",
                     "web_search_query",
+                    "flag_offensive_language",
+                    "nudge_participation",
                 ],
             },
         }
@@ -425,9 +457,21 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
             "do not write a prompt_fragment that tells it to hedge, caveat "
             "its browsing ability, or treat the answer as unverified; if "
             "you're not confident a search will find a good answer, don't "
-            "set the flag at all rather than ask for a hedged one. Both "
-            "flags default to false. If no strategy should fire, produce "
-            "no output and do not call the tool. "
+            "set the flag at all rather than ask for a hedged one. Two "
+            "more independent flags: flag_offensive_language and "
+            "nudge_participation, each a brief aside spliced onto whatever "
+            "strategy_id's reply already is, for when that concern applies "
+            "alongside a different primary strategy rather than being the "
+            "reason for responding at all (e.g. a direct question that "
+            "also contained offensive language: strategy_id= "
+            "respond_when_addressed, flag_offensive_language=true). If "
+            "nothing else would fire, select that strategy's own id as "
+            "strategy_id instead of setting its flag -- these flags are "
+            "only for riding along, never a replacement for the normal "
+            "standalone firing of pleasant_conversation or "
+            "participation_equality_text. All flags default to false. If "
+            "no strategy should fire, produce no output and do not call "
+            "the tool. "
             "Never produce a conversational reply yourself; your only "
             "job is this judgment call.\n\n"
             "Available strategies:\n"

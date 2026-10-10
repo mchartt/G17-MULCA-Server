@@ -20,6 +20,13 @@ class Strategy:
     prompt_template: str
     trigger_variables: list[str] = field(default_factory=list)
 
+    # A short, appendable instruction used when this strategy rides along
+    # on top of a *different* strategy's directive (see InterventionSignal.
+    # flag_offensive_language/nudge_participation), instead of the full
+    # prompt_template a standalone firing gets. None for strategies that
+    # are never a rider.
+    overlay_template: str | None = None
+
     # e.g. {"variable": "gini_index", "min": 0.3}. Given to the observers as a
     # concrete number to reason against rather than vague language; the firing
     # decision is still theirs.
@@ -73,6 +80,7 @@ class StrategyStore:
                 trigger_threshold=data.get("trigger_threshold"),
                 cooldown_messages=data.get("cooldown_messages", 0),
                 modalities=frozenset(data.get("modalities", ["text"])),
+                overlay_template=data.get("overlay_template"),
             )
             strategies[strategy.id] = strategy
 

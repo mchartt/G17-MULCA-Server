@@ -9,7 +9,9 @@ trigger_description: >
   Lower priority than respond_when_addressed: if the current message also
   directly addresses MULCA with a question or request, select that instead
   -- the imbalance can simply wait for a later message, it does not need to
-  be handled in the same turn as a direct question.
+  be handled in the same turn as a direct question. If a quiet nudge still
+  feels worth including alongside that other reply, set nudge_participation
+  instead of selecting this as the primary strategy.
 trigger_threshold:
   variable: gini_index
   min: 0.3
@@ -41,3 +43,9 @@ prompt_template: |
   Participation in the text channel is currently unbalanced. {prompt_fragment}
   Gently invite the quietest participant to share their view, without singling
   out or criticizing whoever has been talking the most.
+# Used instead of prompt_template when this rides along on top of a
+# different primary strategy -- a brief aside, not the focus of the reply.
+overlay_template: >
+  Briefly invite the quietest participant to share their view too -- one
+  short aside, not the focus of your reply, without singling out or
+  criticizing whoever has been talking the most.

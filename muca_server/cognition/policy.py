@@ -564,16 +564,21 @@ class CoalaPolicy:
         needs_history = bool(signal and signal.needs_history)
         needs_web_search = bool(signal and signal.needs_web_search)
         web_search_query = signal.web_search_query if signal else ""
+        flag_offensive_language = bool(signal and signal.flag_offensive_language)
+        nudge_participation = bool(signal and signal.nudge_participation)
 
         logger.info(
             "%s intervention decision: strategy_id=%r prompt_fragment=%r "
-            "needs_history=%s needs_web_search=%s web_search_query=%r",
+            "needs_history=%s needs_web_search=%s web_search_query=%r "
+            "flag_offensive_language=%s nudge_participation=%s",
             wm.conversation_id,
             strategy_id,
             prompt_fragment,
             needs_history,
             needs_web_search,
             web_search_query,
+            flag_offensive_language,
+            nudge_participation,
         )
 
         # Hard vetoes: not a request the model might ignore, the guarantee.
@@ -751,6 +756,48 @@ class CoalaPolicy:
                 "spoken aloud, not read, so skip caveats, source lists, "
                 "and secondary details unless they directly asked for them."
             )
+
+        # Independent riders: a short overlay from a *different* strategy,
+        # spliced onto this turn's directive rather than replacing it (see
+        # InterventionSignal.flag_offensive_language/nudge_participation).
+        # Each still goes through that strategy's own cooldown/modality
+        # veto, same guarantee as the primary pick above, and firing one
+        # starts its cooldown exactly as a standalone firing would.
+        rider_modality = (
+            self._pending_utterance.modality
+            if self._pending_utterance is not None
+            else None
+        )
+        for flagged, rider_id in (
+            (flag_offensive_language, "pleasant_conversation"),
+            (nudge_participation, "participation_equality_text"),
+        ):
+            if not flagged or rider_id == strategy_id:
+                continue
+
+            rider = self._strategies.get(rider_id)
+            if rider is None or not rider.overlay_template:
+                continue
+
+            if wm.strategy_in_cooldown(rider):
+                logger.info(
+                    "%s rider %r vetoed: still in cooldown",
+                    wm.conversation_id,
+                    rider_id,
+                )
+                continue
+
+            if rider_modality is not None and rider_modality not in rider.modalities:
+                logger.info(
+                    "%s rider %r vetoed: not allowed for a %s turn",
+                    wm.conversation_id,
+                    rider_id,
+                    rider_modality,
+                )
+                continue
+
+            directive += " " + rider.overlay_template.strip()
+            wm.record_action(rider_id, wm.total_message_count)
 
         await port.instruct_main_agent(
             self._render_prompt(

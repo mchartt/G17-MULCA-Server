@@ -15,3 +15,10 @@ prompt_template: |
   Address it calmly and firmly without escalating -- name the behavior, not
   the person's character, and remind the group of respectful conduct. Do not
   quote or repeat the offensive language itself.
+# Used instead of prompt_template when this rides along on top of a
+# different primary strategy (e.g. answering a direct question that also
+# contained offensive language) -- a brief aside, not the focus of the reply.
+overlay_template: >
+  Briefly and calmly note that the language just used was disrespectful and
+  ask that the group keep it civil -- one short aside, not the focus of
+  your reply, and do not quote or repeat the offensive language itself.

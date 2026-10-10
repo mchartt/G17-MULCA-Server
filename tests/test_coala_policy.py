@@ -29,6 +29,31 @@ STRATEGIES = StrategyStore(
 )
 
 
+STRATEGIES_WITH_RIDERS = StrategyStore(
+    {
+        "respond_when_addressed": Strategy(
+            id="respond_when_addressed",
+            trigger_description="addressed directly",
+            prompt_template="Answer them. {prompt_fragment}",
+            modalities=frozenset({"text", "audio"}),
+        ),
+        "pleasant_conversation": Strategy(
+            id="pleasant_conversation",
+            trigger_description="offensive language",
+            prompt_template="Address the offense. {prompt_fragment}",
+            overlay_template="Also briefly note the offense.",
+        ),
+        "participation_equality_text": Strategy(
+            id="participation_equality_text",
+            trigger_description="unequal participation",
+            prompt_template="Balance participation. {prompt_fragment}",
+            cooldown_messages=5,
+            overlay_template="Also briefly invite the quiet one.",
+        ),
+    }
+)
+
+
 STRATEGIES_WITH_ALWAYS_REPLY = StrategyStore(
     {
         "participation_equality": Strategy(
@@ -1895,3 +1920,87 @@ async def test_needs_web_search_with_an_empty_query_is_a_no_op():
 
     assert searcher.queries == []
     assert len(port.instructions) == 1  # didn't crash, still replied
+
+
+async def test_flag_offensive_language_splices_an_overlay_onto_a_different_primary_reply():
+    policy, port = make_policy(strategy_store=STRATEGIES_WITH_RIDERS)
+    await policy.start(port)
+
+    await policy.on_utterance(make_utterance(content="MULCA, you're useless"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="respond_when_addressed",
+            prompt_fragment="",
+            flag_offensive_language=True,
+        ),
+    )
+
+    assert "Answer them." in port.instructions[0]
+    assert "Also briefly note the offense." in port.instructions[0]
+
+
+async def test_nudge_participation_splices_an_overlay_onto_a_different_primary_reply():
+    policy, port = make_policy(strategy_store=STRATEGIES_WITH_RIDERS)
+    await policy.start(port)
+
+    await policy.on_utterance(make_utterance(content="MULCA, what's next?"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="respond_when_addressed",
+            prompt_fragment="",
+            nudge_participation=True,
+        ),
+    )
+
+    assert "Answer them." in port.instructions[0]
+    assert "Also briefly invite the quiet one." in port.instructions[0]
+
+
+async def test_a_rider_flag_is_a_no_op_when_it_matches_the_primary_strategy_itself():
+    # The observer is told to select the strategy's own id instead of
+    # flagging it as a rider on itself -- guard against a double-splice if
+    # it does both anyway.
+    policy, port = make_policy(strategy_store=STRATEGIES_WITH_RIDERS)
+    await policy.start(port)
+
+    await policy.on_utterance(make_utterance(content="that's an offensive remark"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="pleasant_conversation",
+            prompt_fragment="",
+            flag_offensive_language=True,
+        ),
+    )
+
+    assert port.instructions[0].count("the offense") == 1
+
+
+async def test_a_rider_in_cooldown_is_vetoed_but_the_primary_reply_still_goes_out():
+    policy, port = make_policy(strategy_store=STRATEGIES_WITH_RIDERS)
+    await policy.start(port)
+
+    await policy.on_utterance(make_utterance(content="first"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="participation_equality_text",
+            prompt_fragment="",
+        ),
+    )
+    await policy.on_assistant_output("ok", interrupted=False)
+
+    await policy.on_utterance(make_utterance(content="MULCA, help"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="respond_when_addressed",
+            prompt_fragment="",
+            nudge_participation=True,
+        ),
+    )
+
+    assert "Answer them." in port.instructions[1]
+    assert "invite the quiet one" not in port.instructions[1]
