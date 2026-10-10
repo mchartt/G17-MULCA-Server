@@ -161,6 +161,18 @@ class ListeningStateMessage(OutgoingMessage):
     open: bool
 
 
+class TurnSkippedMessage(OutgoingMessage):
+    """
+    This turn's judgment concluded no strategy should fire -- there is no
+    reply coming for it at all. Lets a client stop showing a "typing"
+    indicator (or any other "a reply is coming" UI) immediately instead of
+    waiting out its own timeout for a reply that was never going to arrive.
+    Clients that do not know this event ignore it.
+    """
+
+    event: Literal["turn_skipped"] = "turn_skipped"
+
+
 class UsageMessage(OutgoingMessage):
     """
     What one OpenAI call made for this session cost, by the server's own
@@ -189,6 +201,7 @@ OutgoingProtocolMessage = (
     | AssistantTextMessage
     | ErrorMessage
     | ListeningStateMessage
+    | TurnSkippedMessage
     | UsageMessage
 )
 

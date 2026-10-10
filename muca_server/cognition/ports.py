@@ -138,6 +138,15 @@ class ConversationPort(Protocol):
     async def tell_observers(self, text: str) -> None:
         ...
 
+    async def no_reply(self) -> None:
+        """
+        This turn's judgment concluded nothing fires -- no reply is coming
+        for it. Lets a client stop showing "a reply is coming" UI (e.g.
+        Discord's typing indicator) immediately rather than waiting out its
+        own timeout for a reply that was never going to arrive.
+        """
+        ...
+
 
 class Summarizer(Protocol):
     """

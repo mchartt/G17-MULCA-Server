@@ -94,6 +94,7 @@ class FakePort:
         self.instructions: list[str] = []
         self.instruction_max_tokens: list[int | None] = []
         self.observer_messages: list[str] = []
+        self.no_reply_count = 0
 
     @property
     def conversation_id(self) -> str:
@@ -124,6 +125,9 @@ class FakePort:
 
     async def tell_observers(self, text: str) -> None:
         self.observer_messages.append(text)
+
+    async def no_reply(self) -> None:
+        self.no_reply_count += 1
 
 
 def make_policy(**kwargs) -> tuple[CoalaPolicy, FakePort]:
@@ -411,6 +415,22 @@ async def test_no_signal_means_no_instruction():
     await policy.on_intervention_signal(object(), None)
 
     assert port.instructions == []
+    # So a client can stop showing "a reply is coming" UI (e.g. a typing
+    # indicator) immediately instead of waiting out its own timeout.
+    assert port.no_reply_count == 1
+
+
+async def test_no_reply_is_not_sent_when_a_strategy_fires():
+    policy, port = make_policy()
+    await policy.start(port)
+    await policy.on_utterance(make_utterance())
+
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
+    )
+
+    assert port.no_reply_count == 0
 
 
 async def test_a_strategy_in_cooldown_is_vetoed():

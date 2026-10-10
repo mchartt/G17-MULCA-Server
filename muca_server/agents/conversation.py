@@ -41,6 +41,7 @@ from ..protocol import (
     StateUpdateMessage,
     TextMessage,
     TriggerResponseMessage,
+    TurnSkippedMessage,
     UsageMessage,
     UserTextMessage,
 )
@@ -421,6 +422,9 @@ class Conversation:
     async def tell_observers(self, text: str) -> None:
         for agent in list(self._auxiliary_agents.values()):
             await agent.send_text(text)
+
+    async def no_reply(self) -> None:
+        await self._send(TurnSkippedMessage())
 
     # ------------------------------------------------------------------
     # Conversation state, derived from the turns rather than tracked

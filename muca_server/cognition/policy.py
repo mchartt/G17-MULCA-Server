@@ -1186,6 +1186,7 @@ class CoalaPolicy:
             # wait_for_turn_to_finish()'s timeout for no reason.
             self._pending_utterance = None
             self._turn_done.set()
+            await port.no_reply()
 
     async def _run_management_cycle(
         self,

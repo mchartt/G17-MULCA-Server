@@ -31,6 +31,7 @@ from .outgoing import (
     OutgoingMessage,
     OutgoingProtocolMessage,
     StateUpdateMessage,
+    TurnSkippedMessage,
     UsageMessage,
     serialize_outgoing_message,
 )
@@ -58,6 +59,7 @@ __all__ = [
     "ParticipantsMessage",
     "PlaybackFrameMessage",
     "RawProviderMessage",
+    "TurnSkippedMessage",
     "RemoveAuxiliaryAgentMessage",
     "SetCostAlertMessage",
     "SetModelMessage",
