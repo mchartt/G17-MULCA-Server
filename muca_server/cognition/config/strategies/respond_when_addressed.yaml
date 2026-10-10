@@ -56,13 +56,13 @@ trigger_description: >
   isolated or conversational it sounds, and no matter how recently you last
   spoke.
   This takes priority over unsolicited strategies (participation_equality_text/
-  _voice, keep_on_topic) whenever both would otherwise apply to the same
+  _voice, maintain_focus) whenever both would otherwise apply to the same
   message: answer the direct question now. An unequal-participation nudge
   that has to wait a message or two is a minor cost; a direct question
   that goes unanswered reads as MULCA ignoring the person who asked it,
   especially in voice.
 # Deliberately no cooldown_messages here, unlike participation_equality/
-# keep_conversation_on_topic -- those are unsolicited interventions that get
+# maintain_focus -- those are unsolicited interventions that get
 # naggy if repeated too soon, but this fires only in direct response to being
 # addressed, so a back-and-forth exchange needs it to be able to fire on
 # consecutive messages.

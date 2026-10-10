@@ -7,7 +7,7 @@ trigger_description: >
   strong opinions.
 trigger_variables: []
 # Deliberately no cooldown_messages, unlike participation_equality/
-# keep_conversation_on_topic (those are pacing/nagging concerns) -- if the
+# maintain_focus (those are pacing/nagging concerns) -- if the
 # same behavior continues or escalates, suppressing a safety-relevant
 # intervention because one just fired recently would be the wrong tradeoff.
 prompt_template: |
