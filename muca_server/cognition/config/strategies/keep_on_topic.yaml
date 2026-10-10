@@ -1,12 +1,16 @@
 id: keep_conversation_on_topic
 trigger_description: >
-  The conversation has drifted away from the group's ranking task for a
-  sustained stretch (several consecutive messages unrelated to ranking the
-  items or discussing survival priorities), not just a brief aside that will
-  resolve itself.
+  The conversation has drifted away from the group's project work for a
+  sustained stretch -- several consecutive messages with nothing to do with
+  the task at hand -- not just a brief aside that will resolve itself on
+  its own. A single off-topic remark, or banter that trails off quickly, is
+  not enough on its own; this is about a stretch that's clearly continuing,
+  not an isolated message.
 cooldown_messages: 5
 trigger_variables: []
 prompt_template: |
-  The conversation has drifted off-topic from the ranking task. {prompt_fragment}
-  Gently steer the group back to the ranking exercise without shutting down
-  the aside entirely -- a brief acknowledgment is fine before redirecting.
+  The conversation has drifted off-topic from the group's project work for
+  a while now. {prompt_fragment}
+  Gently suggest the group get back to the task at hand without shutting
+  down the aside entirely -- a brief acknowledgment is fine before
+  redirecting.
