@@ -51,6 +51,7 @@ TASK_ID = "general_moderation"
 # just not active, in case that decision changes again later.
 ACTIVE_STRATEGY_IDS = [
     "participation_equality_text",
+    "keep_conversation_on_topic",
     "respond_when_addressed",
     "non_offensive",
     "provide_summary",

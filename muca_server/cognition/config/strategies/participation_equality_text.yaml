@@ -13,7 +13,12 @@ trigger_description: >
 trigger_threshold:
   variable: gini_index
   min: 0.3
-cooldown_messages: 5
+# Deliberately long: a team often has one person doing the actual typing
+# (querying MULCA, say) while the rest contribute by talking the message
+# through out loud or in voice -- a legitimate division of labor, not
+# unfairness, and a short cooldown nagged about it too often. Firing
+# rarely still catches a real, sustained imbalance.
+cooldown_messages: 15
 trigger_variables:
   - gini_index
   - participant_message_counts

@@ -6,7 +6,7 @@ trigger_description: >
   its own. A single off-topic remark, or banter that trails off quickly, is
   not enough on its own; this is about a stretch that's clearly continuing,
   not an isolated message.
-cooldown_messages: 5
+cooldown_messages: 10
 trigger_variables: []
 prompt_template: |
   The conversation has drifted off-topic from the group's project work for
