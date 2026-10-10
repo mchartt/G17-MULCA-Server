@@ -1,16 +1,19 @@
 id: maintain_focus
 trigger_description: >
-  The conversation has drifted away from the group's project work for a
-  sustained stretch -- several consecutive messages with nothing to do with
-  the task at hand -- not just a brief aside that will resolve itself on
-  its own. A single off-topic remark, or banter that trails off quickly, is
-  not enough on its own; this is about a stretch that's clearly continuing,
-  not an isolated message.
+  The conversation has drifted away from activities related to UX design,
+  developing a prototype, the AUI university course, or the group's
+  project -- e.g. understanding stakeholders' needs, researching the state
+  of the art, designing, prototyping, evaluating, documenting, or
+  presenting their work -- for a sustained stretch: several consecutive
+  messages with nothing to do with any of that, not just a brief aside
+  that will resolve itself on its own. A single off-topic remark, or
+  banter that trails off quickly, is not enough on its own; this is about
+  a stretch that's clearly continuing, not an isolated message.
 cooldown_messages: 10
 trigger_variables: []
 prompt_template: |
-  The conversation has drifted off-topic from the group's project work for
-  a while now. {prompt_fragment}
+  The conversation has drifted away from the group's UX/course work for a
+  while now. {prompt_fragment}
   Gently suggest the group get back to the task at hand without shutting
   down the aside entirely -- a brief acknowledgment is fine before
   redirecting.
