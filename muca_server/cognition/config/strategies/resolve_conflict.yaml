@@ -1,0 +1,19 @@
+id: resolve_conflict
+trigger_description: >
+  A substantive disagreement has emerged between two or more participants --
+  a genuine difference of opinion or approach on a specific point relevant
+  to the task, not banter, sarcasm, or a single contradicting remark. Look
+  for an actual back-and-forth where positions have diverged and aren't
+  converging on their own after a few exchanges. Ordinary healthy debate
+  that's still moving toward its own resolution is not a trigger -- only
+  step in once it's stuck or escalating, not the moment people first
+  disagree.
+cooldown_messages: 5
+trigger_variables: []
+prompt_template: |
+  A substantive disagreement between participants is ongoing. {prompt_fragment}
+  Summarize each side's perspective fairly and neutrally, in their own
+  terms, without taking a side or implying either one is more correct.
+  Then help identify common ground or a shared goal between the positions,
+  and suggest a concrete way forward -- a question that would resolve the
+  actual crux of the disagreement, or a way to combine both ideas.

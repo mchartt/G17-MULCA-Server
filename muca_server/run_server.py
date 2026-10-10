@@ -53,9 +53,24 @@ ACTIVE_STRATEGY_IDS = [
     "participation_equality_text",
     "maintain_focus",
     "respond_when_addressed",
-    "non_offensive",
+    "pleasant_conversation",
+    "resolve_conflict",
     "provide_summary",
     "remember",
+]
+# The unsolicited, background-moderation strategies -- never offered in
+# "toggle"/"transcribe"/"wake"'s own catalog (see non_ambient_strategy_
+# store below): none of those modes run continuous judgment at all, only
+# inside an explicitly-opened window, so there is no ongoing conversation
+# for an unprompted strategy to proactively watch in the first place.
+# (respond_when_addressed/provide_summary/remember stay in both catalogs:
+# all three are solicited, firing only in direct response to being
+# addressed -- exactly what a listening window exists for.)
+PROACTIVE_STRATEGY_IDS = [
+    "participation_equality_text",
+    "maintain_focus",
+    "pleasant_conversation",
+    "resolve_conflict",
 ]
 ASSISTANT_NAME = "MULCA"
 
@@ -110,7 +125,7 @@ def build_app():
     client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
     strategy_store = load_strategy_store(ACTIVE_STRATEGY_IDS)
     non_ambient_strategy_store = load_strategy_store(
-        [sid for sid in ACTIVE_STRATEGY_IDS if sid != "non_offensive"]
+        [sid for sid in ACTIVE_STRATEGY_IDS if sid not in PROACTIVE_STRATEGY_IDS]
         + ["always_reply"]
     )
     # CoalaPolicy's own store is different from the two above: it is never
@@ -124,10 +139,10 @@ def build_app():
     # subset, since CoalaPolicy is built once per conversation by
     # policy_factory below, before that conversation's own listening_mode
     # handshake override has even arrived (create_conversation runs at
-    # session start; ConnectAgentMessage arrives after). Leaving
-    # non_offensive or always_reply out of this store for some
-    # conversations would make a legitimate strategy_id the model's own
-    # (correctly filtered) catalog just gave it resolve to nothing here.
+    # session start; ConnectAgentMessage arrives after). Leaving a
+    # PROACTIVE_STRATEGY_IDS member or always_reply out of this store for
+    # some conversations would make a legitimate strategy_id the model's
+    # own (correctly filtered) catalog just gave it resolve to nothing here.
     policy_strategy_store = load_strategy_store(
         ACTIVE_STRATEGY_IDS + ["always_reply"]
     )
