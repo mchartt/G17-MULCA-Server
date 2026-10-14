@@ -204,6 +204,9 @@ class CoalaPolicy:
         # The strategy the latest turn resolved with (None: nothing fired,
         # or forced). Read-only for the conversation's wake session.
         self._last_turn_strategy: str | None = None
+        # The message count the management cycle last ran at (see
+        # _finish_turn).
+        self._last_cycle_message_count: int | None = None
 
     async def start(self, port: ConversationPort) -> None:
         self._port = port
@@ -249,6 +252,9 @@ class CoalaPolicy:
                 )
                 wm.action_points = snapshot.action_points
                 wm.total_message_count = snapshot.total_message_count
+                # Already cycled at this count, if it was due: the
+                # snapshot is saved again after every cycle.
+                self._last_cycle_message_count = snapshot.total_message_count
                 wm.history = [
                     stored.restore()
                     for stored in snapshot.history_tail
@@ -1198,7 +1204,15 @@ class CoalaPolicy:
 
         wm.clear_turn_output()
 
-        if message_count % self._management_cycle_interval == 0:
+        # Once per count: found live, turns that never reach on_utterance
+        # (noise with no transcript) don't advance the count, so the same
+        # count kept re-running the cycle on material it had already
+        # summarized -- each extra pass compressed it further.
+        if (
+            message_count % self._management_cycle_interval == 0
+            and message_count != self._last_cycle_message_count
+        ):
+            self._last_cycle_message_count = message_count
             if port.is_private:
                 # No summarization for a DM (its history_summary instead
                 # mirrors a linked group's, when it has one --

@@ -2042,3 +2042,54 @@ async def test_a_session_event_is_logged_apart_from_memory():
     assert event["detail"] == "silence"
     assert event["data"] == {"reason": "silence", "duration_s": 42}
     assert episodic._records.get(port.conversation_id, []) == []
+
+
+class CountingSummarizer(FakeSummarizer):
+    def __init__(self):
+        self.calls = 0
+
+    async def summarize(self, **kwargs):
+        self.calls += 1
+        return await super().summarize(**kwargs)
+
+
+async def test_turns_that_dont_advance_the_count_dont_rerun_the_cycle():
+    # Found live: a noise turn (no transcript, so never on_utterance) is
+    # still judged and finished, at the same message count -- the cycle ran
+    # again on what it had just summarized, compressing it each time.
+    summarizer = CountingSummarizer()
+    policy, port = make_policy(summarizer=summarizer, management_cycle_interval=2)
+    await policy.start(port)
+
+    for i in range(2):
+        await policy.on_utterance(make_utterance(content=f"message {i}"))
+        await policy.on_intervention_signal(object(), None)
+    assert summarizer.calls == 1
+
+    for _ in range(3):  # noise turns, judged, at the same count
+        await policy.on_intervention_signal(object(), None)
+    assert summarizer.calls == 1
+
+    for i in range(2):
+        await policy.on_utterance(make_utterance(content=f"more {i}"))
+        await policy.on_intervention_signal(object(), None)
+    assert summarizer.calls == 2
+
+
+async def test_a_restart_at_a_cycle_count_doesnt_rerun_that_cycle():
+    summarizer = CountingSummarizer()
+    snapshot_store = InMemorySnapshotStore()
+    policy, port = make_policy(
+        summarizer=summarizer,
+        snapshot_store=snapshot_store,
+        management_cycle_interval=2,
+    )
+    await snapshot_store.save(
+        port.conversation_id,
+        MemorySnapshot(history_summary="earlier", total_message_count=4),
+    )
+    await policy.start(port)
+
+    await policy.on_intervention_signal(object(), None)  # noise turn first
+
+    assert summarizer.calls == 0
