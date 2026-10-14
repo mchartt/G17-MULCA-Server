@@ -13,6 +13,12 @@ from uuid import UUID
 from ..audio import AudioChunk
 from ..audio.chunk import DEFAULT_SAMPLE_RATE
 from ..audio.pcm import split_float32
+from .voice_control_phrases import (
+    DISMISSAL_PATTERN,
+    WAKE_PHRASE_PATTERN,
+    matches_dismissal as _matches_dismissal,
+    matches_wake_phrase as _matches_wake_phrase,
+)
 from ..cognition.noop import NoCognition
 from ..cognition.ports import (
     CognitionPolicy,
@@ -92,35 +98,12 @@ TRANSCRIPT_WAIT_SECONDS = 3.0
 # assistant takes its turn anyway.
 PLAYBACK_START_TIMEOUT_SECONDS = 3.0
 
-# "transcribe" mode, voice only: a spoken trigger phrase that opens the
-# listening window, as an alternative to "toggle" mode's button/`/listen`
-# -- entirely hands-free, no UI or text channel involved at all (preserving
-# the voice modality this mode exists to study, not just a UX convenience). Plain
-# regex, not a model's semantic judgement -- exactly the kind of unreliable
-# call this mode exists to avoid making continuously. Deliberately not
-# "MULCA": that specific word is the one already confirmed (this session)
-# to transcribe unreliably -- "assistant" is a cleaner, more distinct
-# anchor, closer to how "Hey Siri"/"OK Google" were chosen for the same
-# reason. Bare "assistant" (no required lead-in word like "hey") --
-# confirmed live that the transcriber sometimes drops a short, quiet
-# lead-in word entirely, which a "hey assistant"-only pattern then misses
-# completely (the real turn transcribed as just "Assistant?"). assist\w*
-# catches "assistant"/"assistent"/plurals etc. without needing full
-# phonetic matching. "mulca"/"muca" included on request despite being the
-# transcription-unreliable word this phrase was built to avoid depending
-# on alone -- an extra alternative in an OR costs nothing and only adds
-# detection chances, it can't make "assistant"/"chatbot" matches worse.
-# "bot" added on request -- the transcription bias prompt already tells
-# the ASR this is a recognized way to address it ("...often addressed by
-# that name, 'assistant', or 'bot'"), but the wake phrase itself never
-# matched it. Unlike the other alternatives, this one is a real tradeoff
-# against the over-triggering investigation: "bot" alone is a much more
-# generic English fragment than "assistant"/"chatbot"/"mulca", so it adds
-# more false-positive surface than the others did.
-WAKE_PHRASE_PATTERN = re.compile(
-    r"\b(assist\w*|chatbot\w*|bot|mulca|muca)\b",
-    re.IGNORECASE,
-)
+# WAKE_PHRASE_PATTERN/_matches_wake_phrase and DISMISSAL_PATTERN/
+# _matches_dismissal live in voice_control_phrases.py (imported above),
+# not here -- openai/main_agent.py needs them too, to exempt a real wake
+# or dismissal attempt from its own low-confidence transcript filter
+# before the text ever reaches this module's matching below. See that
+# module for the reasoning behind both patterns' own permissiveness.
 
 # Unlike the button/`/listen` (a pure toggle, open until pressed again --
 # see arm_listening), a wake phrase only ever opens/extends a window: there
@@ -128,10 +111,6 @@ WAKE_PHRASE_PATTERN = re.compile(
 # every judged turn while open (speaking again extends it), same shape as
 # the timer this mode used to always have before it became a pure toggle.
 WAKE_PHRASE_SILENCE_MS = 5_000
-
-
-def _matches_wake_phrase(transcript: str) -> bool:
-    return WAKE_PHRASE_PATTERN.search(transcript) is not None
 
 
 # Lead-in words that may accompany the trigger itself ("hey mulca") but
@@ -187,31 +166,6 @@ INTERRUPTION_MIN_WORDS = 2
 INTERRUPTION_THRESHOLD_START = 3
 INTERRUPTION_THRESHOLD_STEP_MS = 60_000
 INTERRUPTION_THRESHOLD_FLOOR = 1
-
-# A spoken way out, in either language. Deliberately as flexible as
-# _matches_wake_phrase above, same reasoning: a plain substring search, no
-# length ceiling, no "did MULCA just speak" context check -- wake already
-# accepts that trade-off (any sentence naming MULCA opens a window,
-# regardless of length or what else is in it), so dismissal accepts the
-# mirror-image one for closing. Found live: a word-count ceiling meant a
-# versatile, longer way of saying goodbye ("go ahead and wrap it up,
-# thanks for the help") never matched at all, while the wake side had no
-# such limit. The known cost of dropping it: "thanks Ada, now let's move
-# on to the budget" now also ends an engaged session, same as "mulca,
-# that bot answer was great" would already falsely open one -- accepted
-# for both, not just one.
-DISMISSAL_PATTERN = re.compile(
-    r"\b(that'?s (all|it|enough)|we'?re done|you can go|sleep"
-    r"|end( the| this)? session|stop|be quiet"
-    r"|shut up|go away|thank(s| you)|grazie|basta( così)?|ho finito"
-    r"|abbiamo finito|puoi andare|smettila|fermati|(stai )?zitt[oa]|silenzio"
-    r"|dormire|fine( della)? sessione)\b",
-    re.IGNORECASE,
-)
-
-
-def _matches_dismissal(transcript: str) -> bool:
-    return DISMISSAL_PATTERN.search(transcript) is not None
 
 # Unity's receive loop reads 16 KB per frame; 3000 float32 samples, base64
 # encoded, keep a state_update well under that.

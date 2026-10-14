@@ -19,6 +19,7 @@ from ...audio import AudioChunk
 from ...audio.pcm import float32_to_pcm16, pcm16_to_float32, resample_float32
 from ..main_agent import MainAgent, MainAgentEvent
 from ..options import AgentCapabilities, MainAgentOptions
+from ..voice_control_phrases import matches_voice_control_phrase
 from ...usage_report import UsageTracker, usage_sink
 
 logger = logging.getLogger(__name__)
@@ -690,15 +691,25 @@ class MainAgentOpenAI(MainAgent):
                         transcript,
                     )
                     transcript = ""
-                elif average_logprob is not None and average_logprob < MIN_AVERAGE_LOGPROB:
+                elif (
+                    average_logprob is not None
+                    and average_logprob < MIN_AVERAGE_LOGPROB
+                    and not matches_voice_control_phrase(transcript)
+                ):
                     # -1.5 checked against a real live sample first (not
                     # just picked): across a full test session, the only
                     # confirmed-genuine utterance under this cutoff was a
                     # wake-phrase attempt ("assistente", a mis-rendered
                     # "assistant") -- every other sub-threshold transcript
-                    # was confirmed hallucinated. Accepting that one known
-                    # risk category for now; worth revisiting a
-                    # wake-phrase-specific exemption if it recurs.
+                    # was confirmed hallucinated. That recurred live with
+                    # dismissal attempts too ("stop"/"shut up" going
+                    # unheard, an engaged session never closing) -- short,
+                    # clipped control phrases are exactly what tends to
+                    # score low confidence. A wake/dismissal match is
+                    # exempted from this filter entirely: discarding a
+                    # real one leaves someone unable to start or stop an
+                    # engaged session by voice at all, a worse outcome
+                    # than occasionally honoring a hallucinated one.
                     logger.warning(
                         "%s discarded a low-confidence transcript, likely "
                         "not real speech: %r",

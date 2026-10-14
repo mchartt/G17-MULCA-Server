@@ -551,6 +551,51 @@ async def test_a_low_confidence_transcript_is_discarded():
     assert received == [("in-1", "")]
 
 
+async def test_a_low_confidence_dismissal_attempt_is_not_discarded():
+    # Found live: short, clipped "stop"/"shut up" commands are exactly the
+    # kind of utterance that scores low confidence -- discarding them left
+    # an engaged session with no way to close by voice at all.
+    agent = make_agent()
+    received = []
+
+    async def record(item_id, transcript):
+        received.append((item_id, transcript))
+
+    agent.on_transcript = record
+
+    await agent._interpret(
+        _Event(
+            "conversation.item.input_audio_transcription.completed",
+            item_id="in-1",
+            transcript="stop",
+            logprobs=[_Obj(logprob=-3.0), _Obj(logprob=-2.5)],
+        )
+    )
+
+    assert received == [("in-1", "stop")]
+
+
+async def test_a_low_confidence_wake_attempt_is_not_discarded():
+    agent = make_agent()
+    received = []
+
+    async def record(item_id, transcript):
+        received.append((item_id, transcript))
+
+    agent.on_transcript = record
+
+    await agent._interpret(
+        _Event(
+            "conversation.item.input_audio_transcription.completed",
+            item_id="in-1",
+            transcript="assistente",
+            logprobs=[_Obj(logprob=-3.0), _Obj(logprob=-2.5)],
+        )
+    )
+
+    assert received == [("in-1", "assistente")]
+
+
 async def test_a_confident_transcript_is_unaffected():
     agent = make_agent()
     received = []
