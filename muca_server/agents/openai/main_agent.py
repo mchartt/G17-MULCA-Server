@@ -272,7 +272,7 @@ class MainAgentOpenAI(MainAgent):
             f"sometimes switching between the two. One "
             f"participant is an AI assistant named "
             f"{self.name}, often addressed by that name, "
-            f'"assistant", or "bot".'
+            f'"assistant", or "bot", and woken with "{self.name} start".'
         )
 
     def _session_config(self) -> dict:

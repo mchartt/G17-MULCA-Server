@@ -16,6 +16,7 @@ from ..audio.pcm import split_float32
 from .voice_control_phrases import (
     DISMISSAL_PATTERN,
     WAKE_PHRASE_PATTERN,
+    addresses_assistant as _addresses_assistant,
     matches_dismissal as _matches_dismissal,
     matches_wake_phrase as _matches_wake_phrase,
 )
@@ -118,7 +119,7 @@ WAKE_PHRASE_SILENCE_MS = 5_000
 # when deciding whether real content rode along with it, so a bare
 # greeting-plus-trigger ("hey mulca") isn't mistaken for a real question.
 _WAKE_PHRASE_FILLER = re.compile(
-    r"\b(hey|hi|hej|hei|ok|okay|hello)\b",
+    r"\b(hey|hi|hej|hei|ok|okay|hello|please)\b",
     re.IGNORECASE,
 )
 
@@ -150,11 +151,16 @@ ENGAGED_SILENCE_MS = 20_000
 # threshold (below) is at its floor. Naming MULCA mid-session doesn't
 # extend it; once it ends, the wake phrase starts a fresh one.
 ENGAGED_MAX_MS = 120_000
-# The group moved on: this many transcribed turns in a row without naming
-# MULCA (the follow-up to a bare wake phrase counts as naming it). Found
-# live: an engaged session kept judging -- and answering -- a discussion
-# that had long stopped being addressed to it.
+# The group moved on: this many transcribed turns in a row not addressed
+# to MULCA (see _count_addressed_turn). Found live: an engaged session kept
+# judging -- and answering -- a discussion that had long stopped being
+# addressed to it.
 ENGAGED_MAX_UNADDRESSED_TURNS = 4
+# Strategies that answer something asked of MULCA, as opposed to ones it
+# fires on its own initiative (participation, focus, conflict, tone).
+REQUESTED_STRATEGIES = frozenset(
+    {"respond_when_addressed", "always_reply", "provide_summary", "remember"}
+)
 
 # Being talked over right away means MUCA isn't wanted; being heard out
 # means it is. A talk-over after T seconds of MUCA's audible reply moves
@@ -1307,6 +1313,8 @@ class Conversation:
             "transcribe",
             "wake",
         ) and _matches_wake_phrase(transcript)
+        engaged_turn = False
+        named = False
 
         # "wake": a dismissal wins over the wake phrase -- it ends an
         # engaged session unanswered, and never starts one.
@@ -1316,14 +1324,9 @@ class Conversation:
             is_followup = False
             in_open_window = False
         elif self._listening_mode == "wake" and in_open_window:
-            if is_wake_phrase or is_followup:
-                self._unaddressed_turns = 0
-            else:
-                self._unaddressed_turns += 1
-                if self._unaddressed_turns >= ENGAGED_MAX_UNADDRESSED_TURNS:
-                    await self._disengage("not addressed")
-                    in_open_window = False
-            # Already engaged, naming MULCA is just an addressed turn: the
+            engaged_turn = True
+            named = is_wake_phrase or is_followup or _addresses_assistant(transcript)
+            # Already engaged, even "mulca start" is just an addressed turn: the
             # judge decides (respond_when_addressed), nothing is forced
             # and nothing restarts. Found live: every passing mention
             # forced a reply and reset the time limit and the
@@ -1400,6 +1403,27 @@ class Conversation:
             # unaffected: judge_wake_question is always False there.
             in_window=in_open_window or is_followup or judge_wake_question,
         )
+
+        if engaged_turn and self._engaged():
+            await self._count_addressed_turn(named)
+
+    async def _count_addressed_turn(self, named: bool) -> None:
+        """
+        "wake", after an engaged turn is decided: was it talking to MULCA?
+        Its name, or the intervention agent's own judgement -- it chose to
+        answer something asked of MULCA (REQUESTED_STRATEGIES), which also
+        catches a follow-up without the name. Interventions on MULCA's own
+        initiative don't count, so its eagerness can't keep it awake.
+        """
+
+        strategy_id = self._policy.last_turn_strategy()
+        if named or strategy_id in REQUESTED_STRATEGIES:
+            self._unaddressed_turns = 0
+            return
+
+        self._unaddressed_turns += 1
+        if self._unaddressed_turns >= ENGAGED_MAX_UNADDRESSED_TURNS:
+            await self._disengage("not addressed")
 
     async def _judge(
         self,

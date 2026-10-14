@@ -48,6 +48,9 @@ class NoCognition:
     ) -> None:
         pass
 
+    def last_turn_strategy(self) -> str | None:
+        return None
+
     async def on_session_event(
         self,
         event: str,

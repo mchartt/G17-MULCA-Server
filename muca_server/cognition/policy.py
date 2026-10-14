@@ -201,6 +201,9 @@ class CoalaPolicy:
         # a brand new main-agent session with no memory of a date
         # announced in a previous one.
         self._last_date_announced: date | None = None
+        # The strategy the latest turn resolved with (None: nothing fired,
+        # or forced). Read-only for the conversation's wake session.
+        self._last_turn_strategy: str | None = None
 
     async def start(self, port: ConversationPort) -> None:
         self._port = port
@@ -308,6 +311,9 @@ class CoalaPolicy:
             ),
         )
 
+    def last_turn_strategy(self) -> str | None:
+        return self._last_turn_strategy
+
     async def on_utterance(self, utterance: Utterance) -> bool:
         """
         Somebody said something, in text or (once transcribed) in speech.
@@ -319,6 +325,7 @@ class CoalaPolicy:
         wm = self._wm
         port = self._port
         assert wm is not None and port is not None
+        self._last_turn_strategy = None
 
         wm.append_history(utterance)
         wm.increment_message_count()
@@ -1138,6 +1145,7 @@ class CoalaPolicy:
         wm = self._wm
         port = self._port
         assert wm is not None and port is not None
+        self._last_turn_strategy = strategy_id
 
         # Not wm.history[-1]: by the time this runs, a second utterance
         # could already have been appended to history if something upstream

@@ -16,6 +16,7 @@ import muca_server.agents.conversation as conversation_module
 from muca_server.agents import AuxiliaryAgent, MainAgent, MainAgentOptions
 from muca_server.agents.conversation import (
     Conversation,
+    _addresses_assistant,
     _matches_dismissal,
     _matches_wake_phrase,
     _wake_phrase_has_question,
@@ -361,71 +362,54 @@ async def test_ambient_mode_is_unaffected():
     assert factory.auxiliary.audio_chunks_received == 1
 
 
-def test_wake_phrase_matching_is_deterministic_not_fuzzy_guessing():
-    # Anchored on bare "assist\w*" -- not "MULCA" (confirmed this session
-    # to transcribe unreliably), not a full phonetic/LLM judgement
-    # (confirmed this session to be inconsistent), and deliberately no
-    # required lead-in word like "hey": confirmed live that the
-    # transcriber sometimes drops a short, quiet lead-in word entirely,
-    # which a "hey assistant"-only pattern then misses completely (a real
-    # turn transcribed as just "Assistant?").
-    assert _matches_wake_phrase("assistant")
-    assert _matches_wake_phrase("Assistant?")
-    assert _matches_wake_phrase("hey assistant")
-    assert _matches_wake_phrase("assistent")  # transcription near-miss
-    assert _matches_wake_phrase("assistants")  # plural
-    # But the generic aliases only count as the first word: found live,
-    # students building their own assistants/chatbots say them in passing
-    # all the time, and every mention woke MULCA.
-    assert not _matches_wake_phrase("what do you think about assistants in general")
-    assert not _matches_wake_phrase("our assistant should show the deadline")
-    assert not _matches_wake_phrase("the chatbot we built is slow")
-    assert not _matches_wake_phrase("that bot answer was great")
-    assert not _matches_wake_phrase("assistance with the budget")
-    assert _matches_wake_phrase("Assistant, what's the deadline")
-    # Other aliases, on request -- including "mulca"/"muca" despite being
-    # the transcription-unreliable word this phrase was built to avoid
-    # depending on alone: an extra alternative only adds detection chances.
-    # MULCA's own name counts anywhere in the sentence.
-    assert _matches_wake_phrase("hey chatbot")
-    assert _matches_wake_phrase("mulca")
-    assert _matches_wake_phrase("muca")
-    assert _matches_wake_phrase("what do you think, mulca?")
+def test_waking_takes_a_start_command_not_a_mention():
+    # Found live: one word ("mulca", "assistant", "bot") woke MULCA all the
+    # time -- several groups build their own MULCAs/assistants/chatbots.
+    for transcript in (
+        "mulca start",
+        "Mulca, start.",
+        "MULCA please start",
+        "muca start",  # how the transcriber often renders it
+        "malca start",
+        "assistant start",
+        "assistente start",
+        "chatbot start",
+        "hey mulca start, what is the deadline",
+        "ok so, mulca start",
+    ):
+        assert _matches_wake_phrase(transcript), transcript
 
-    # "bot" added on request -- the transcription bias prompt already
-    # tells the ASR this is a recognized way to address it, but the wake
-    # phrase itself never matched it. Bare "bot" only, not "bot\w*": unlike
-    # the other alternatives, a wildcard here would also match "bottle"/
-    # "bother"/"bottom"/"botox" -- ordinary words with no relation to
-    # addressing it at all, which is a materially worse false-positive
-    # tradeoff than "assistants"/"chatbots" being plural forms of the same
-    # concept.
-    assert _matches_wake_phrase("hey bot")
-    assert _matches_wake_phrase("Bot?")
-    assert not _matches_wake_phrase("I forgot my bottle")
-    assert not _matches_wake_phrase("don't bother")
-    assert not _matches_wake_phrase("from the bottom")
+    for transcript in (
+        "mulca",
+        "hey mulca",
+        "Assistant?",
+        "our assistant should show the deadline",
+        "the assistant starts by asking a question",
+        "what do you think, mulca?",
+        "bot start",
+        "let's start the mulca",
+        "start",
+        "",
+    ):
+        assert not _matches_wake_phrase(transcript), transcript
 
-    assert not _matches_wake_phrase("hello there")
-    assert not _matches_wake_phrase("")
+
+def test_once_awake_the_name_alone_addresses_muca():
+    assert _addresses_assistant("what do you think, mulca?")
+    assert _addresses_assistant("muca, and the budget?")
+    assert _addresses_assistant("assistant, what about friday")
+    assert not _addresses_assistant("our assistant should show the deadline")
+    assert not _addresses_assistant("I think it is friday")
 
 
 def test_wake_phrase_has_question_detects_a_real_question_in_the_same_breath():
-    # "hey mulca, could you define the UNG diagram" -- a real question rode
-    # along with the trigger word in the same breath, not just the trigger
-    # word alone (used to decide between the bare "Listening."
-    # acknowledgement and leading a real answer with it, same reply).
-    assert _wake_phrase_has_question(
-        "hey mulca, could you define the UNG diagram"
-    )
-    assert _wake_phrase_has_question("assistant what time is the next class")
+    assert _wake_phrase_has_question("mulca start, could you define the UNG diagram")
+    assert _wake_phrase_has_question("assistant start what time is the next class")
 
-    # Bare trigger word alone (plus stray punctuation/filler) -- no real
-    # question rode along with it.
-    assert not _wake_phrase_has_question("assistant")
-    assert not _wake_phrase_has_question("Assistant?")
-    assert not _wake_phrase_has_question("hey assistant")
-    assert not _wake_phrase_has_question("mulca")
+    # The command alone (plus stray punctuation/filler) -- no question.
+    assert not _wake_phrase_has_question("mulca start")
+    assert not _wake_phrase_has_question("Mulca, start.")
+    assert not _wake_phrase_has_question("hey mulca please start")
     assert not _wake_phrase_has_question("")
 
 
@@ -533,7 +517,7 @@ async def test_the_wake_phrase_engages_without_the_judge_and_announces_once():
         auxiliary_cls=DecliningInterventionAgent,
     )
 
-    await voice_turn(conversation, "hey muca, what is the deadline")
+    await voice_turn(conversation, "muca start, what is the deadline")
     assert factory.auxiliary.asked == 0  # forced, never judged
     assert len(factory.main.instructions) == 1
 
@@ -552,7 +536,7 @@ async def test_engaged_turns_are_judged_like_ambient_and_heard():
         strategies=STRATEGIES_WITH_ALWAYS_REPLY,
         auxiliary_cls=DecliningInterventionAgent,
     )
-    await voice_turn(conversation, "hey muca, what is the deadline")
+    await voice_turn(conversation, "muca start, what is the deadline")
 
     await voice_turn(conversation, "I think it is friday", speaker=2)
     await conversation.route_user_audio(audio(speaker=2))
@@ -569,7 +553,7 @@ async def test_a_bare_wake_forces_a_reply_to_the_same_speakers_next_turn_only():
         auxiliary_cls=DecliningInterventionAgent,
     )
 
-    await voice_turn(conversation, "hey muca")
+    await voice_turn(conversation, "muca start")
     await voice_turn(conversation, "something unrelated", speaker=2)
     await voice_turn(conversation, "what is the deadline")
     await voice_turn(conversation, "and another thing")
@@ -649,7 +633,7 @@ async def test_naming_muca_mid_session_restarts_nothing():
     # Found live: every passing mention reset the time limit and the
     # interruption score, so an engaged session never ended.
     conversation, _ = await make_conversation(listening_mode="wake")
-    await voice_turn(conversation, "hey muca")
+    await voice_turn(conversation, "muca start")
     conversation._engaged_since_ms = 1
     conversation._interruption_score = 1
     conversation._warned_about_interruptions = True
@@ -668,7 +652,7 @@ async def test_turns_not_addressed_to_muca_end_the_session():
         auxiliary_cls=DecliningInterventionAgent,
     )
     limit = conversation_module.ENGAGED_MAX_UNADDRESSED_TURNS
-    await voice_turn(conversation, "hey muca, what is the deadline")
+    await voice_turn(conversation, "muca start, what is the deadline")
 
     for _ in range(limit - 1):
         await voice_turn(conversation, "I think it is friday", speaker=2)
@@ -681,8 +665,58 @@ async def test_turns_not_addressed_to_muca_end_the_session():
     await voice_turn(conversation, "next point", speaker=2)
 
     assert conversation._listening_window_open is False
-    assert factory.auxiliary.asked == asked  # the last one isn't judged
+    assert factory.auxiliary.asked == asked + 1  # judged, then it sleeps
     assert listening_states(conversation) == [True, False]
+
+
+STRATEGIES_WITH_OWN_INITIATIVE = StrategyStore(
+    {
+        **{s.id: s for s in STRATEGIES_WITH_ALWAYS_REPLY.all()},
+        "participation_equality_voice": Strategy(
+            id="participation_equality_voice",
+            trigger_description="unequal participation",
+            prompt_template="Invite the quiet one. {prompt_fragment}",
+            modalities=frozenset({"audio"}),
+        ),
+    }
+)
+
+
+async def engaged_with_judge(signal):
+    conversation, factory = await make_conversation(
+        listening_mode="wake",
+        strategies=STRATEGIES_WITH_OWN_INITIATIVE,
+        auxiliary_cls=DecliningInterventionAgent,
+    )
+    await voice_turn(conversation, "muca start, what is the deadline")
+    factory.auxiliary.signal = signal
+    return conversation, factory
+
+
+async def test_a_follow_up_the_judge_sees_as_addressed_keeps_muca_awake():
+    # No name, but the intervention agent's own choice says it was asked.
+    conversation, _ = await engaged_with_judge(
+        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment="")
+    )
+    limit = conversation_module.ENGAGED_MAX_UNADDRESSED_TURNS
+
+    for _ in range(limit + 2):
+        await voice_turn(conversation, "and what about friday?", speaker=2)
+
+    assert conversation._listening_window_open is True
+    assert conversation._unaddressed_turns == 0
+
+
+async def test_muca_jumping_in_on_its_own_doesnt_keep_it_awake():
+    conversation, _ = await engaged_with_judge(
+        InterventionSignal(strategy_id="participation_equality_voice", prompt_fragment="")
+    )
+    limit = conversation_module.ENGAGED_MAX_UNADDRESSED_TURNS
+
+    for _ in range(limit):
+        await voice_turn(conversation, "I think it is friday", speaker=2)
+
+    assert conversation._listening_window_open is False
 
 
 async def test_a_direct_wake_phrase_call_restarts_the_session():
@@ -756,7 +790,7 @@ async def test_a_dismissal_ends_the_session_unanswered_and_never_starts_one():
     assert conversation._listening_window_open is False
     assert not factory.main.instructions
 
-    await voice_turn(conversation, "hey muca, what is the deadline")
+    await voice_turn(conversation, "muca start, what is the deadline")
     await voice_turn(conversation, "thanks muca")
 
     assert conversation._listening_window_open is False
@@ -887,15 +921,15 @@ async def test_wake_sessions_log_their_trigger_and_why_they_ended():
     conversation, _ = await make_conversation(listening_mode="wake")
     log = EventLog(conversation._policy)
 
-    await voice_turn(conversation, "hey muca, what is the deadline")
+    await voice_turn(conversation, "muca start, what is the deadline")
     await voice_turn(conversation, "ok thanks muca")
-    await voice_turn(conversation, "hey muca")
+    await voice_turn(conversation, "muca start")
     await conversation.close()
 
     assert [(e, d) for e, d, _ in log.events] == [
-        ("wake_started", "hey muca, what is the deadline"),
+        ("wake_started", "muca start, what is the deadline"),
         ("wake_ended", "dismissed"),
-        ("wake_started", "hey muca"),
+        ("wake_started", "muca start"),
         ("wake_ended", "session closed"),
     ]
 
@@ -919,6 +953,6 @@ async def test_a_failing_event_log_never_breaks_the_conversation():
 
     conversation._policy.on_session_event = broken
 
-    await voice_turn(conversation, "hey muca")
+    await voice_turn(conversation, "muca start")
 
     assert conversation._listening_window_open is True

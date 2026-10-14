@@ -251,6 +251,13 @@ class CognitionPolicy(Protocol):
         """
         ...
 
+    def last_turn_strategy(self) -> str | None:
+        """
+        The strategy the latest turn resolved with: what the intervention
+        agent chose, or None when nothing fired (or the reply was forced).
+        """
+        ...
+
     async def on_session_event(
         self,
         event: str,

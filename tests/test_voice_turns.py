@@ -92,6 +92,9 @@ class RecordingPolicy:
     async def on_session_event(self, event, detail="", *, speaker="", data=None):
         pass
 
+    def last_turn_strategy(self):
+        return None
+
     async def on_untranscribed_turn(
         self,
         speaker_id: int,

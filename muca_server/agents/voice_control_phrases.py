@@ -11,34 +11,41 @@ from __future__ import annotations
 
 import re
 
-WAKE_PHRASE_PATTERN = re.compile(
-    r"\b(assist[ae]nt\w*|chatbot\w*|bot|mulca|muca)\b",
-    re.IGNORECASE,
-)
+# How the transcriber renders MULCA's name: found live, "mulca" itself is
+# transcribed unreliably.
+_NAME = r"(mulca|muca|malca|molca)"
+_ALIAS = r"(assist[ae]nt[ei]?|chatbot)"
 
-# MULCA's own name counts anywhere in a sentence. The generic aliases only
-# count as the first word (after an optional "hey"): found live, students
-# building their own assistants/chatbots say them in passing all the time
-# ("our assistant should show the deadline"), and every one woke MULCA.
-# Still no *required* lead-in -- the transcriber drops a quiet "hey", and
-# a bare "Assistant?" must keep working.
-_NAME_PATTERN = re.compile(r"\b(mulca|muca)\b", re.IGNORECASE)
-_LEADING_ALIAS_PATTERN = re.compile(
-    r"^\W*((hey|hi|hej|hei|ehi|ok|okay|hello)\W+)?"
-    r"(assist[ae]nt\w*|chatbot\w*|bot)\b",
+# Waking takes a command, not a mention: "<name or alias> start", e.g.
+# "mulca start", "assistant, start", "chatbot please start". Found live: a
+# single word woke MULCA all the time -- several groups build their own
+# MULCAs, assistants and chatbots and say those words in passing. "start"
+# exactly, so "the assistant starts by..." doesn't count.
+WAKE_PHRASE_PATTERN = re.compile(
+    rf"\b({_NAME}|{_ALIAS})\b[\s,.!?:;-]*(please\s+)?start\b",
     re.IGNORECASE,
 )
 
 
 def matches_wake_phrase(transcript: str) -> bool:
-    return (
-        _NAME_PATTERN.search(transcript) is not None
-        or _LEADING_ALIAS_PATTERN.search(transcript) is not None
-    )
+    return WAKE_PHRASE_PATTERN.search(transcript) is not None
+
+
+# Talking *to* MULCA once it is awake: its name anywhere, or an alias as
+# the first word. Keeps an engaged session going (see conversation.py's
+# ENGAGED_MAX_UNADDRESSED_TURNS) without having to say "start" again.
+_ADDRESS_PATTERN = re.compile(
+    rf"\b{_NAME}\b|^\W*((hey|hi|ok|okay)\W+)?{_ALIAS}\b",
+    re.IGNORECASE,
+)
+
+
+def addresses_assistant(transcript: str) -> bool:
+    return _ADDRESS_PATTERN.search(transcript) is not None
 
 
 # A spoken way out, in either language. Deliberately broad -- broader than
-# waking, on purpose: a false stop costs one "hey mulca", a false wake
+# waking, on purpose: a false stop costs one "mulca start", a false wake
 # costs a group being talked over. A plain substring search, no length
 # ceiling, no "did MULCA just speak" context check. Found live: a word-count ceiling meant a
 # versatile, longer way of saying goodbye ("go ahead and wrap it up,
