@@ -15,6 +15,8 @@ class InMemoryEpisodicStore:
         # a management_cycle row), so the two lists always line up by index.
         self._embeddings: dict[str, list[list[float] | None]] = {}
         self._embedder = embedder
+        # Kept apart from _records, like SQLite's own session_event table.
+        self.session_events: list[dict] = []
 
     async def log(self, record: EpisodicRecord) -> None:
         self._records.setdefault(
@@ -26,6 +28,27 @@ class InMemoryEpisodicStore:
         if self._embedder is not None and record.content:
             embedding = await self._embedder.embed(record.content)
         self._embeddings.setdefault(record.conversation_id, []).append(embedding)
+
+    async def log_session_event(
+        self,
+        conversation_id: str,
+        event: str,
+        *,
+        timestamp: float,
+        speaker: str = "",
+        detail: str = "",
+        data: dict | None = None,
+    ) -> None:
+        self.session_events.append(
+            dict(
+                conversation_id=conversation_id,
+                event=event,
+                timestamp=timestamp,
+                speaker=speaker,
+                detail=detail,
+                data=data or {},
+            )
+        )
 
     async def recall_recent(
         self,

@@ -258,7 +258,11 @@ def build_app():
         listening_mode=listening_mode,
     )
 
-    return create_app(components_factory=components_factory)
+    return create_app(
+        components_factory=components_factory,
+        db_dir=db_dir,
+        admin_token=os.environ.get("MUCA_ADMIN_TOKEN"),
+    )
 
 
 def main() -> None:

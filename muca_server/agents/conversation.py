@@ -145,10 +145,16 @@ def _wake_phrase_has_question(transcript: str) -> bool:
 # the client shows the change from the ListeningStateMessage.
 #
 # A quiet room: nobody, MUCA included, spoke for this long.
-ENGAGED_SILENCE_MS = 30_000
+ENGAGED_SILENCE_MS = 20_000
 # Bounds what one engagement can cost -- by then the interruption
-# threshold (below) is at its floor; saying the wake phrase again restarts it.
-ENGAGED_MAX_MS = 180_000
+# threshold (below) is at its floor. Naming MULCA mid-session doesn't
+# extend it; once it ends, the wake phrase starts a fresh one.
+ENGAGED_MAX_MS = 120_000
+# The group moved on: this many transcribed turns in a row without naming
+# MULCA (the follow-up to a bare wake phrase counts as naming it). Found
+# live: an engaged session kept judging -- and answering -- a discussion
+# that had long stopped being addressed to it.
+ENGAGED_MAX_UNADDRESSED_TURNS = 4
 
 # Being talked over right away means MUCA isn't wanted; being heard out
 # means it is. A talk-over after T seconds of MUCA's audible reply moves
@@ -163,7 +169,7 @@ INTERRUPTION_MIN_WORDS = 2
 # The score that ends the session drops the longer it runs: the start
 # value, minus one per step, never below the floor. Half of it (rounded
 # up) warns the intervention agent first, once.
-INTERRUPTION_THRESHOLD_START = 3
+INTERRUPTION_THRESHOLD_START = 2
 INTERRUPTION_THRESHOLD_STEP_MS = 60_000
 INTERRUPTION_THRESHOLD_FLOOR = 1
 
@@ -235,6 +241,7 @@ class Conversation:
         self._last_speech_ms = 0
         self._interruption_score = 0
         self._warned_about_interruptions = False
+        self._unaddressed_turns = 0
         # How far into MUCA's audible reply it was talked over, until the
         # interrupting turn closes and shows whether it counts.
         self._pending_interruption_ms: int | None = None
@@ -275,6 +282,9 @@ class Conversation:
         # from the text roster above -- who's in one is not reliably who's
         # in the other. See route_participants/voice_participants().
         self._voice_participants: dict[int, str] = {}
+        # Whether this session has had the voice roster yet: the first one
+        # may describe a call already under way, not one starting.
+        self._voice_roster_seen = False
 
         # Deltas of the reply being streamed, until it completes.
         self._assistant_reply: list[str] = []
@@ -461,6 +471,7 @@ class Conversation:
         # ended this session; saving again now, possibly after the client's
         # next session has loaded that memory, could only overwrite it.
         if not self._policy_closed:
+            await self._log_session_cut_off()
             self._policy_closed = True
             with suppress(Exception):
                 await self._policy.close()
@@ -619,9 +630,72 @@ class Conversation:
             for participant in message.participants
         }
         if message.modality == "audio":
+            previous = self._voice_participants
             self._voice_participants = roster
+            await self._log_voice_roster_change(previous, roster)
         else:
             self._participants = roster
+
+    async def _log_voice_roster_change(
+        self,
+        previous: dict[int, str],
+        roster: dict[int, str],
+    ) -> None:
+        names = ", ".join(sorted(roster.values()))
+        if not self._voice_roster_seen:
+            self._voice_roster_seen = True
+            if roster:
+                await self._session_event(
+                    "voice_call_ongoing",
+                    f"already in the call at connect: {names}",
+                )
+            return
+
+        if not previous and roster:
+            await self._session_event("voice_call_started", names)
+            return
+        if previous and not roster:
+            await self._session_event(
+                "voice_call_ended",
+                ", ".join(sorted(previous.values())),
+            )
+            return
+
+        for user_id in roster.keys() - previous.keys():
+            await self._session_event("voice_joined", speaker=roster[user_id])
+        for user_id in previous.keys() - roster.keys():
+            await self._session_event("voice_left", speaker=previous[user_id])
+
+    async def _session_event(
+        self,
+        event: str,
+        detail: str = "",
+        *,
+        speaker: str = "",
+        **data: Any,
+    ) -> None:
+        logger.info(
+            "%s session event %s%s%s",
+            self._conversation_id,
+            event,
+            f" ({speaker})" if speaker else "",
+            f": {detail}" if detail else "",
+        )
+        # Analysis only: failing to log must never disturb the conversation.
+        try:
+            await self._policy.on_session_event(
+                event,
+                detail,
+                speaker=speaker,
+                data=data,
+            )
+        except Exception:
+            logger.warning(
+                "%s could not log session event %s",
+                self._conversation_id,
+                event,
+                exc_info=True,
+            )
 
     async def trigger_response(
         self,
@@ -733,6 +807,10 @@ class Conversation:
             self._conversation_id,
             "opened" if self._listening_window_open else "closed",
         )
+        await self._session_event(
+            "listen_opened" if self._listening_window_open else "listen_closed",
+            "button",
+        )
         await self._send(ListeningStateMessage(open=self._listening_window_open))
 
     async def _handle_wake_phrase(
@@ -740,6 +818,7 @@ class Conversation:
         speaker: int,
         *,
         has_question: bool = True,
+        trigger: str = "",
     ) -> None:
         """
         "transcribe" mode only, voice only: a wake phrase (WAKE_PHRASE_
@@ -753,7 +832,7 @@ class Conversation:
         """
 
         if self._listening_mode == "wake":
-            await self._engage(speaker, has_question=has_question)
+            await self._engage(speaker, has_question=has_question, trigger=trigger)
             return
 
         self._listening_window_open = True
@@ -766,6 +845,11 @@ class Conversation:
             "%s listening window opened (wake phrase, %s)",
             self._conversation_id,
             self._username(speaker),
+        )
+        await self._session_event(
+            "listen_opened",
+            trigger,
+            speaker=self._username(speaker),
         )
         await self._send(ListeningStateMessage(open=True))
 
@@ -786,6 +870,7 @@ class Conversation:
             self._conversation_id,
             WAKE_PHRASE_SILENCE_MS,
         )
+        await self._session_event("listen_closed", "silence")
         await self._send(ListeningStateMessage(open=False))
 
     def _engaged(self) -> bool:
@@ -794,7 +879,13 @@ class Conversation:
     def _wake_dormant(self) -> bool:
         return self._listening_mode == "wake" and not self._listening_window_open
 
-    async def _engage(self, speaker: int, *, has_question: bool) -> None:
+    async def _engage(
+        self,
+        speaker: int,
+        *,
+        has_question: bool,
+        trigger: str = "",
+    ) -> None:
         """
         "wake" mode: start the session, or restart it if already engaged --
         saying the name again is the strongest sign MUCA is still wanted.
@@ -807,6 +898,7 @@ class Conversation:
         self._last_speech_ms = now
         self._interruption_score = 0
         self._warned_about_interruptions = False
+        self._unaddressed_turns = 0
         self._pending_interruption_ms = None
         # A bare "hey MUCA": the question comes in their next turn.
         self._followup_speaker = None if has_question else speaker
@@ -815,6 +907,11 @@ class Conversation:
             self._conversation_id,
             "restarted" if was_engaged else "started",
             self._username(speaker),
+        )
+        await self._session_event(
+            "wake_restarted" if was_engaged else "wake_started",
+            trigger,
+            speaker=self._username(speaker),
         )
         if not was_engaged:
             await self._send(ListeningStateMessage(open=True))
@@ -826,12 +923,20 @@ class Conversation:
         self._listening_window_open = False
         self._followup_speaker = None
         self._pending_interruption_ms = None
+        duration_s = (_now_ms() - self._engaged_since_ms) // 1000
         logger.info(
             "%s engaged session ended (%s) after %ds, interruption score %d",
             self._conversation_id,
             reason,
-            (_now_ms() - self._engaged_since_ms) // 1000,
+            duration_s,
             self._interruption_score,
+        )
+        await self._session_event(
+            "wake_ended",
+            reason,
+            reason=reason,
+            duration_s=duration_s,
+            interruption_score=self._interruption_score,
         )
         self._interruption_score = 0
         self._warned_about_interruptions = False
@@ -907,6 +1012,14 @@ class Conversation:
             heard_ms,
             self._interruption_score,
             threshold,
+        )
+        await self._session_event(
+            "wake_talked_over",
+            f"after {heard_ms}ms, score {self._interruption_score}/{threshold}",
+            speaker=self._username(speaker),
+            heard_ms=heard_ms,
+            score=self._interruption_score,
+            threshold=threshold,
         )
         if self._interruption_score >= threshold:
             await self._disengage("interruptions")
@@ -1202,6 +1315,20 @@ class Conversation:
             is_wake_phrase = False
             is_followup = False
             in_open_window = False
+        elif self._listening_mode == "wake" and in_open_window:
+            if is_wake_phrase or is_followup:
+                self._unaddressed_turns = 0
+            else:
+                self._unaddressed_turns += 1
+                if self._unaddressed_turns >= ENGAGED_MAX_UNADDRESSED_TURNS:
+                    await self._disengage("not addressed")
+                    in_open_window = False
+            # Already engaged, naming MULCA is just an addressed turn: the
+            # judge decides (respond_when_addressed), nothing is forced
+            # and nothing restarts. Found live: every passing mention
+            # forced a reply and reset the time limit and the
+            # interruption score, so the session never ended.
+            is_wake_phrase = False
 
         wake_phrase_has_question = is_wake_phrase and _wake_phrase_has_question(
             transcript
@@ -1215,6 +1342,7 @@ class Conversation:
             await self._handle_wake_phrase(
                 speaker,
                 has_question=wake_phrase_has_question,
+                trigger=transcript,
             )
 
         # Found live: unlike a text message (_take_text_turn, above), a
@@ -2187,11 +2315,27 @@ class Conversation:
 
         # Saved before the socket closes, not after: the client reopens as
         # soon as it sees the close, and its new session loads this memory.
+        await self._log_session_cut_off()
         self._policy_closed = True
         with suppress(Exception):
             await self._policy.close()
 
         await self._send(EndSession())
+
+    async def _log_session_cut_off(self) -> None:
+        """
+        Logged while the policy can still write them: a wake session or a
+        call cut off by the connection, not by anyone in it. The next
+        connection starts with voice_call_ongoing.
+        """
+
+        if self._engaged():
+            await self._disengage("session closed")
+        if self._voice_participants:
+            await self._session_event(
+                "voice_session_closed",
+                ", ".join(sorted(self._voice_participants.values())),
+            )
 
     def _spawn(
         self,

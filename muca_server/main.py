@@ -1,10 +1,18 @@
-from fastapi import FastAPI, WebSocket
+import hmac
+from pathlib import Path
 
+from fastapi import FastAPI, Header, HTTPException, Response, WebSocket
+from starlette.concurrency import run_in_threadpool
+
+from .cognition.memory.sqlite import db_path_for, export_episodic_csv
 from .sessions import SessionComponentsFactory, SessionRuntimeFactory
 
 
 def create_app(
     components_factory: SessionComponentsFactory | None = None,
+    *,
+    db_dir: str | Path | None = None,
+    admin_token: str | None = None,
 ) -> FastAPI:
     """
     Build the server.
@@ -22,6 +30,33 @@ def create_app(
     @app.get("/")
     async def root():
         return {"status": "server running"}
+
+    @app.get("/export")
+    async def export(
+        conversation_id: str,
+        since: float | None = None,
+        x_admin_token: str = Header(default=""),
+    ) -> Response:
+        """
+        One conversation's episodic log as CSV (/mulca export). Gated on
+        MUCA_ADMIN_TOKEN like /mulca model; off entirely without one.
+        """
+
+        if not admin_token or not hmac.compare_digest(
+            x_admin_token.encode(),
+            admin_token.encode(),
+        ):
+            raise HTTPException(status_code=403, detail="bad admin token")
+        if db_dir is None:
+            raise HTTPException(status_code=404, detail="no database directory")
+
+        # db_path_for reduces the id to a safe file name: no path tricks.
+        path = db_path_for(conversation_id, base_dir=db_dir)
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="no log for that conversation")
+
+        body = await run_in_threadpool(export_episodic_csv, path, since=since)
+        return Response(content=body, media_type="text/csv; charset=utf-8")
 
     @app.websocket("/")
     async def websocket_endpoint(ws: WebSocket) -> None:

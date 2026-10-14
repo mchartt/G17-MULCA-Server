@@ -251,6 +251,21 @@ class CognitionPolicy(Protocol):
         """
         ...
 
+    async def on_session_event(
+        self,
+        event: str,
+        detail: str = "",
+        *,
+        speaker: str = "",
+        data: dict | None = None,
+    ) -> None:
+        """
+        Something about the session itself happened (a voice call started,
+        a wake session ended and why). Logged for analysis only: not a
+        turn, nothing to judge or remember.
+        """
+        ...
+
     def observer_catchup_text(self) -> str:
         """
         What a freshly-connected observer should be told once, to catch up

@@ -89,6 +89,9 @@ class RecordingPolicy:
     def observer_catchup_text(self) -> str:
         return ""
 
+    async def on_session_event(self, event, detail="", *, speaker="", data=None):
+        pass
+
     async def on_untranscribed_turn(
         self,
         speaker_id: int,

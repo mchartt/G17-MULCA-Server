@@ -48,5 +48,15 @@ class NoCognition:
     ) -> None:
         pass
 
+    async def on_session_event(
+        self,
+        event: str,
+        detail: str = "",
+        *,
+        speaker: str = "",
+        data: dict | None = None,
+    ) -> None:
+        pass
+
     def observer_catchup_text(self) -> str:
         return ""

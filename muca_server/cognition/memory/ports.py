@@ -24,6 +24,22 @@ class EpisodicStore(Protocol):
     async def log(self, record: EpisodicRecord) -> None:
         ...
 
+    async def log_session_event(
+        self,
+        conversation_id: str,
+        event: str,
+        *,
+        timestamp: float,
+        speaker: str = "",
+        detail: str = "",
+        data: dict | None = None,
+    ) -> None:
+        """
+        Something about the session itself (a call, a wake session), kept
+        apart from the turns: never recalled, searched or summarized.
+        """
+        ...
+
     async def recall_recent(
         self,
         conversation_id: str,

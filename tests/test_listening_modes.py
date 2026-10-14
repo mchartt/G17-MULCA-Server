@@ -374,17 +374,23 @@ def test_wake_phrase_matching_is_deterministic_not_fuzzy_guessing():
     assert _matches_wake_phrase("hey assistant")
     assert _matches_wake_phrase("assistent")  # transcription near-miss
     assert _matches_wake_phrase("assistants")  # plural
-    # The tradeoff of dropping the lead-in requirement: "assistant"
-    # mentioned in passing now also opens the window, not just a direct
-    # address -- accepted deliberately, in exchange for actually detecting
-    # the bare "Assistant?" case above, which real transcripts produced.
-    assert _matches_wake_phrase("what do you think about assistants in general")
+    # But the generic aliases only count as the first word: found live,
+    # students building their own assistants/chatbots say them in passing
+    # all the time, and every mention woke MULCA.
+    assert not _matches_wake_phrase("what do you think about assistants in general")
+    assert not _matches_wake_phrase("our assistant should show the deadline")
+    assert not _matches_wake_phrase("the chatbot we built is slow")
+    assert not _matches_wake_phrase("that bot answer was great")
+    assert not _matches_wake_phrase("assistance with the budget")
+    assert _matches_wake_phrase("Assistant, what's the deadline")
     # Other aliases, on request -- including "mulca"/"muca" despite being
     # the transcription-unreliable word this phrase was built to avoid
     # depending on alone: an extra alternative only adds detection chances.
+    # MULCA's own name counts anywhere in the sentence.
     assert _matches_wake_phrase("hey chatbot")
     assert _matches_wake_phrase("mulca")
     assert _matches_wake_phrase("muca")
+    assert _matches_wake_phrase("what do you think, mulca?")
 
     # "bot" added on request -- the transcription bias prompt already
     # tells the ASR this is a recognized way to address it, but the wake
@@ -521,14 +527,22 @@ async def test_wake_dormant_turns_are_not_judged_and_the_judge_hears_nothing():
 
 
 async def test_the_wake_phrase_engages_without_the_judge_and_announces_once():
-    conversation, factory = await make_conversation(listening_mode="wake")
+    conversation, factory = await make_conversation(
+        listening_mode="wake",
+        strategies=STRATEGIES_WITH_ALWAYS_REPLY,
+        auxiliary_cls=DecliningInterventionAgent,
+    )
 
     await voice_turn(conversation, "hey muca, what is the deadline")
+    assert factory.auxiliary.asked == 0  # forced, never judged
+    assert len(factory.main.instructions) == 1
+
+    # Already engaged: naming MULCA again is judged, not forced.
     await voice_turn(conversation, "muca, and the budget?")
 
     assert conversation._listening_window_open is True
-    assert factory.auxiliary.asked == 0  # both forced, never judged
-    assert len(factory.main.instructions) == 2
+    assert factory.auxiliary.asked == 1
+    assert len(factory.main.instructions) == 1  # declined, nothing forced
     assert listening_states(conversation) == [True]
 
 
@@ -631,7 +645,47 @@ async def test_the_time_limit_waits_for_a_playing_reply():
     assert conversation._listening_window_open is False
 
 
-async def test_a_repeated_wake_phrase_restarts_the_session():
+async def test_naming_muca_mid_session_restarts_nothing():
+    # Found live: every passing mention reset the time limit and the
+    # interruption score, so an engaged session never ended.
+    conversation, _ = await make_conversation(listening_mode="wake")
+    await voice_turn(conversation, "hey muca")
+    conversation._engaged_since_ms = 1
+    conversation._interruption_score = 1
+    conversation._warned_about_interruptions = True
+
+    await voice_turn(conversation, "muca, what about the budget")
+
+    assert conversation._engaged_since_ms == 1
+    assert conversation._interruption_score == 1
+    assert conversation._warned_about_interruptions is True
+
+
+async def test_turns_not_addressed_to_muca_end_the_session():
+    conversation, factory = await make_conversation(
+        listening_mode="wake",
+        strategies=STRATEGIES_WITH_ALWAYS_REPLY,
+        auxiliary_cls=DecliningInterventionAgent,
+    )
+    limit = conversation_module.ENGAGED_MAX_UNADDRESSED_TURNS
+    await voice_turn(conversation, "hey muca, what is the deadline")
+
+    for _ in range(limit - 1):
+        await voice_turn(conversation, "I think it is friday", speaker=2)
+    await voice_turn(conversation, "muca, are you sure?")  # counts as naming it
+    for _ in range(limit - 1):
+        await voice_turn(conversation, "ok let us move on", speaker=2)
+    assert conversation._listening_window_open is True
+    asked = factory.auxiliary.asked
+
+    await voice_turn(conversation, "next point", speaker=2)
+
+    assert conversation._listening_window_open is False
+    assert factory.auxiliary.asked == asked  # the last one isn't judged
+    assert listening_states(conversation) == [True, False]
+
+
+async def test_a_direct_wake_phrase_call_restarts_the_session():
     conversation, _ = await make_conversation(listening_mode="wake")
     await conversation._handle_wake_phrase(speaker=1)
     conversation._engaged_since_ms = 0
@@ -672,6 +726,16 @@ def test_dismissal_matching():
         "fine sessione",
         "fine della sessione mulca",
         "go ahead and wrap it up, thanks for all the help today",
+        # Found live not to work before:
+        "please sleep mulca",
+        "please shut up",
+        "go to bed",
+        "quiet mulca",
+        "ok bye",
+        "not now mulca",
+        "shh",
+        "vai via",
+        "pausa",
     ):
         assert _matches_dismissal(transcript)
     assert not _matches_dismissal("let us move on")
@@ -701,7 +765,9 @@ async def test_a_dismissal_ends_the_session_unanswered_and_never_starts_one():
     assert listening_states(conversation) == [True, False]
 
 
-async def test_interruptions_are_scored_by_how_long_muca_was_heard():
+async def test_interruptions_are_scored_by_how_long_muca_was_heard(monkeypatch):
+    # Scoring only: keep the session from ending partway through.
+    monkeypatch.setattr(conversation_module, "INTERRUPTION_THRESHOLD_START", 10)
     conversation, _ = await make_conversation(listening_mode="wake")
     await conversation._handle_wake_phrase(speaker=1)
 
@@ -724,13 +790,11 @@ async def test_interruptions_warn_the_judge_at_half_then_end_the_session():
     conversation, _ = await make_conversation(listening_mode="wake")
     await conversation._handle_wake_phrase(speaker=1)
 
-    await interrupted(conversation, 500)
-    assert conversation._warned_about_interruptions is False
-    await interrupted(conversation, 500)  # 2: half of 3, rounded up
+    await interrupted(conversation, 500)  # 1: half of 2
     assert conversation._warned_about_interruptions is True
     assert conversation._listening_window_open is True
 
-    await interrupted(conversation, 500)  # 3
+    await interrupted(conversation, 500)  # 2
     assert conversation._listening_window_open is False
 
 
@@ -740,13 +804,12 @@ async def test_the_interruption_threshold_drops_over_time_to_one():
     start = conversation._engaged_since_ms
     step = conversation_module.INTERRUPTION_THRESHOLD_STEP_MS
 
-    assert conversation._interruption_threshold(start) == 3
-    assert conversation._interruption_threshold(start + step) == 2
+    assert conversation._interruption_threshold(start) == 2
+    assert conversation._interruption_threshold(start + step) == 1
     assert conversation._interruption_threshold(start + 2 * step) == 1
-    assert conversation._interruption_threshold(start + 3 * step) == 1
 
     # At the floor, the first talk-over that counts ends the session.
-    conversation._engaged_since_ms = start - 2 * step
+    conversation._engaged_since_ms = start - step
     await interrupted(conversation, 500)
     assert conversation._listening_window_open is False
 
@@ -760,3 +823,102 @@ async def test_a_reply_heard_out_resets_the_interruption_score():
     await conversation._end_assistant_turn()
 
     assert conversation._interruption_score == 0
+
+
+# ----------------------------------------------------------------------
+# Session events: voice calls and wake sessions, logged for analysis.
+# ----------------------------------------------------------------------
+
+
+class EventLog:
+    def __init__(self, policy):
+        self.events = []
+
+        async def record(event, detail="", *, speaker="", data=None):
+            self.events.append((event, detail, speaker))
+
+        policy.on_session_event = record
+
+    def names(self):
+        return [event for event, _, _ in self.events]
+
+
+def voice_roster(*people):
+    return parse_incoming_message(
+        {
+            "event": "participants",
+            "modality": "audio",
+            "participants": [{"id": i, "name": n} for i, n in people],
+        }
+    )
+
+
+async def test_voice_call_starts_joins_leaves_and_ends_are_logged():
+    conversation, _ = await make_conversation(listening_mode="wake")
+    log = EventLog(conversation._policy)
+
+    await conversation.route_participants(voice_roster())  # first: empty
+    await conversation.route_participants(voice_roster((1, "Ada")))
+    await conversation.route_participants(voice_roster((1, "Ada"), (2, "Bo")))
+    await conversation.route_participants(voice_roster((2, "Bo")))
+    await conversation.route_participants(voice_roster((2, "Bo")))  # resent
+    await conversation.route_participants(voice_roster())
+
+    assert log.events == [
+        ("voice_call_started", "Ada", ""),
+        ("voice_joined", "", "Bo"),
+        ("voice_left", "", "Ada"),
+        ("voice_call_ended", "Bo", ""),
+    ]
+
+
+async def test_a_call_already_under_way_at_connect_is_not_a_start():
+    conversation, _ = await make_conversation(listening_mode="wake")
+    log = EventLog(conversation._policy)
+
+    await conversation.route_participants(voice_roster((1, "Ada")))
+
+    assert log.events == [
+        ("voice_call_ongoing", "already in the call at connect: Ada", ""),
+    ]
+
+
+async def test_wake_sessions_log_their_trigger_and_why_they_ended():
+    conversation, _ = await make_conversation(listening_mode="wake")
+    log = EventLog(conversation._policy)
+
+    await voice_turn(conversation, "hey muca, what is the deadline")
+    await voice_turn(conversation, "ok thanks muca")
+    await voice_turn(conversation, "hey muca")
+    await conversation.close()
+
+    assert [(e, d) for e, d, _ in log.events] == [
+        ("wake_started", "hey muca, what is the deadline"),
+        ("wake_ended", "dismissed"),
+        ("wake_started", "hey muca"),
+        ("wake_ended", "session closed"),
+    ]
+
+
+async def test_talk_overs_are_logged_with_their_score():
+    conversation, _ = await make_conversation(listening_mode="wake")
+    await conversation._handle_wake_phrase(speaker=1)
+    log = EventLog(conversation._policy)
+
+    await interrupted(conversation, 500)
+
+    assert log.names() == ["wake_talked_over"]
+    assert log.events[0][1] == "after 500ms, score 1/2"
+
+
+async def test_a_failing_event_log_never_breaks_the_conversation():
+    conversation, _ = await make_conversation(listening_mode="wake")
+
+    async def broken(*args, **kwargs):
+        raise RuntimeError("disk full")
+
+    conversation._policy.on_session_event = broken
+
+    await voice_turn(conversation, "hey muca")
+
+    assert conversation._listening_window_open is True

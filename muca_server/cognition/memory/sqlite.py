@@ -16,9 +16,13 @@ and its callers are untouched.
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import logging
 import re
+import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 import aiosqlite
@@ -73,6 +77,20 @@ CREATE TABLE IF NOT EXISTS episodic_embedding (
 );
 CREATE INDEX IF NOT EXISTS idx_episodic_embedding_conversation
     ON episodic_embedding (conversation_id);
+
+-- Voice calls starting/ending, wake sessions starting/ending and why: for
+-- analysis only. Its own table, not rows in episodic_log, so nothing that
+-- reads memory (recall, "remember", summaries) ever sees one -- including
+-- an older server version, which doesn't know this table exists.
+CREATE TABLE IF NOT EXISTS session_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp REAL NOT NULL,
+    conversation_id TEXT NOT NULL,
+    event TEXT NOT NULL,
+    speaker TEXT NOT NULL DEFAULT '',
+    detail TEXT NOT NULL DEFAULT '',
+    data TEXT NOT NULL DEFAULT '{}'
+);
 
 CREATE TABLE IF NOT EXISTS memory_snapshot (
     conversation_id TEXT PRIMARY KEY,
@@ -153,6 +171,74 @@ def _unpack_embedding(blob: bytes) -> np.ndarray:
     return np.frombuffer(blob, dtype=np.float32)
 
 
+def export_episodic_csv(db_path: str | Path, *, since: float | None = None) -> str:
+    """
+    One conversation's episodic_log as CSV, oldest first, for analysis
+    (/mulca export), with its session events (session_event table)
+    interleaved by time as rows whose intervention_path is
+    "session_event": content is "<event>: <detail>", trigger_variables the
+    event's data. Read-only: opened with mode=ro and no schema check, so
+    exporting never migrates or otherwise touches an existing file --
+    whatever columns an older file has are exported as they are, and a
+    file without session events simply has none. Embedding vectors are
+    left out (binary, and in their own table anyway).
+    """
+
+    uri = f"{Path(db_path).resolve().as_uri()}?mode=ro"
+    with sqlite3.connect(uri, uri=True) as db:
+        db.row_factory = sqlite3.Row
+        since = since or 0
+        turns = db.execute(
+            "SELECT * FROM episodic_log WHERE timestamp >= ? ORDER BY timestamp, id",
+            (since,),
+        ).fetchall()
+        columns = [
+            row[1] for row in db.execute("PRAGMA table_info(episodic_log)")
+        ]
+        has_events = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_event'"
+        ).fetchone()
+        events = (
+            db.execute(
+                "SELECT * FROM session_event WHERE timestamp >= ? ORDER BY timestamp, id",
+                (since,),
+            ).fetchall()
+            if has_events
+            else []
+        )
+
+    merged = [(row["timestamp"], 0, dict(row)) for row in turns]
+    for event in events:
+        row = {column: "" for column in columns}
+        row.update(
+            id=f"event-{event['id']}",
+            timestamp=event["timestamp"],
+            conversation_id=event["conversation_id"],
+            intervention_path="session_event",
+            speaker=event["speaker"],
+            content=(
+                f"{event['event']}: {event['detail']}"
+                if event["detail"]
+                else event["event"]
+            ),
+            trigger_variables=event["data"],
+        )
+        if "modality" in row:
+            row["modality"] = "audio"
+        merged.append((event["timestamp"], 1, row))
+    merged.sort(key=lambda item: (item[0], item[1]))
+
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["time_utc", *columns])
+    for timestamp, _, row in merged:
+        time_utc = datetime.fromtimestamp(timestamp, timezone.utc)
+        writer.writerow(
+            [time_utc.strftime("%Y-%m-%d %H:%M:%S"), *(row.get(c, "") for c in columns)]
+        )
+    return out.getvalue()
+
+
 class SqliteEpisodicStore:
     """Satisfies memory.ports.EpisodicStore against a SQLite file."""
 
@@ -225,6 +311,35 @@ class SqliteEpisodicStore:
                     episodic_log_id,
                     record.conversation_id,
                     _pack_embedding(embedding),
+                ),
+            )
+            await db.commit()
+
+    async def log_session_event(
+        self,
+        conversation_id: str,
+        event: str,
+        *,
+        timestamp: float,
+        speaker: str = "",
+        detail: str = "",
+        data: dict | None = None,
+    ) -> None:
+        async with aiosqlite.connect(self._db_path) as db:
+            await _ensure_schema(db)
+            await db.execute(
+                """
+                INSERT INTO session_event (
+                    timestamp, conversation_id, event, speaker, detail, data
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    timestamp,
+                    conversation_id,
+                    event,
+                    speaker,
+                    detail,
+                    json.dumps(data or {}),
                 ),
             )
             await db.commit()

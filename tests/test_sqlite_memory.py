@@ -5,6 +5,9 @@ replaces the in-memory stores for real deployments.
 Each test uses its own temp file (pytest's tmp_path), never a shared/live DB.
 """
 
+import csv
+import io
+
 import aiosqlite
 
 from muca_server.cognition.memory.records import (
@@ -15,6 +18,7 @@ from muca_server.cognition.memory.records import (
 from muca_server.cognition.memory.sqlite import (
     SqliteEpisodicStore,
     SqliteSnapshotStore,
+    export_episodic_csv,
 )
 
 
@@ -300,3 +304,142 @@ async def test_state_survives_a_new_store_instance_pointed_at_the_same_file(
     loaded = await reader.load("c1")
 
     assert loaded.total_message_count == 5
+
+
+async def test_session_events_go_to_their_own_table_never_into_memory(tmp_path):
+    class CountingEmbedder:
+        def __init__(self):
+            self.texts = []
+
+        async def embed(self, text: str) -> list[float]:
+            self.texts.append(text)
+            return [1.0, 0.0]
+
+    embedder = CountingEmbedder()
+    db_path = tmp_path / "test.db"
+    store = SqliteEpisodicStore(db_path, embedder=embedder)
+
+    await store.log(record(content="a real message"))
+    await store.log_session_event(
+        "c1", "wake_ended", timestamp=2.0, detail="silence", data={"duration_s": 42}
+    )
+
+    assert [r.content for r in await store.recall_recent("c1", 50)] == ["a real message"]
+    assert embedder.texts == ["a real message"]
+    async with aiosqlite.connect(db_path) as db:
+        paths = await (await db.execute("SELECT intervention_path FROM episodic_log")).fetchall()
+        events = await (await db.execute("SELECT event, detail, data FROM session_event")).fetchall()
+    # episodic_log only ever holds the row kinds older code knows.
+    assert paths == [("none",)]
+    assert events == [("wake_ended", "silence", '{"duration_s": 42}')]
+
+
+async def test_an_old_file_keeps_its_rows_next_to_new_session_events(tmp_path):
+    # A file from before action_points existed: its old row is untouched,
+    # and a session event can be logged into it and exported with it.
+    db_path = tmp_path / "test.db"
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """
+            CREATE TABLE episodic_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                conversation_id TEXT NOT NULL,
+                intervention_path TEXT NOT NULL,
+                speaker TEXT NOT NULL DEFAULT '',
+                content TEXT NOT NULL DEFAULT '',
+                trigger_variables TEXT NOT NULL DEFAULT '{}',
+                strategy_id TEXT,
+                prompt_fragment TEXT,
+                assistant_output TEXT,
+                history_summary TEXT,
+                participant_roles_summary TEXT
+            )
+            """
+        )
+        await db.execute(
+            "INSERT INTO episodic_log (timestamp, conversation_id, "
+            "intervention_path, speaker, content) "
+            "VALUES (1.0, 'c1', 'strategy', 'Ada', 'hi mulca')"
+        )
+        await db.commit()
+
+    store = SqliteEpisodicStore(db_path)
+    await store.log_session_event(
+        "c1", "voice_call_started", timestamp=2.0, detail="Ada"
+    )
+
+    [old] = await store.recall_recent("c1", 50)
+    assert (old.speaker, old.content, old.intervention_path) == (
+        "Ada",
+        "hi mulca",
+        "strategy",
+    )
+
+    rows = list(csv.DictReader(io.StringIO(export_episodic_csv(db_path))))
+    assert [(r["intervention_path"], r["content"]) for r in rows] == [
+        ("strategy", "hi mulca"),
+        ("session_event", "voice_call_started: Ada"),
+    ]
+    assert rows[0]["time_utc"] == "1970-01-01 00:00:01"
+
+
+async def test_export_interleaves_events_with_turns_by_time(tmp_path):
+    db_path = tmp_path / "test.db"
+    store = SqliteEpisodicStore(db_path)
+    await store.log(record(timestamp=1.0, content="first"))
+    await store.log(record(timestamp=3.0, content="third"))
+    await store.log_session_event(
+        "c1", "wake_started", timestamp=2.0, speaker="Ada", data={"x": 1}
+    )
+
+    rows = list(csv.DictReader(io.StringIO(export_episodic_csv(db_path))))
+
+    assert [r["content"] for r in rows] == ["first", "wake_started", "third"]
+    assert rows[1]["speaker"] == "Ada"
+    assert rows[1]["trigger_variables"] == '{"x": 1}'
+    assert rows[1]["id"].startswith("event-")
+
+
+async def test_exporting_never_changes_the_file(tmp_path):
+    # Read-only: an old file is exported as it is, not migrated.
+    db_path = tmp_path / "test.db"
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(
+            """
+            CREATE TABLE episodic_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL NOT NULL,
+                conversation_id TEXT NOT NULL,
+                intervention_path TEXT NOT NULL,
+                content TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        await db.execute(
+            "INSERT INTO episodic_log (timestamp, conversation_id, "
+            "intervention_path, content) VALUES (5.0, 'c1', 'none', 'hello')"
+        )
+        await db.commit()
+    before = db_path.read_bytes()
+
+    text = export_episodic_csv(db_path)
+
+    assert db_path.read_bytes() == before
+    assert text.splitlines()[0] == (
+        "time_utc,id,timestamp,conversation_id,intervention_path,content"
+    )
+
+
+async def test_export_since_leaves_out_older_rows(tmp_path):
+    store = SqliteEpisodicStore(tmp_path / "test.db")
+    await store.log(record(timestamp=10.0, content="old"))
+    await store.log(record(timestamp=20.0, content="new"))
+
+    rows = list(
+        csv.DictReader(
+            io.StringIO(export_episodic_csv(tmp_path / "test.db", since=15.0))
+        )
+    )
+
+    assert [r["content"] for r in rows] == ["new"]

@@ -19,7 +19,7 @@ from ...audio import AudioChunk
 from ...audio.pcm import float32_to_pcm16, pcm16_to_float32, resample_float32
 from ..main_agent import MainAgent, MainAgentEvent
 from ..options import AgentCapabilities, MainAgentOptions
-from ..voice_control_phrases import matches_voice_control_phrase
+from ..voice_control_phrases import matches_dismissal
 from ...usage_report import UsageTracker, usage_sink
 
 logger = logging.getLogger(__name__)
@@ -694,7 +694,7 @@ class MainAgentOpenAI(MainAgent):
                 elif (
                     average_logprob is not None
                     and average_logprob < MIN_AVERAGE_LOGPROB
-                    and not matches_voice_control_phrase(transcript)
+                    and not matches_dismissal(transcript)
                 ):
                     # -1.5 checked against a real live sample first (not
                     # just picked): across a full test session, the only
@@ -705,11 +705,12 @@ class MainAgentOpenAI(MainAgent):
                     # dismissal attempts too ("stop"/"shut up" going
                     # unheard, an engaged session never closing) -- short,
                     # clipped control phrases are exactly what tends to
-                    # score low confidence. A wake/dismissal match is
-                    # exempted from this filter entirely: discarding a
-                    # real one leaves someone unable to start or stop an
-                    # engaged session by voice at all, a worse outcome
-                    # than occasionally honoring a hallucinated one.
+                    # score low confidence. Only a dismissal is exempted:
+                    # honoring a hallucinated "stop" costs one "hey
+                    # mulca", but honoring a hallucinated wake phrase
+                    # (the ASR invents "assistant" boilerplate over
+                    # near-silence) makes MULCA talk over the group --
+                    # found live, the exact failure being fixed.
                     logger.warning(
                         "%s discarded a low-confidence transcript, likely "
                         "not real speech: %r",

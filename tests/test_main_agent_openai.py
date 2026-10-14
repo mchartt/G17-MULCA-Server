@@ -575,7 +575,9 @@ async def test_a_low_confidence_dismissal_attempt_is_not_discarded():
     assert received == [("in-1", "stop")]
 
 
-async def test_a_low_confidence_wake_attempt_is_not_discarded():
+async def test_a_low_confidence_wake_attempt_is_discarded():
+    # Unlike a dismissal: the ASR invents "assistant" boilerplate over
+    # near-silence, and honoring it makes MULCA talk over the group.
     agent = make_agent()
     received = []
 
@@ -593,7 +595,7 @@ async def test_a_low_confidence_wake_attempt_is_not_discarded():
         )
     )
 
-    assert received == [("in-1", "assistente")]
+    assert received == [("in-1", "")]
 
 
 async def test_a_confident_transcript_is_unaffected():

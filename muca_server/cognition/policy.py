@@ -953,6 +953,26 @@ class CoalaPolicy:
             )
         )
 
+    async def on_session_event(
+        self,
+        event: str,
+        detail: str = "",
+        *,
+        speaker: str = "",
+        data: dict | None = None,
+    ) -> None:
+        if self._episodic_store is None or self._wm is None:
+            return
+
+        await self._episodic_store.log_session_event(
+            self._wm.conversation_id,
+            event,
+            timestamp=time.time(),
+            speaker=speaker,
+            detail=detail,
+            data=data,
+        )
+
     async def _resolve_pending_turn(
         self,
         *,

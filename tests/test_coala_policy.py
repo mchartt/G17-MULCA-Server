@@ -2024,3 +2024,21 @@ async def test_a_rider_in_cooldown_is_vetoed_but_the_primary_reply_still_goes_ou
 
     assert "Answer them." in port.instructions[1]
     assert "invite the quiet one" not in port.instructions[1]
+
+
+async def test_a_session_event_is_logged_apart_from_memory():
+    episodic = InMemoryEpisodicStore()
+    policy, port = make_policy(episodic_store=episodic)
+    await policy.start(port)
+
+    await policy.on_session_event(
+        "wake_ended",
+        "silence",
+        data={"reason": "silence", "duration_s": 42},
+    )
+
+    [event] = episodic.session_events
+    assert event["event"] == "wake_ended"
+    assert event["detail"] == "silence"
+    assert event["data"] == {"reason": "silence", "duration_s": 42}
+    assert episodic._records.get(port.conversation_id, []) == []
