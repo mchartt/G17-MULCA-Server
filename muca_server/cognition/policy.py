@@ -1275,12 +1275,13 @@ class CoalaPolicy:
         time a record is about to be written.
         """
 
-        if (
-            self._pending_episodic_record is not None
-            and self._episodic_store is not None
-        ):
-            await self._episodic_store.log(self._pending_episodic_record)
+        # Taken before the await, not after. Found live (group 16, 14 Oct): a
+        # reply arriving during the log write still saw the record pending,
+        # logged its own copy with the reply, and the turn appeared twice.
+        record = self._pending_episodic_record
         self._pending_episodic_record = None
+        if record is not None and self._episodic_store is not None:
+            await self._episodic_store.log(record)
 
     # ------------------------------------------------------------------
 
