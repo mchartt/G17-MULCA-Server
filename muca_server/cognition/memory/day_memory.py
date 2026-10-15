@@ -210,8 +210,10 @@ def resolve_period(
         monday = current - timedelta(days=current.weekday())
         return monday.isoformat(), today
     if period == "last_week":
-        monday = current - timedelta(days=current.weekday() + 7)
-        return monday.isoformat(), (monday + timedelta(days=6)).isoformat()
+        # The last seven days, today included -- not the previous calendar
+        # week: found live, "last week" on a Thursday meant the past week,
+        # and Mon-Sun left out the session the day before.
+        return (current - timedelta(days=6)).isoformat(), today
     try:
         day = date.fromisoformat(period).isoformat()
     except ValueError:

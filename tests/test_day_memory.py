@@ -119,7 +119,7 @@ def test_a_named_period_becomes_its_days():
     assert resolve_period("yesterday", today, days) == ("2026-10-14", "2026-10-14")
     assert resolve_period("last_session", today, days) == ("2026-10-14", "2026-10-14")
     assert resolve_period("this_week", today, days) == ("2026-10-12", "2026-10-15")
-    assert resolve_period("last_week", today, days) == ("2026-10-05", "2026-10-11")
+    assert resolve_period("last_week", today, days) == ("2026-10-09", "2026-10-15")
     assert resolve_period("2026-10-08", today, days) == ("2026-10-08", "2026-10-08")
 
 
