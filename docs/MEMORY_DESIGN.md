@@ -104,7 +104,7 @@ Sent on connect and after every context reset. On a context reset, the agent's r
 
 Additionally, for the main agent only, on request:
 
-- **provide_summary**, or a question about an earlier day: the relevant day summaries
+- **provide_summary**, or a question about an earlier day: the relevant day summaries. The intervention agent names the period the question is about (`history_period`: today, yesterday, last_session, this_week, last_week, a date, or all); the policy turns it into days and sends only those days, plus today only if it's in the period and the overview only for "all". Anything it can't read means "all".
 - **remember**: similarity search over the log (unchanged)
 
 **DMs:** no summaries of their own (as today); they get the linked group's overview and today, read-only.

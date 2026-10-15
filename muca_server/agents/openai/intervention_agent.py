@@ -13,6 +13,7 @@ from contextlib import suppress
 from openai import AsyncOpenAI
 
 from ...audio import AudioChunk
+from ...cognition.memory.day_memory import HISTORY_PERIODS
 from ...cognition.ports import InterventionSignal
 from ...cognition.strategies import StrategyStore
 from ..auxiliary_agent import AuxiliaryAgent
@@ -349,6 +350,7 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
             strategy_id=strategy_id,
             prompt_fragment=args.get("prompt_fragment", ""),
             needs_history=bool(args.get("needs_history", False)),
+            history_period=str(args.get("history_period") or "all"),
             needs_web_search=bool(
                 args.get("needs_web_search", False),
             ),
@@ -384,6 +386,17 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
                         ),
                     },
                     "needs_history": {"type": "boolean"},
+                    "history_period": {
+                        "type": "string",
+                        "description": (
+                            "Only when needs_history is true or "
+                            "strategy_id is provide_summary: the period "
+                            "the question is about -- one of "
+                            + ", ".join(HISTORY_PERIODS)
+                            + ", or a date the message names, as "
+                            "YYYY-MM-DD. Default all."
+                        ),
+                    },
                     "needs_web_search": {"type": "boolean"},
                     "web_search_query": {
                         "type": "string",
@@ -454,7 +467,10 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
             "Not literal wording -- the main response generator decides "
             "phrasing itself. Plus two independent flags: needs_history "
             "if answering well requires looking up something from earlier "
-            "in the conversation; needs_web_search if answering requires "
+            "in the conversation -- with it, and whenever you select "
+            "provide_summary, set history_period to the period the "
+            "question is about (\"today\", \"yesterday\", \"last "
+            "session\"...), or all; needs_web_search if answering requires "
             "current information from outside this conversation -- when "
             "true, also set web_search_query to the actual query to "
             "search for, in your own words, not the triggering message's "

@@ -2264,3 +2264,83 @@ async def test_provide_summary_retrieves_the_day_summaries():
 
     assert "Day summary, Tuesday 13 October 2026" in port.instructions[0]
     assert "Monday's work" in port.instructions[0]
+
+
+async def summary_policy_with_days():
+    """A policy whose memory has an overview and two earlier days."""
+
+    from datetime import date, timedelta
+
+    from muca_server.cognition.memory.day_memory import day_of
+
+    today = date.fromisoformat(day_of(time.time()))
+    yesterday = (today - timedelta(days=1)).isoformat()
+    earlier = (today - timedelta(days=3)).isoformat()
+    strategies = StrategyStore(
+        {
+            "provide_summary": Strategy(
+                id="provide_summary",
+                trigger_description="",
+                prompt_template="Summarize. {prompt_fragment}",
+            ),
+        }
+    )
+    episodic = InMemoryEpisodicStore()
+    policy, port = make_policy(strategy_store=strategies, episodic_store=episodic)
+    for day, text in ((yesterday, "yesterday's work"), (earlier, "older work")):
+        await episodic.save_summary(
+            port.conversation_id,
+            MemorySummary(kind="day", day=day, content={"narrative": text}),
+        )
+    await save_overview(episodic, port.conversation_id)
+    await policy.start(port)
+    await policy.on_utterance(make_utterance(content="today's question"))
+    return policy, port
+
+
+async def test_a_summary_of_one_period_gets_only_that_period():
+    policy, port = await summary_policy_with_days()
+
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="provide_summary", prompt_fragment="", history_period="yesterday"
+        ),
+    )
+
+    sent = port.instructions[0]
+    assert "yesterday's work" in sent
+    assert "The question is about" in sent
+    assert "older work" not in sent
+    assert "the group discussed the deadline" not in sent  # the overview
+    assert "today's question" not in sent
+
+
+async def test_a_summary_of_today_gets_today_and_no_earlier_days():
+    policy, port = await summary_policy_with_days()
+
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(
+            strategy_id="provide_summary", prompt_fragment="", history_period="today"
+        ),
+    )
+
+    sent = port.instructions[0]
+    assert "today's question" in sent
+    assert "yesterday's work" not in sent
+    assert "older work" not in sent
+    assert "the group discussed the deadline" not in sent
+
+
+async def test_a_summary_of_everything_still_gets_everything():
+    policy, port = await summary_policy_with_days()
+
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="provide_summary", prompt_fragment=""),
+    )
+
+    sent = port.instructions[0]
+    for text in ("yesterday's work", "older work", "the group discussed the deadline", "today's question"):
+        assert text in sent

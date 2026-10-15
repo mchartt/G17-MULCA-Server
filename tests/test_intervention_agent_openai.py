@@ -147,6 +147,21 @@ def test_the_tool_definition_includes_web_search_query():
     assert properties["web_search_query"]["type"] == "string"
 
 
+def test_the_history_period_is_read_from_the_tool_call():
+    agent = make_agent()
+
+    signal = agent._parse_signal(
+        '{"strategy_id": "provide_summary", "prompt_fragment": "", '
+        '"history_period": "today"}'
+    )
+    assert signal.history_period == "today"
+    assert "history_period" in agent._tool_definition()["parameters"]["properties"]
+
+    # Left out: the whole history, as before.
+    signal = agent._parse_signal('{"strategy_id": "provide_summary", "prompt_fragment": ""}')
+    assert signal.history_period == "all"
+
+
 async def test_response_done_with_no_tool_call_means_no_intervention():
     agent = make_agent()
     decisions = await record_decisions(agent)

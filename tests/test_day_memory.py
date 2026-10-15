@@ -8,6 +8,7 @@ from muca_server.cognition.memory.day_memory import (
     day_log_lines,
     day_of,
     render_summary,
+    resolve_period,
 )
 from muca_server.cognition.memory.records import EpisodicRecord
 
@@ -108,3 +109,25 @@ def test_a_summary_renders_narrative_first_then_what_it_adds():
     assert "- the API is free (since 14 Oct)" in text
     assert "- Ada: proposed the app; sketched it" in text
     assert "MULCA's part:\n- found the API" in text
+
+
+def test_a_named_period_becomes_its_days():
+    today = "2026-10-15"  # a Thursday
+    days = ["2026-10-08", "2026-10-12", "2026-10-14"]
+
+    assert resolve_period("today", today, days) == ("2026-10-15", "2026-10-15")
+    assert resolve_period("yesterday", today, days) == ("2026-10-14", "2026-10-14")
+    assert resolve_period("last_session", today, days) == ("2026-10-14", "2026-10-14")
+    assert resolve_period("this_week", today, days) == ("2026-10-12", "2026-10-15")
+    assert resolve_period("last_week", today, days) == ("2026-10-05", "2026-10-11")
+    assert resolve_period("2026-10-08", today, days) == ("2026-10-08", "2026-10-08")
+
+
+def test_all_or_an_unknown_period_is_the_whole_history():
+    assert resolve_period("all", "2026-10-15", []) is None
+    assert resolve_period("", "2026-10-15", []) is None
+    assert resolve_period("before the break", "2026-10-15", []) is None
+
+
+def test_the_last_session_with_no_earlier_day_is_today():
+    assert resolve_period("last_session", "2026-10-15", []) == ("2026-10-15", "2026-10-15")

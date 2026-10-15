@@ -49,6 +49,10 @@ class WorkingMemory:
     # Long-term memory pulled in for this turn only.
     retrieved_context: str | None = None
 
+    # The days (first, last) this turn's history question is about; None
+    # for the whole history. This turn only.
+    history_period: tuple[str, str] | None = None
+
     # Live web search results pulled in for this turn only -- kept
     # separate from retrieved_context above, not reused for it: that one
     # is specifically labeled "Retrieved conversation history" in the
@@ -167,6 +171,7 @@ class WorkingMemory:
         self.forced_context = None
         self.retrieved_context = None
         self.web_search_context = None
+        self.history_period = None
 
     def transcript(
         self,

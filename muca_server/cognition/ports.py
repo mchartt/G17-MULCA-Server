@@ -65,6 +65,10 @@ class InterventionSignal:
     strategy_id: str
     prompt_fragment: str
     needs_history: bool = False
+    # Which part of the history a history question or summary is about:
+    # one of day_memory.HISTORY_PERIODS, or a date as YYYY-MM-DD. "all" is
+    # the whole history, as before this existed.
+    history_period: str = "all"
     needs_web_search: bool = False
     # The observer's own query, not re-derived heuristically from the raw
     # message the way "remember"'s extract_query is -- a web search query

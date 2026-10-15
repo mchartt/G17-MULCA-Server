@@ -167,3 +167,59 @@ def render_summary(summary: dict, *, heading: str) -> str:
 
 def day_heading(day: str) -> str:
     return f"{date.fromisoformat(day):%A %d %B %Y}"
+
+
+# What the intervention agent may name as the period a question is about
+# (InterventionSignal.history_period); a date as YYYY-MM-DD too. It names
+# the period, the code does the calendar: date arithmetic and "which day
+# was the last session" are where a small model slips.
+HISTORY_PERIODS = (
+    "all",
+    "today",
+    "yesterday",
+    "last_session",
+    "this_week",
+    "last_week",
+)
+
+
+def resolve_period(
+    period: str,
+    today: str,
+    days: list[str],
+) -> tuple[str, str] | None:
+    """
+    The days (first, last; ISO, inclusive) a history question is about, or
+    None for everything -- also for anything unrecognised, which keeps the
+    old whole-history behaviour rather than guessing.
+
+    days: the days before today with a summary, i.e. with activity.
+    """
+
+    period = (period or "all").strip().lower()
+    current = date.fromisoformat(today)
+    if period == "today":
+        return today, today
+    if period == "yesterday":
+        day = (current - timedelta(days=1)).isoformat()
+        return day, day
+    if period == "last_session":
+        earlier = sorted(d for d in days if d < today)
+        return (earlier[-1], earlier[-1]) if earlier else (today, today)
+    if period == "this_week":
+        monday = current - timedelta(days=current.weekday())
+        return monday.isoformat(), today
+    if period == "last_week":
+        monday = current - timedelta(days=current.weekday() + 7)
+        return monday.isoformat(), (monday + timedelta(days=6)).isoformat()
+    try:
+        day = date.fromisoformat(period).isoformat()
+    except ValueError:
+        return None
+    return day, day
+
+
+def period_label(first: str, last: str) -> str:
+    if first == last:
+        return day_heading(first)
+    return f"{day_heading(first)} to {day_heading(last)}"

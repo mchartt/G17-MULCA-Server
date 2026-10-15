@@ -27,7 +27,9 @@ from .memory.day_memory import (
     day_log_lines,
     day_of,
     estimate_tokens,
+    period_label,
     render_summary,
+    resolve_period,
 )
 from .memory.records import (
     EpisodicRecord,
@@ -594,6 +596,7 @@ class CoalaPolicy:
         strategy_id = signal.strategy_id if signal else None
         prompt_fragment = signal.prompt_fragment if signal else None
         needs_history = bool(signal and signal.needs_history)
+        history_period = signal.history_period if signal else "all"
         needs_web_search = bool(signal and signal.needs_web_search)
         web_search_query = signal.web_search_query if signal else ""
         flag_offensive_language = bool(signal and signal.flag_offensive_language)
@@ -601,12 +604,14 @@ class CoalaPolicy:
 
         logger.info(
             "%s intervention decision: strategy_id=%r prompt_fragment=%r "
-            "needs_history=%s needs_web_search=%s web_search_query=%r "
+            "needs_history=%s history_period=%r needs_web_search=%s "
+            "web_search_query=%r "
             "flag_offensive_language=%s nudge_participation=%s",
             wm.conversation_id,
             strategy_id,
             prompt_fragment,
             needs_history,
+            history_period,
             needs_web_search,
             web_search_query,
             flag_offensive_language,
@@ -697,6 +702,11 @@ class CoalaPolicy:
             )
             await self._retrieve_similar(wm, port, query)
         elif needs_history or strategy_id == "provide_summary":
+            wm.history_period = resolve_period(
+                history_period,
+                self._today_day or day_of(time.time()),
+                [day.day for day in self._days],
+            )
             await self._retrieve(wm, port)
 
         # Set only when a voice turn's web search actually ran -- gates the
@@ -942,11 +952,17 @@ class CoalaPolicy:
             f"not connected for:\n\n{memory}"
         )
 
-    def memory_text(self) -> str:
+    def memory_text(
+        self,
+        *,
+        overview: bool = True,
+        today: bool = True,
+    ) -> str:
         """
         What both agents know beyond their live session (docs/
         MEMORY_DESIGN.md): the overview, then today -- verbatim if it fits,
         otherwise "today so far" plus the most recent messages verbatim.
+        A question about one period leaves out what isn't in it.
         """
 
         wm = self._wm
@@ -954,22 +970,25 @@ class CoalaPolicy:
             return ""
 
         parts = []
-        if self._overview is not None:
+        if overview and self._overview is not None:
             parts.append(
                 render_summary(
                     self._overview.content,
                     heading=f"Project overview (as of {day_heading(self._overview.day)}):",
                 )
             )
-        elif wm.history_summary:
+        elif overview and wm.history_summary:
             # Until the first overview exists (e.g. while past days are
             # still being summarized after this memory was introduced).
             parts.append(f"Summary of the conversation so far:\n{wm.history_summary}")
 
+        if not today:
+            return "\n\n".join(parts)
+
         heading = day_heading(self._today_day) if self._today_day else "Today"
-        today = "\n".join(self._today_lines)
-        if self._today_lines and estimate_tokens(today) <= self._today_verbatim_tokens:
-            parts.append(f"Today ({heading}) so far, verbatim:\n{today}")
+        today_text = "\n".join(self._today_lines)
+        if self._today_lines and estimate_tokens(today_text) <= self._today_verbatim_tokens:
+            parts.append(f"Today ({heading}) so far, verbatim:\n{today_text}")
         elif self._today_lines:
             if self._today is not None:
                 parts.append(
@@ -1295,6 +1314,26 @@ class CoalaPolicy:
             wm.set_retrieved_context("(no prior conversation found)")
             return
 
+        # A question about one period gets only that period's days. Found
+        # live (15 Oct): "what did we talk about today" was handed every
+        # earlier day too, and the recap told the whole story instead.
+        if wm.history_period is not None:
+            first, last = wm.history_period
+            today = self._today_day or day_of(time.time())
+            days = [day for day in self._days if first <= day.day <= last]
+            parts = [
+                f"The question is about {period_label(first, last)}: "
+                "answer only about that period."
+            ]
+            parts += [
+                render_summary(day.content, heading=f"Day summary, {day_heading(day.day)}:")
+                for day in days
+            ]
+            if not days and not first <= today <= last:
+                parts.append("(nothing was recorded in that period)")
+            wm.set_retrieved_context("\n\n".join(parts))
+            return
+
         # The days before today, as summarized -- today itself is already
         # in the agent's memory. The recent log only until any day has a
         # summary.
@@ -1570,7 +1609,17 @@ class CoalaPolicy:
             else ""
         )
 
-        memory = self.memory_text() if needs_memory or force_summary else ""
+        if wm.history_period is not None:
+            first, last = wm.history_period
+            today = self._today_day or day_of(time.time())
+            memory_parts = {"overview": False, "today": first <= today <= last}
+        else:
+            memory_parts = {}
+        memory = (
+            self.memory_text(**memory_parts)
+            if needs_memory or force_summary
+            else ""
+        )
         memory_block = (
             f"What you remember of this conversation:\n{memory}\n\n"
             if memory
