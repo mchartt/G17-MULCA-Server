@@ -4,7 +4,6 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Response, WebSocket
 from starlette.concurrency import run_in_threadpool
 
-from .cognition.memory.sqlite import db_path_for, export_episodic_csv
 from .sessions import SessionComponentsFactory, SessionRuntimeFactory
 
 
@@ -41,6 +40,10 @@ def create_app(
         One conversation's episodic log as CSV (/mulca export). Gated on
         MUCA_ADMIN_TOKEN like /mulca model; off entirely without one.
         """
+
+        # Here, not at the top: sqlite needs the optional "storage" extra
+        # (aiosqlite), and the Discord bot imports muca_server without it.
+        from .cognition.memory.sqlite import db_path_for, export_episodic_csv
 
         if not admin_token or not hmac.compare_digest(
             x_admin_token.encode(),
