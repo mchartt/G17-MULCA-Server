@@ -70,4 +70,4 @@ trigger_description: >
 trigger_variables: []
 prompt_template: |
   You were addressed directly. {prompt_fragment}
-  Answer them directly and briefly.
+  Answer them directly.

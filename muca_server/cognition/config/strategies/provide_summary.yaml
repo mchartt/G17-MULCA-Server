@@ -8,8 +8,6 @@ trigger_description: >
 trigger_variables: []
 prompt_template: |
   Someone asked for a summary. {prompt_fragment}
-  A summary request is a reason to be complete, not brief: ignore any
-  guidance above to keep it short.
   Base it on what you remember of this conversation: the project overview,
   the day summaries (when retrieved below), and today's messages. Lead
   with a narrative: how the work developed, in order, with dates for
