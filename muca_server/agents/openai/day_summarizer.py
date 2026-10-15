@@ -56,6 +56,7 @@ argued or decided -- not a role label. Someone who barely contributed reads \
 as barely contributing.
 - Every action point has an owner: a name, "group", or "unassigned".
 - MULCA's contributions go in `mulca`, not in `contributions`.
+- What MULCA says about itself -- what it can or can't do, remember or access -- is not knowledge or a conclusion: leave it out (its abilities change). Only what it contributed to the group's work counts.
 - Ignore lines that are garbled or meaningless; they are likely \
 transcription noise.
 - Leave a field empty rather than pad it. Write in English, whatever \
@@ -84,6 +85,7 @@ don't contain, and don't infer goals or invent action points.
 - Always state the content, never just the topic. Keep names, numbers, \
 titles and dates.
 - Contributions are per person and specific, not role labels.
+- What MULCA said about itself -- what it can or can't do, remember or access -- is not knowledge or a conclusion: leave it out.
 - Leave a field empty rather than pad it. Write in English."""
 
 
