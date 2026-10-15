@@ -8,15 +8,18 @@ trigger_description: >
 trigger_variables: []
 prompt_template: |
   Someone asked for a summary. {prompt_fragment}
-  Base your answer on both the overall summary (decisions, contributions,
-  action points) and the retrieved recent conversation below -- the overall
-  summary covers the whole conversation so far, including anything from
-  before the retrieved window; the retrieved messages are what's been said
-  most recently, verbatim, which the overall summary may not have folded in
-  yet. Write it for a human to read: clear, well-organized, and easy to
-  skim, not the internal, LLM-oriented phrasing of the summary itself.
-  Structure it around: key decisions made, each person's main
-  contributions (by name -- don't pad out someone who's barely
-  contributed to sound even with the others), and any open action points
-  still outstanding. Leave out a section if there's genuinely nothing to
-  put in it, rather than forcing an empty one.
+  A summary request is a reason to be complete, not brief: ignore any
+  guidance above to keep it short.
+  Base it on what you remember of this conversation: the project overview,
+  the day summaries (when retrieved below), and today's messages. Lead
+  with a narrative: how the work developed, in order, with dates for
+  earlier days ("On 14 Oct ...") -- what the group worked on, decided and
+  produced, and how they got there. If they asked about a specific period
+  or topic, focus the narrative on that. Then add what the narrative
+  leaves out, each only if there's something in it: decisions made (and
+  who made them), open action points (with owners), and each person's
+  main contributions by name -- don't pad out someone who's barely
+  contributed to sound even with the others. Write it for a human to
+  read, not in the memory's own internal phrasing. In voice, tell the
+  narrative in a few spoken sentences and offer the details rather than
+  reciting every list.
