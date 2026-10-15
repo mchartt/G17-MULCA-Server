@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import json
 import logging
 import os
 from contextlib import suppress
@@ -124,6 +123,7 @@ PRICES_PER_MILLION = {
     "gpt-realtime-2.1-mini": (0.6, 0.06, 10.0, 0.3, 2.4, 20.0),
     TRANSCRIPTION_MODEL: (2.5, 0.0, 2.5, 0.0, 10.0, 0.0),
     SUMMARY_MODEL: (2.5, 1.25, 0.0, 0.0, 10.0, 0.0),
+    "gpt-5": (1.25, 0.125, 0.0, 0.0, 10.0, 0.0),
     "text-embedding-3-small": (0.02, 0.0, 0.0, 0.0, 0.0, 0.0),
     # web_search.py's default model -- content tokens only; the tool's own
     # per-call fee is tracked separately (record_cost's extra_fee_usd),
@@ -134,16 +134,31 @@ PRICES_PER_MILLION = {
 
 async def trim_context(agent, response, token_limit: int) -> None:
     """
-    Past `token_limit` input tokens, delete the oldest half of the session's
-    messages. The provider accepts truncation.token_limits but does not
-    enforce it (checked on gpt-realtime-2.1-mini, 2026-10-07), so this does.
-    Half at once, so the prompt cache restarts only every several turns;
-    deleting items does not otherwise break it.
+    Past `token_limit` input tokens, the session is full. The provider
+    accepts truncation.token_limits but does not enforce it (checked on
+    gpt-realtime-2.1-mini, 2026-10-07), so this does: it tells the
+    conversation (on_context_full), which renews the memory and clears the
+    session (docs/MEMORY_DESIGN.md). Without anyone to tell -- or if that
+    renewal still hasn't come by 1.5x the limit -- it deletes the oldest
+    half of the session's messages instead, as it always did.
     """
 
     usage = getattr(response, "usage", None)
     tokens = getattr(usage, "input_tokens", None) or 0
     if agent._connection is None or tokens <= token_limit:
+        return
+
+    if agent.on_context_full is not None and tokens <= token_limit * 1.5:
+        if not agent._context_full_reported:
+            agent._context_full_reported = True
+            logger.info(
+                "%s %s session full (%d input tokens > %d): renewing its memory",
+                agent.log_label,
+                type(agent).__name__,
+                tokens,
+                token_limit,
+            )
+            await agent.on_context_full()
         return
 
     drop = agent._item_ids[: len(agent._item_ids) // 2]
@@ -167,6 +182,23 @@ async def trim_context(agent, response, token_limit: int) -> None:
 DEBUG_PROVIDER_TTL_ENV_VAR = "MUCA_DEBUG_PROVIDER_TTL_SECONDS"
 
 
+async def clear_items(agent) -> None:
+    """Delete every message in the agent's live session."""
+
+    if agent._connection is None:
+        return
+    drop, agent._item_ids[:] = list(agent._item_ids), []
+    for item_id in drop:
+        with suppress(Exception):
+            await agent._connection.conversation.item.delete(item_id=item_id)
+    logger.info(
+        "%s %s cleared its %d messages",
+        agent.log_label,
+        type(agent).__name__,
+        len(drop),
+    )
+
+
 def debug_provider_ttl() -> float | None:
     value = os.environ.get(DEBUG_PROVIDER_TTL_ENV_VAR, "").strip()
     return float(value) if value else None
@@ -177,25 +209,6 @@ IGNORABLE_ERROR_CODES = frozenset(
         "response_cancel_not_active",
     }
 )
-
-_MANAGEMENT_SCHEMA = {
-    "name": "management_summary",
-    "schema": {
-        "type": "object",
-        "properties": {
-            "history_summary": {"type": "string"},
-            "participant_roles_summary": {"type": "string"},
-            "action_points": {"type": "string"},
-        },
-        "required": [
-            "history_summary",
-            "participant_roles_summary",
-            "action_points",
-        ],
-        "additionalProperties": False,
-    },
-    "strict": True,
-}
 
 
 class MainAgentOpenAI(MainAgent):
@@ -351,6 +364,9 @@ class MainAgentOpenAI(MainAgent):
         self._receive_task = asyncio.create_task(
             self._receive_loop(),
         )
+
+    async def _clear_context(self) -> None:
+        await clear_items(self)
 
     async def _disconnect(self) -> None:
         logger.info(
@@ -917,120 +933,3 @@ def response_params(
         response["conversation"] = "none"
 
     return response
-
-
-class ChatCompletionsSummarizer:
-    """
-    The management-cycle summarizer, ported from MULCA's `MainLLM`.
-
-    Satisfies cognition.ports.Summarizer structurally. Needs a JSON-schema
-    response for the group cycle, which is not available on the Realtime
-    API, so this stays on Chat Completions independent of which API the
-    reply itself uses.
-    """
-
-    def __init__(
-        self,
-        client: AsyncOpenAI,
-        *,
-        model: str = SUMMARY_MODEL,
-        usage_tracker: UsageTracker | None = None,
-    ) -> None:
-        self._client = client
-        self._model = model
-        self._usage_tracker = usage_tracker
-
-    async def summarize(
-        self,
-        *,
-        transcript: str,
-        previous_summary: str,
-        previous_roles: str,
-        previous_action_points: str,
-    ) -> tuple[str, str, str]:
-        response = await self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are producing an updated internal summary of "
-                        "an ongoing conversation, for another LLM to read "
-                        "-- not a human. Optimize for information density: "
-                        "concrete facts, names, numbers, and decisions, "
-                        "not a list of topics that were merely mentioned. "
-                        "You track three separate things, each its own "
-                        "field, and each kept up to date every cycle:\n\n"
-                        "history_summary: the high-level process of the "
-                        "conversation and its decisions. If something has "
-                        "to be compressed away to stay within budget, "
-                        "prioritize in this order: (1) key decisions and "
-                        "their outcomes, (2) important process information "
-                        "-- who proposed or argued for what, and why a "
-                        "decision was made the way it was, not just what "
-                        "was decided, (3) the most important task-specific "
-                        "details (e.g. agreed-on design choices, numbers, "
-                        "constraints) that people shouldn't have to repeat "
-                        "themselves on later. Target roughly 1500 words.\n\n"
-                        "participant_roles_summary: each participant's main "
-                        "contributions so far, by name -- what they "
-                        "specifically proposed, built, argued for, or "
-                        "decided, not just a role label like \"the "
-                        "designer\". Someone who has barely contributed "
-                        "should read as barely contributing, not be padded "
-                        "out to match the others.\n\n"
-                        "action_points: open, outstanding items raised in "
-                        "the conversation that haven't been resolved yet -- "
-                        "who's doing what next, open questions nobody has "
-                        "answered, things the group agreed to follow up on. "
-                        "Distinct from history_summary's decisions: a "
-                        "decision already made is not an action point "
-                        "unless it also implies unfinished follow-through. "
-                        "Remove an item once the conversation resolves it "
-                        "(decided, done, or dropped) -- this is a live "
-                        "list of what's still open, not a history of "
-                        "everything ever raised."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        "Previous summary (empty if this is the first "
-                        f"cycle):\n{previous_summary or '(none yet)'}\n\n"
-                        "Previous participant/roles summary:\n"
-                        f"{previous_roles or '(none yet)'}\n\n"
-                        "Previous action points:\n"
-                        f"{previous_action_points or '(none yet)'}\n\n"
-                        f"New messages since then:\n{transcript}\n\n"
-                        "Produce updated history_summary, "
-                        "participant_roles_summary, and action_points "
-                        "fields, each incorporating the new messages into "
-                        "its own previous version above (not just the new "
-                        "messages alone -- earlier content that isn't "
-                        "repeated below must still be retained, except "
-                        "action points the new messages resolve)."
-                    ),
-                },
-            ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": _MANAGEMENT_SCHEMA,
-            },
-        )
-
-        usage = getattr(response, "usage", None)
-        if usage is not None:
-            cached = getattr(usage.prompt_tokens_details, "cached_tokens", 0) or 0
-            record_cost(
-                "summary",
-                self._model,
-                (usage.prompt_tokens - cached, cached, 0, 0, usage.completion_tokens, 0),
-                tracker=self._usage_tracker,
-            )
-
-        result = json.loads(response.choices[0].message.content)
-        return (
-            result["history_summary"],
-            result["participant_roles_summary"],
-            result["action_points"],
-        )

@@ -51,6 +51,9 @@ class NoCognition:
     def last_turn_strategy(self) -> str | None:
         return None
 
+    async def on_context_full(self) -> None:
+        pass
+
     async def on_session_event(
         self,
         event: str,

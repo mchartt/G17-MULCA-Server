@@ -25,6 +25,7 @@ from .main_agent import (
     debug_provider_ttl,
     encode_for_provider,
     error_code,
+    clear_items,
     log_usage,
     trim_context,
 )
@@ -34,10 +35,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL = "gpt-realtime-2.1-mini"
 TOOL_NAME = "signal_intervention"
 
-# It responds on every turn, so its context is what is billed most often;
-# it only needs the recent conversation to judge the latest message.
-# Input tokens per judgement, instructions included; see trim_context.
-INTERVENTION_TOKEN_LIMIT = 16_000
+# The same as the main agent's (docs/MEMORY_DESIGN.md): it decides whether
+# MULCA speaks, so it shouldn't know less than the agent that speaks. It
+# does respond on every judged turn, but mostly from cache, where the extra
+# context costs ~$0.0005 per turn. Input tokens per judgement, instructions
+# included; see trim_context.
+INTERVENTION_TOKEN_LIMIT = 24_000
 
 
 class InterventionAgentOpenAI(AuxiliaryAgent):
@@ -128,6 +131,9 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
         self._receive_task = asyncio.create_task(
             self._receive_loop(),
         )
+
+    async def _clear_context(self) -> None:
+        await clear_items(self)
 
     async def _disconnect(self) -> None:
         logger.info(

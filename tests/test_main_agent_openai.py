@@ -750,3 +750,55 @@ def test_the_session_detects_and_transcribes_speech_but_never_answers_alone():
         "type": "audio/pcm",
         "rate": 24_000,
     }
+
+
+async def test_a_full_session_asks_for_its_memory_to_be_renewed_once():
+    # docs/MEMORY_DESIGN.md: instead of the oldest half being dropped with
+    # nothing in its place, the conversation renews the memory.
+    agent = make_agent()
+    agent._connection = FakeConnection()
+    for item_id in ("a", "b", "c", "d"):
+        await agent._interpret(
+            _Event("conversation.item.added", item=_Obj(id=item_id, type="message"))
+        )
+    reported = []
+
+    async def renew():
+        reported.append(True)
+
+    agent.on_context_full = renew
+    full = _Obj(usage=_Obj(input_tokens=MAIN_TOKEN_LIMIT + 1))
+
+    await trim_context(agent, full, MAIN_TOKEN_LIMIT)
+    await trim_context(agent, full, MAIN_TOKEN_LIMIT)
+
+    assert reported == [True]  # once, not every response
+    assert agent._connection.conversation.item.deleted == []
+
+    await agent.clear_context()
+    assert agent._connection.conversation.item.deleted == ["a", "b", "c", "d"]
+    assert agent._item_ids == []
+
+    await trim_context(agent, full, MAIN_TOKEN_LIMIT)
+    assert reported == [True, True]  # re-armed by the clear
+
+
+async def test_a_renewal_that_never_comes_falls_back_to_dropping_half():
+    agent = make_agent()
+    agent._connection = FakeConnection()
+    for item_id in ("a", "b", "c", "d"):
+        await agent._interpret(
+            _Event("conversation.item.added", item=_Obj(id=item_id, type="message"))
+        )
+
+    async def renew():
+        pass  # never clears
+
+    agent.on_context_full = renew
+    await trim_context(
+        agent, _Obj(usage=_Obj(input_tokens=MAIN_TOKEN_LIMIT + 1)), MAIN_TOKEN_LIMIT
+    )
+    overflowing = _Obj(usage=_Obj(input_tokens=int(MAIN_TOKEN_LIMIT * 1.5) + 1))
+    await trim_context(agent, overflowing, MAIN_TOKEN_LIMIT)
+
+    assert agent._connection.conversation.item.deleted == ["a", "b"]

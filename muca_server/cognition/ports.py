@@ -138,6 +138,14 @@ class ConversationPort(Protocol):
     async def tell_observers(self, text: str) -> None:
         ...
 
+    async def reset_agent_contexts(self, observer_memory: str) -> None:
+        """
+        Clear every agent's live session between turns (long-term memory
+        replaces what it held): the observers are re-sent observer_memory
+        straight away; the main agent gets its memory with its next reply.
+        """
+        ...
+
     async def no_reply(self) -> None:
         """
         This turn's judgment concluded nothing fires -- no reply is coming
@@ -148,26 +156,34 @@ class ConversationPort(Protocol):
         ...
 
 
-class Summarizer(Protocol):
+class DaySummarizer(Protocol):
     """
-    Interface which defines how a conversation's history gets condensed.
+    Interface which defines how the log becomes long-term memory
+    (docs/MEMORY_DESIGN.md): one summary per day, and an overview built from
+    the day summaries -- never from a previous summary.
 
     Kept separate from CognitionPolicy because it is the one piece of the
     pipeline that has to call a model: an implementation lives beside a
     provider agent, not in cognition itself.
     """
 
-    async def summarize(
+    async def summarize_day(
         self,
         *,
-        transcript: str,
-        previous_summary: str,
-        previous_roles: str,
-        previous_action_points: str,
-    ) -> tuple[str, str, str]:
+        day: str,
+        log: str,
+        final: bool,
+    ) -> dict:
         """
-        Returns (history_summary, participant_roles_summary, action_points).
+        One day's log as a summary (the format in docs/MEMORY_DESIGN.md).
+        final: the day is over (its lasting summary) rather than "today so
+        far", which is replaced later anyway -- an implementation may use a
+        stronger model for the former.
         """
+        ...
+
+    async def build_overview(self, *, days: list[tuple[str, dict]]) -> dict:
+        """The project so far, from every day summary (day, summary), oldest first."""
         ...
 
 
@@ -270,6 +286,13 @@ class CognitionPolicy(Protocol):
         Something about the session itself happened (a voice call started,
         a wake session ended and why). Logged for analysis only: not a
         turn, nothing to judge or remember.
+        """
+        ...
+
+    async def on_context_full(self) -> None:
+        """
+        An agent's live session hit its token limit: renew its memory (see
+        docs/MEMORY_DESIGN.md) instead of silently dropping the oldest half.
         """
         ...
 

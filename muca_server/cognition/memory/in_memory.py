@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .ports import Embedder
-from .records import EpisodicRecord, MemorySnapshot
+from .records import EpisodicRecord, MemorySnapshot, MemorySummary
 from .similarity import rank_by_similarity
 
 
@@ -17,6 +17,7 @@ class InMemoryEpisodicStore:
         self._embedder = embedder
         # Kept apart from _records, like SQLite's own session_event table.
         self.session_events: list[dict] = []
+        self._summaries: dict[str, list[MemorySummary]] = {}
 
     async def log(self, record: EpisodicRecord) -> None:
         self._records.setdefault(
@@ -97,6 +98,65 @@ class InMemoryEpisodicStore:
         )
 
         return [candidates[i][0] for i in ranked[:limit]]
+
+    async def records_between(
+        self,
+        conversation_id: str,
+        start: float,
+        end: float,
+    ) -> list[EpisodicRecord]:
+        return sorted(
+            (
+                record
+                for record in self._records.get(conversation_id, [])
+                if start <= record.timestamp < end
+                and record.intervention_path
+                not in ("management_cycle", "untranscribed")
+            ),
+            key=lambda record: record.timestamp,
+        )
+
+    async def spoken_timestamps(self, conversation_id: str) -> list[float]:
+        return [
+            record.timestamp
+            for record in self._records.get(conversation_id, [])
+            if record.content
+            and record.intervention_path
+            not in ("management_cycle", "untranscribed")
+        ]
+
+    async def call_ends_between(
+        self,
+        conversation_id: str,
+        start: float,
+        end: float,
+    ) -> list[float]:
+        return [
+            event["timestamp"]
+            for event in self.session_events
+            if event["conversation_id"] == conversation_id
+            and event["event"] == "voice_call_ended"
+            and start <= event["timestamp"] < end
+        ]
+
+    async def save_summary(self, conversation_id: str, summary: MemorySummary) -> None:
+        summaries = self._summaries.setdefault(conversation_id, [])
+        summaries[:] = [
+            s
+            for s in summaries
+            if not (s.kind == summary.kind and s.day == summary.day)
+        ]
+        summaries.append(summary)
+
+    async def delete_summaries(self, conversation_id: str, kind: str) -> None:
+        summaries = self._summaries.setdefault(conversation_id, [])
+        summaries[:] = [s for s in summaries if s.kind != kind]
+
+    async def load_summaries(self, conversation_id: str) -> list[MemorySummary]:
+        return sorted(
+            self._summaries.get(conversation_id, []),
+            key=lambda s: s.day,
+        )
 
 
 class InMemorySnapshotStore:

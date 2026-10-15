@@ -62,7 +62,7 @@ def test_the_wall_clock_gate_vetoes_even_once_enough_messages_have_passed():
 def test_cooldown_survives_a_history_truncation():
     """
     The bug this class exists to prevent: MULCA once measured cooldown
-    against len(history), which the management cycle truncates -- so a
+    against len(history), which the recent window truncates -- so a
     strategy that fired once could look permanently on cooldown, or its
     cooldown could reset early, depending on truncation timing.
     """
@@ -71,9 +71,9 @@ def test_cooldown_survives_a_history_truncation():
     wm.total_message_count = 10
     wm.record_action(strategy.id, 10, now=0.0)
 
-    # A management cycle truncates history but total_message_count is
-    # untouched -- it must be, since it is the cooldown clock.
-    wm.apply_management_cycle("summary", "roles", "action points", tail_size=8)
+    # Trimming to the recent window leaves total_message_count untouched --
+    # it must, since it is the cooldown clock.
+    wm.trim_history(tail_size=8)
     assert len(wm.history) == 0
 
     assert wm.strategy_in_cooldown(strategy, now=20.0)

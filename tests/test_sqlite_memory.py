@@ -443,3 +443,75 @@ async def test_export_since_leaves_out_older_rows(tmp_path):
     )
 
     assert [r["content"] for r in rows] == ["new"]
+
+
+async def test_summaries_are_saved_replaced_per_day_and_loaded_oldest_first(tmp_path):
+    from muca_server.cognition.memory.records import MemorySummary
+
+    store = SqliteEpisodicStore(tmp_path / "test.db")
+    for conversation_id, kind, day, narrative in (
+        ("c1", "day", "2026-10-14", "b"),
+        ("c1", "day", "2026-10-13", "a"),
+        ("c1", "day", "2026-10-14", "b2"),
+        ("c1", "today", "2026-10-15", "t"),
+        ("c2", "day", "2026-10-14", "other"),
+    ):
+        await store.save_summary(
+            conversation_id,
+            MemorySummary(kind=kind, day=day, content={"narrative": narrative}),
+        )
+
+    loaded = await store.load_summaries("c1")
+    assert [(s.kind, s.day, s.content["narrative"]) for s in loaded] == [
+        ("day", "2026-10-13", "a"),
+        ("day", "2026-10-14", "b2"),
+        ("today", "2026-10-15", "t"),
+    ]
+
+    await store.delete_summaries("c1", "today")
+    assert [s.kind for s in await store.load_summaries("c1")] == ["day", "day"]
+
+
+async def test_a_days_records_leave_out_noise_and_old_summary_rows(tmp_path):
+    store = SqliteEpisodicStore(tmp_path / "test.db")
+    await store.log(record(timestamp=10.0, content="said"))
+    await store.log(record(timestamp=11.0, intervention_path="untranscribed"))
+    await store.log(
+        record(timestamp=12.0, intervention_path="management_cycle", history_summary="s")
+    )
+    await store.log(record(timestamp=99.0, content="next day"))
+    await store.log_session_event("c1", "voice_call_ended", timestamp=10.5)
+
+    records = await store.records_between("c1", 0.0, 50.0)
+
+    assert [r.content for r in records] == ["said"]
+    assert await store.spoken_timestamps("c1") == [10.0, 99.0]
+    assert await store.call_ends_between("c1", 0.0, 50.0) == [10.5]
+
+
+async def test_an_old_file_only_gains_the_summary_table(tmp_path):
+    # An older server version keeps working on the same file: its tables
+    # are untouched, summaries live in a table it doesn't know about.
+    from muca_server.cognition.memory.records import MemorySummary
+
+    db_path = tmp_path / "test.db"
+    store = SqliteEpisodicStore(db_path)
+    await store.log(record(content="hi"))
+    async with aiosqlite.connect(db_path) as db:
+        before = await (await db.execute("PRAGMA table_info(episodic_log)")).fetchall()
+
+    await store.save_summary(
+        "c1", MemorySummary(kind="overview", day="2026-10-14", content={})
+    )
+
+    async with aiosqlite.connect(db_path) as db:
+        after = await (await db.execute("PRAGMA table_info(episodic_log)")).fetchall()
+        tables = {
+            row[0]
+            for row in await (
+                await db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            ).fetchall()
+        }
+    assert before == after
+    assert "memory_summary" in tables
+    assert [r.content for r in await store.recall_recent("c1", 50)] == ["hi"]

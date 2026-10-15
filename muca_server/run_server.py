@@ -24,11 +24,12 @@ from openai import AsyncOpenAI
 from .agents import MainAgentOptions
 from .agents.conversation import DEFAULT_SILENCE_TIMEOUT_MS
 from .agents.openai import (
-    ChatCompletionsSummarizer,
     OpenAIAgentFactory,
+    OpenAIDaySummarizer,
     OpenAIEmbedder,
     OpenAIWebSearcher,
 )
+from .agents.openai.day_summarizer import DAILY_SUMMARY_MODEL
 from .agents.openai.model_settings import ModelSettings
 from .usage_report import UsageTracker
 from .cognition import CoalaPolicy
@@ -220,19 +221,22 @@ def build_app():
         path = db_path_for(conversation_id, base_dir=db_dir)
         return SqliteEpisodicStore(path, embedder=embedder), SqliteSnapshotStore(path)
 
-    # Without this, the management cycle never runs at
-    # all -- CoalaPolicy only calls it when a summarizer is configured, and
-    # this was never wired in before, so history_summary/
-    # participant_roles_summary never updated and wm.history never
-    # truncated in a real deployment.
-    summarizer = ChatCompletionsSummarizer(client, usage_tracker=usage_tracker)
+    # Long-term memory (docs/MEMORY_DESIGN.md): without it, nothing is
+    # summarized and the agents only ever know today. The once-a-day
+    # summaries run on a stronger model, MUCA_DAILY_SUMMARY_MODEL to
+    # override.
+    day_summarizer = OpenAIDaySummarizer(
+        client,
+        daily_model=os.environ.get("MUCA_DAILY_SUMMARY_MODEL") or DAILY_SUMMARY_MODEL,
+        usage_tracker=usage_tracker,
+    )
     web_searcher = OpenAIWebSearcher(client, usage_tracker=usage_tracker)
 
     def policy_factory(context) -> CoalaPolicy:
         return CoalaPolicy(
             strategy_store=policy_strategy_store,
             store_factory=store_factory,
-            summarizer=summarizer,
+            day_summarizer=day_summarizer,
             embedder=embedder,
             web_searcher=web_searcher,
             assistant_name=ASSISTANT_NAME,

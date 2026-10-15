@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 from muca_server.cognition import CoalaPolicy, InterventionSignal, Utterance
 from muca_server.cognition.policy import INTERIM_ACK_MAX_TOKENS
@@ -7,6 +8,7 @@ from muca_server.cognition.memory import (
     InMemoryEpisodicStore,
     InMemorySnapshotStore,
     MemorySnapshot,
+    MemorySummary,
     StoredUtterance,
 )
 from muca_server.cognition.strategies import Strategy, StrategyStore
@@ -95,6 +97,7 @@ class FakePort:
         self.instruction_max_tokens: list[int | None] = []
         self.observer_messages: list[str] = []
         self.no_reply_count = 0
+        self.resets: list[str] = []
 
     @property
     def conversation_id(self) -> str:
@@ -128,6 +131,9 @@ class FakePort:
 
     async def no_reply(self) -> None:
         self.no_reply_count += 1
+
+    async def reset_agent_contexts(self, observer_memory: str) -> None:
+        self.resets.append(observer_memory)
 
 
 def make_policy(**kwargs) -> tuple[CoalaPolicy, FakePort]:
@@ -616,13 +622,39 @@ async def test_provide_summary_always_retrieves_regardless_of_the_signal():
     assert "the sky is blue" in port.instructions[0]
 
 
-async def test_provide_summary_always_includes_the_overall_summary_even_once_stale():
-    # summary_block is normally sent only once per connection (the live
-    # session already natively remembers the raw messages that went into
-    # it) -- but an explicit "summarize this" request benefits from the
-    # compressed overview (and contributions/action points) every time,
-    # since the retrieved raw tail alone can miss anything already folded
-    # into the summary by an earlier management cycle.
+OVERVIEW_CONTENT = {
+    "narrative": "the group discussed the deadline",
+    "decisions": [
+        {
+            "decision": "deadline is Fri 24 Oct",
+            "decided_by": ["Ada"],
+            "rationale": "the course schedule",
+            "date": "14 Oct",
+            "changed_on": "",
+        }
+    ],
+    "action_points": [
+        {"owner": "Grace", "task": "send the forecast link", "status": "open", "raised_on": "14 Oct"}
+    ],
+    "conclusions": [],
+    "knowledge": [],
+    "contributions": [{"name": "Ada", "items": ["proposed the deadline"]}],
+    "decision_making": [],
+    "process_notes": [],
+    "mulca": [],
+}
+
+
+async def save_overview(store, conversation_id):
+    await store.save_summary(
+        conversation_id,
+        MemorySummary(kind="overview", day="2026-10-14", content=OVERVIEW_CONTENT),
+    )
+
+
+async def test_provide_summary_always_includes_the_memory_even_once_sent():
+    # The memory goes with a session's first reply only (the live session
+    # keeps it) -- but a recap is exactly when it's worth sending again.
     strategies = StrategyStore(
         {
             "respond_when_addressed": Strategy(
@@ -637,25 +669,19 @@ async def test_provide_summary_always_includes_the_overall_summary_even_once_sta
             ),
         }
     )
-    policy = CoalaPolicy(strategy_store=strategies)
-    port = FakePort()
+    episodic = InMemoryEpisodicStore()
+    policy, port = make_policy(strategy_store=strategies, episodic_store=episodic)
+    await save_overview(episodic, port.conversation_id)
     await policy.start(port)
-    policy._wm.history_summary = "the group discussed the deadline"
-    policy._wm.participant_roles_summary = "Ada: proposed the deadline"
-    policy._wm.action_points = "Grace to send the forecast link"
 
-    # An ordinary turn first -- consumes needs_full_context for this
-    # connection, same as any other reply would.
     await policy.on_utterance(make_utterance(content="hi"))
     await policy.on_intervention_signal(
         object(),
         InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
     )
+    await policy.on_assistant_output("hello", interrupted=False)
     assert "the group discussed the deadline" in port.instructions[0]
 
-    # A later provide_summary turn still gets it, even though a plain
-    # turn at this point would not (needs_full_context is long since
-    # consumed).
     await policy.on_utterance(make_utterance(content="can you summarize?"))
     await policy.on_intervention_signal(
         object(),
@@ -664,7 +690,8 @@ async def test_provide_summary_always_includes_the_overall_summary_even_once_sta
 
     assert "the group discussed the deadline" in port.instructions[1]
     assert "Ada: proposed the deadline" in port.instructions[1]
-    assert "Grace to send the forecast link" in port.instructions[1]
+    assert "[Grace] send the forecast link (raised 14 Oct)" in port.instructions[1]
+    assert "14 Oct: deadline is Fri 24 Oct" in port.instructions[1]
 
 
 async def test_provide_summary_retrieves_text_and_voice_turns_together():
@@ -892,39 +919,6 @@ async def test_an_assistant_reply_is_labeled_by_name_not_user_0():
     assert policy._wm.history[-1].label() == "MULCA"
 
 
-async def test_the_summarizer_never_sees_the_assistants_own_turns():
-    class RecordingSummarizer(FakeSummarizer):
-        def __init__(self):
-            self.seen_transcripts = []
-
-        async def summarize(
-            self, *, transcript, previous_summary, previous_roles, previous_action_points
-        ):
-            self.seen_transcripts.append(transcript)
-            return await super().summarize(
-                transcript=transcript,
-                previous_summary=previous_summary,
-                previous_roles=previous_roles,
-                previous_action_points=previous_action_points,
-            )
-
-    summarizer = RecordingSummarizer()
-    policy, port = make_policy(
-        assistant_name="MULCA",
-        summarizer=summarizer,
-        management_cycle_interval=1,
-    )
-    await policy.start(port)
-
-    await policy.on_utterance(make_utterance(content="hi MULCA"))
-    await policy.on_assistant_output("Hello there.", interrupted=False)
-    await policy.on_intervention_signal(object(), None)
-
-    assert "hi MULCA" in summarizer.seen_transcripts[0]
-    assert "Hello there." not in summarizer.seen_transcripts[0]
-    assert "MULCA:" not in summarizer.seen_transcripts[0]
-
-
 async def test_a_present_but_silent_participant_reaches_trigger_variables():
     # Exercises the real wiring (port.participants() -> on_utterance ->
     # compute_trigger_variables), not just the pure function in isolation --
@@ -968,13 +962,6 @@ async def test_text_and_voice_participation_are_measured_separately():
     assert variables["voice_participant_message_counts"] == {"Bob": 1, "Eve": 0}
 
 
-class FakeSummarizer:
-    async def summarize(
-        self, *, transcript, previous_summary, previous_roles, previous_action_points
-    ):
-        return "a summary", "some roles", "some action points"
-
-
 async def test_store_factory_is_called_with_conversation_id_once_start_runs():
     seen_conversation_ids = []
 
@@ -995,43 +982,34 @@ async def test_store_factory_is_called_with_conversation_id_once_start_runs():
     assert seen_conversation_ids == ["channel-42"]
 
 
-async def test_a_management_cycle_saves_a_snapshot_not_just_close():
-    snapshot_store = InMemorySnapshotStore()
-    policy, port = make_policy(
-        summarizer=FakeSummarizer(),
-        snapshot_store=snapshot_store,
-        management_cycle_interval=1,
-    )
-    await policy.start(port)
-
-    await policy.on_utterance(make_utterance())
-    await policy.on_intervention_signal(object(), None)
-
-    saved = await snapshot_store.load(port.conversation_id)
-
-    assert saved is not None
-    assert saved.history_summary == "a summary"
-    assert saved.participant_roles_summary == "some roles"
-    assert saved.action_points == "some action points"
-
-
-async def test_the_verbatim_tail_is_bounded_by_management_cycle_interval_not_a_fixed_constant():
-    policy, port = make_policy(
-        summarizer=FakeSummarizer(),
-        management_cycle_interval=3,
-    )
+async def test_the_verbatim_history_is_a_rolling_recent_window():
+    policy, port = make_policy(recent_window=3)
     await policy.start(port)
 
     for i in range(5):
         await policy.on_utterance(make_utterance(content=f"message {i}"))
         await policy.on_intervention_signal(object(), None)
 
-    # 5 messages, cycle every 3rd -> one cycle ran (at message 3), truncating
-    # to the last 3 -- then 2 more messages appended after that.
-    assert len(policy._wm.history) <= 3 + 2
+    assert [u.content for u in policy._wm.history] == [
+        "message 2",
+        "message 3",
+        "message 4",
+    ]
 
 
-async def test_a_dm_from_a_recognized_participant_mirrors_the_group_summary():
+async def test_participation_is_measured_over_its_own_window():
+    policy, port = make_policy(participation_window=2)
+    await policy.start(port)
+
+    for name in ("Ada", "Ada", "Ada", "Grace", "Grace"):
+        await policy.on_utterance(make_utterance(name=name, speaker_id=hash(name)))
+        await policy.on_intervention_signal(object(), None)
+
+    # Only the last two turns, both Grace's.
+    assert policy._wm.trigger_variables["participant_message_counts"] == {"Grace": 2}
+
+
+async def test_a_dm_from_a_recognized_participant_reads_the_group_memory():
     stores: dict[str, tuple] = {}
 
     def store_factory(conversation_id):
@@ -1040,14 +1018,8 @@ async def test_a_dm_from_a_recognized_participant_mirrors_the_group_summary():
             (InMemoryEpisodicStore(), InMemorySnapshotStore()),
         )
 
-    _, group_snapshot_store = store_factory("instance:team-alpha")
-    await group_snapshot_store.save(
-        "instance:team-alpha",
-        MemorySnapshot(
-            history_summary="the group discussed the deadline",
-            participant_roles_summary="Ada leads, Grace is quiet",
-        ),
-    )
+    group_store, _ = store_factory("instance:team-alpha")
+    await save_overview(group_store, "instance:team-alpha")
 
     policy, port = make_policy(
         store_factory=store_factory,
@@ -1060,10 +1032,13 @@ async def test_a_dm_from_a_recognized_participant_mirrors_the_group_summary():
     await policy.start(port)
     await policy.on_utterance(make_utterance())
 
-    # Not a separate field -- the exact same fields/rendering a group uses
-    # for its own memory (_render_prompt's summary_block).
-    assert policy._wm.history_summary == "the group discussed the deadline"
-    assert policy._wm.participant_roles_summary == "Ada leads, Grace is quiet"
+    memory = policy.memory_text()
+    assert "the group discussed the deadline" in memory
+    assert "Ada: proposed the deadline" in memory
+    # Read-only: nothing written to the group.
+    assert [s.kind for s in await group_store.load_summaries("instance:team-alpha")] == [
+        "overview"
+    ]
 
 
 async def test_linked_group_summary_refreshes_on_every_message_not_just_once():
@@ -1139,23 +1114,26 @@ async def test_a_group_conversation_is_unaffected_by_linked_conversation_id():
     assert policy._wm.participant_roles_summary == ""
 
 
-async def test_a_dm_gets_no_summarization_of_its_own_just_a_history_trim():
+async def test_a_dm_gets_no_summaries_of_its_own_just_a_recent_window():
+    summarizer = FakeDaySummarizer()
+    episodic = InMemoryEpisodicStore()
     policy, port = make_policy(
-        summarizer=FakeSummarizer(),
+        episodic_store=episodic,
+        day_summarizer=summarizer,
         port=FakePort(conversation_id="dm:42", is_private=True),
-        management_cycle_interval=2,
+        recent_window=2,
     )
     await policy.start(port)
 
     for i in range(4):
         await policy.on_utterance(make_utterance(content=f"message {i}"))
         await policy.on_intervention_signal(object(), None)
+    await policy.on_context_full()
+    await policy.wait_for_memory()
 
-    # No summarizer call happened for this DM (FakeSummarizer.summarize
-    # would have overwritten history_summary with "a summary" if it had) --
-    # trimming is the only thing that happens, bounding raw history.
-    assert policy._wm.history_summary == ""
-    assert len(policy._wm.history) <= 2 + 1
+    assert summarizer.calls == []
+    assert await episodic.load_summaries("dm:42") == []
+    assert len(policy._wm.history) == 2
 
 
 async def test_the_prompt_includes_this_conversation_verbatim_not_just_the_summary():
@@ -1201,38 +1179,40 @@ async def test_the_verbatim_tail_is_not_resent_on_a_later_triggered_reply():
     assert "Recent messages in this conversation" not in port.instructions[1]
 
 
-async def test_a_groups_own_summary_is_sent_once_then_not_again():
+async def test_a_groups_memory_is_sent_once_then_again_after_a_context_reset():
     """
-    A group's own live session already has everything its summary covers
-    (it was there when it was said), so resending it every turn is just
-    waste -- unlike a DM reading a linked group's summary, which has no
-    other way to see that content at all (see the DM test below).
+    The live session keeps the memory once it has it, so it isn't resent
+    with every reply -- until its context is renewed (it was full), which
+    starts it over from the memory.
     """
 
-    policy, port = make_policy()
+    episodic = InMemoryEpisodicStore()
+    policy, port = make_policy(episodic_store=episodic)
+    await save_overview(episodic, port.conversation_id)
     await policy.start(port)
-    policy._wm.history_summary = "Previously, the team discussed the deadline."
 
-    await policy.on_utterance(make_utterance(content="first message"))
-    await policy.on_intervention_signal(
-        object(),
-        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
-    )
-    await policy.on_assistant_output("ok", interrupted=False)
+    async def reply(text):
+        await policy.on_utterance(make_utterance(content=text))
+        await policy.on_intervention_signal(
+            object(),
+            InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
+        )
+        await policy.on_assistant_output("ok", interrupted=False)
 
-    await policy.on_utterance(make_utterance(content="second message"))
-    await policy.on_intervention_signal(
-        object(),
-        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
-    )
+    await reply("first message")
+    await reply("second message")
+    assert "the group discussed the deadline" in port.instructions[0]
+    assert "the group discussed the deadline" not in port.instructions[1]
 
-    assert "Previously, the team discussed the deadline." in port.instructions[0]
-    assert "Previously, the team discussed the deadline." not in port.instructions[1]
+    await policy.on_context_full()
+    await policy.wait_for_memory()
+    await reply("third message")
 
-    # The live session hears every message itself after connecting, so the
-    # verbatim tail is not resent (and billed again) with every reply.
-    assert "Recent messages in this conversation" in port.instructions[0]
-    assert "Recent messages in this conversation" not in port.instructions[1]
+    assert "the group discussed the deadline" in port.resets[-1]
+    assert "the group discussed the deadline" in port.instructions[2]
+    # Today, verbatim, MULCA's own replies included.
+    assert "Ada (text): second message" in port.instructions[2]
+    assert "MULCA (text): ok" in port.instructions[2] or "(text): ok" in port.instructions[2]
 
 
 def make_dm_policy():
@@ -1369,15 +1349,11 @@ async def test_a_dms_full_context_gate_survives_a_reconnect():
     assert "The team discussed the deadline." not in second_port.instructions[0]
 
 
-async def test_a_groups_snapshot_saves_before_the_first_management_cycle():
+async def test_a_groups_snapshot_saves_after_every_turn():
     # The bug this covers: "Mats says X in the group, then immediately DMs
-    # about X" failing because nothing had been saved yet -- a snapshot only
-    # existed once every management_cycle_interval messages, or on close().
+    # about X" failing because nothing had been saved yet.
     snapshot_store = InMemorySnapshotStore()
-    policy, port = make_policy(
-        snapshot_store=snapshot_store,
-        management_cycle_interval=8,
-    )
+    policy, port = make_policy(snapshot_store=snapshot_store)
     await policy.start(port)
 
     await policy.on_utterance(make_utterance(content="the number is 6"))
@@ -1485,7 +1461,46 @@ async def test_a_dm_prompt_includes_the_linked_groups_verbatim_tail():
         InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
     )
 
-    assert "Mats: the number is 6" in port.instructions[0]
+    # Nothing logged yet today: the group's saved recent window stands in.
+    assert "Mats (text): the number is 6" in port.instructions[0]
+
+
+async def test_a_dm_prompt_includes_the_linked_groups_day_so_far():
+    stores: dict[str, tuple] = {}
+
+    def store_factory(conversation_id):
+        return stores.setdefault(
+            conversation_id,
+            (InMemoryEpisodicStore(), InMemorySnapshotStore()),
+        )
+
+    group_store, _ = store_factory("instance:team-alpha")
+    await group_store.log(
+        EpisodicRecord(
+            timestamp=time.time(),
+            conversation_id="instance:team-alpha",
+            intervention_path="none",
+            speaker="Mats",
+            content="the number is 6",
+        )
+    )
+
+    policy, port = make_policy(
+        store_factory=store_factory,
+        port=FakePort(
+            conversation_id="dm:1",
+            is_private=True,
+            linked_conversation_id="instance:team-alpha",
+        ),
+    )
+    await policy.start(port)
+    await policy.on_utterance(make_utterance(content="what is the number?"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
+    )
+
+    assert "Mats (text): the number is 6" in port.instructions[0]
 
 
 async def test_episodic_log_attributes_to_the_pending_utterance_not_a_later_one():
@@ -1555,27 +1570,18 @@ async def test_observer_catchup_text_carries_restored_history():
     assert "the deadline is friday" in catchup
 
 
-async def test_observer_catchup_text_also_carries_the_compressed_summary():
-    """
-    Found live: this used to send only the raw tail, silently dropping
-    everything a management cycle had already compressed away -- a
-    reconnecting observer had zero knowledge of anything further back than
-    its last ~management_cycle_interval messages, unlike the main agent,
-    which always gets both the summary and the tail.
-    """
-
-    policy, port = make_policy()
+async def test_observer_catchup_text_carries_the_overview_and_today():
+    episodic = InMemoryEpisodicStore()
+    policy, port = make_policy(episodic_store=episodic)
+    await save_overview(episodic, port.conversation_id)
     await policy.start(port)
-    policy._wm.history_summary = "Previously, the team discussed the deadline."
-    policy._wm.participant_roles_summary = "Ada: proposed the deadline"
-    policy._wm.action_points = "Grace to send the forecast link"
     await policy.on_utterance(make_utterance(content="let's also fix the budget"))
 
     catchup = policy.observer_catchup_text()
 
-    assert "Previously, the team discussed the deadline." in catchup
+    assert "the group discussed the deadline" in catchup
     assert "Ada: proposed the deadline" in catchup
-    assert "Grace to send the forecast link" in catchup
+    assert "[Grace] send the forecast link" in catchup
     assert "let's also fix the budget" in catchup
 
 
@@ -2044,52 +2050,217 @@ async def test_a_session_event_is_logged_apart_from_memory():
     assert episodic._records.get(port.conversation_id, []) == []
 
 
-class CountingSummarizer(FakeSummarizer):
-    def __init__(self):
-        self.calls = 0
-
-    async def summarize(self, **kwargs):
-        self.calls += 1
-        return await super().summarize(**kwargs)
-
-
-async def test_turns_that_dont_advance_the_count_dont_rerun_the_cycle():
-    # Found live: a noise turn (no transcript, so never on_utterance) is
-    # still judged and finished, at the same message count -- the cycle ran
-    # again on what it had just summarized, compressing it each time.
-    summarizer = CountingSummarizer()
-    policy, port = make_policy(summarizer=summarizer, management_cycle_interval=2)
-    await policy.start(port)
-
-    for i in range(2):
-        await policy.on_utterance(make_utterance(content=f"message {i}"))
-        await policy.on_intervention_signal(object(), None)
-    assert summarizer.calls == 1
-
-    for _ in range(3):  # noise turns, judged, at the same count
-        await policy.on_intervention_signal(object(), None)
-    assert summarizer.calls == 1
-
-    for i in range(2):
-        await policy.on_utterance(make_utterance(content=f"more {i}"))
-        await policy.on_intervention_signal(object(), None)
-    assert summarizer.calls == 2
-
-
-async def test_a_restart_at_a_cycle_count_doesnt_rerun_that_cycle():
-    summarizer = CountingSummarizer()
+async def test_a_group_session_after_a_restart_gets_the_summary_again():
+    # Found live: the group's snapshot still held when a *previous*
+    # connection had been sent the summary, so a restarted session --
+    # which has never seen it -- was never sent it at all.
     snapshot_store = InMemorySnapshotStore()
-    policy, port = make_policy(
-        summarizer=summarizer,
-        snapshot_store=snapshot_store,
-        management_cycle_interval=2,
-    )
+    port = FakePort(conversation_id="instance:team-alpha")
     await snapshot_store.save(
         port.conversation_id,
-        MemorySnapshot(history_summary="earlier", total_message_count=4),
+        MemorySnapshot(
+            history_summary="The team agreed on Friday's deadline.",
+            full_context_sent_at=1000.0,
+        ),
+    )
+    policy, _ = make_policy(snapshot_store=snapshot_store, port=port)
+    await policy.start(port)
+
+    await policy.on_utterance(make_utterance(content="what did we agree?"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="respond_when_addressed", prompt_fragment=""),
+    )
+
+    assert "The team agreed on Friday's deadline." in port.instructions[0]
+
+
+# ----------------------------------------------------------------------
+# Long-term memory by day (docs/MEMORY_DESIGN.md)
+# ----------------------------------------------------------------------
+
+
+class FakeDaySummarizer:
+    def __init__(self, *, fail=False):
+        self.calls: list[tuple] = []
+        self.fail = fail
+
+    async def summarize_day(self, *, day, log, final):
+        self.calls.append(("day", day, final, log))
+        if self.fail:
+            raise RuntimeError("summary failed")
+        return {"narrative": f"summary of {day}", "decisions": [], "action_points": []}
+
+    async def build_overview(self, *, days):
+        self.calls.append(("overview", [day for day, _ in days]))
+        if self.fail:
+            raise RuntimeError("summary failed")
+        return {"narrative": "overview of " + ", ".join(day for day, _ in days)}
+
+
+def logged(conversation_id, when, content, *, speaker="Ada", reply=None):
+    return EpisodicRecord(
+        timestamp=when,
+        conversation_id=conversation_id,
+        intervention_path="strategy" if reply else "none",
+        speaker=speaker,
+        content=content,
+        assistant_output=reply,
+    )
+
+
+DAY = 24 * 3600
+
+
+async def test_past_days_are_backfilled_and_the_overview_built_from_them():
+    episodic = InMemoryEpisodicStore()
+    summarizer = FakeDaySummarizer()
+    policy, port = make_policy(episodic_store=episodic, day_summarizer=summarizer)
+    now = time.time()
+    for when, text in ((now - 3 * DAY, "kickoff"), (now - DAY, "prototype"), (now, "today")):
+        await episodic.log(logged(port.conversation_id, when, text, reply="noted"))
+
+    await policy.start(port)
+    await policy.wait_for_memory()
+
+    days = [c for c in summarizer.calls if c[0] == "day"]
+    assert len(days) == 2  # not today
+    assert all(final for _, _, final, _ in days)
+    assert "Ada (text): kickoff" in days[0][3]
+    assert "MULCA (text): noted" in days[0][3]  # MULCA's part included
+    overview = [c for c in summarizer.calls if c[0] == "overview"]
+    assert overview == [("overview", [days[0][1], days[1][1]])]
+    assert "overview of" in policy.memory_text()
+    assert "Ada (text): today" in policy.memory_text()  # today, verbatim
+    assert port.resets  # observers renewed with the new memory
+
+    # A restart doesn't redo any of it.
+    again = FakeDaySummarizer()
+    policy2, port2 = make_policy(episodic_store=episodic, day_summarizer=again, port=port)
+    await policy2.start(port2)
+    await policy2.wait_for_memory()
+    assert again.calls == []
+
+
+async def test_a_failed_summary_keeps_whats_there_and_is_retried_next_time():
+    episodic = InMemoryEpisodicStore()
+    policy, port = make_policy(episodic_store=episodic, day_summarizer=FakeDaySummarizer(fail=True))
+    await episodic.log(logged(port.conversation_id, time.time() - DAY, "yesterday"))
+
+    await policy.start(port)
+    await policy.wait_for_memory()
+
+    assert await episodic.load_summaries(port.conversation_id) == []
+    assert port.resets == []
+
+    retry = FakeDaySummarizer()
+    policy2, port2 = make_policy(episodic_store=episodic, day_summarizer=retry, port=port)
+    await policy2.start(port2)
+    await policy2.wait_for_memory()
+    assert [c[0] for c in retry.calls] == ["day", "overview"]
+
+
+async def test_a_new_day_starts_today_over_and_rolls_yesterday_into_memory():
+    episodic = InMemoryEpisodicStore()
+    summarizer = FakeDaySummarizer()
+    policy, port = make_policy(episodic_store=episodic, day_summarizer=summarizer)
+    await policy.start(port)
+    await policy.wait_for_memory()
+    await episodic.log(logged(port.conversation_id, time.time() - DAY, "late last night"))
+    policy._today_day = "2000-01-01"  # the session has been open since "yesterday"
+    policy._today_lines = ["Ada (text): late last night"]
+
+    await policy.on_utterance(make_utterance(content="good morning"))
+    await policy.wait_for_memory()
+
+    assert policy._today_lines[-1] == "Ada (text): good morning"
+    assert "late last night" not in "\n".join(policy._today_lines)
+    assert [c[0] for c in summarizer.calls] == ["day", "overview"]
+
+
+async def test_a_full_context_summarizes_today_when_it_no_longer_fits():
+    episodic = InMemoryEpisodicStore()
+    summarizer = FakeDaySummarizer()
+    policy, port = make_policy(
+        episodic_store=episodic,
+        day_summarizer=summarizer,
+        today_verbatim_tokens=10,
+    )
+    await policy.start(port)
+    await policy.wait_for_memory()
+    for i in range(6):
+        await policy.on_utterance(make_utterance(content=f"a fairly long message number {i}"))
+        await policy.on_intervention_signal(object(), None)
+
+    await policy.on_context_full()
+    await policy.wait_for_memory()
+
+    assert summarizer.calls[-1][0] == "day" and summarizer.calls[-1][2] is False
+    memory = policy.memory_text()
+    assert "so far, summarized" in memory
+    assert "Most recent messages, verbatim" in memory
+    assert "a fairly long message number 5" in memory
+    assert port.resets and "so far, summarized" in port.resets[-1]
+
+
+async def test_a_fresh_session_gets_all_of_today_verbatim():
+    episodic = InMemoryEpisodicStore()
+    port = FakePort()
+    now = time.time()
+    for i in range(3):
+        await episodic.log(logged(port.conversation_id, now - 60 + i, f"earlier {i}"))
+    policy, _ = make_policy(episodic_store=episodic, port=port)
+
+    await policy.start(port)
+
+    memory = policy.memory_text()
+    assert "so far, verbatim" in memory
+    assert all(f"Ada (text): earlier {i}" in memory for i in range(3))
+
+
+async def test_the_old_running_summary_shows_until_the_first_overview():
+    episodic = InMemoryEpisodicStore()
+    snapshot_store = InMemorySnapshotStore()
+    policy, port = make_policy(episodic_store=episodic, snapshot_store=snapshot_store)
+    await snapshot_store.save(
+        port.conversation_id,
+        MemorySnapshot(history_summary="the old running summary"),
+    )
+    await policy.start(port)
+    assert "the old running summary" in policy.memory_text()
+
+    await save_overview(episodic, port.conversation_id)
+    policy2, port2 = make_policy(episodic_store=episodic, snapshot_store=snapshot_store, port=port)
+    await policy2.start(port2)
+    assert "the old running summary" not in policy2.memory_text()
+    # Still saved untouched, for an older server version.
+    await policy2.close()
+    assert (await snapshot_store.load(port.conversation_id)).history_summary == "the old running summary"
+
+
+async def test_provide_summary_retrieves_the_day_summaries():
+    strategies = StrategyStore(
+        {
+            "provide_summary": Strategy(
+                id="provide_summary",
+                trigger_description="",
+                prompt_template="Summarize. {prompt_fragment}",
+            ),
+        }
+    )
+    episodic = InMemoryEpisodicStore()
+    policy, port = make_policy(strategy_store=strategies, episodic_store=episodic)
+    await episodic.save_summary(
+        port.conversation_id,
+        MemorySummary(kind="day", day="2026-10-13", content={"narrative": "Monday's work"}),
     )
     await policy.start(port)
 
-    await policy.on_intervention_signal(object(), None)  # noise turn first
+    await policy.on_utterance(make_utterance(content="what did we do before today?"))
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="provide_summary", prompt_fragment=""),
+    )
 
-    assert summarizer.calls == 0
+    assert "Day summary, Tuesday 13 October 2026" in port.instructions[0]
+    assert "Monday's work" in port.instructions[0]

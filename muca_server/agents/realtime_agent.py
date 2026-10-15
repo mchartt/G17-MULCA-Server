@@ -50,6 +50,12 @@ class RealtimeAgent:
         # a disconnect() asked for here.
         self.on_connection_lost: ConnectionLostHandler | None = None
 
+        # The live session reached its token limit (once, until the next
+        # clear_context): the conversation renews its memory instead of the
+        # oldest half being dropped with nothing in its place.
+        self.on_context_full: Callable[[], Awaitable[None]] | None = None
+        self._context_full_reported = False
+
     @property
     def is_connected(self) -> bool:
         return self._connected
@@ -155,6 +161,12 @@ class RealtimeAgent:
         if self.on_connection_lost is not None:
             await self.on_connection_lost(self)
 
+    async def clear_context(self) -> None:
+        """Start the live session over: everything in it so far is dropped."""
+
+        self._context_full_reported = False
+        await self._clear_context()
+
     # ------------------------------------------------------------------
     # Provider hooks — override in a provider-specific subclass.
     # ------------------------------------------------------------------
@@ -163,6 +175,9 @@ class RealtimeAgent:
         logger.info("No provider configured, connect() is a no-op")
 
     async def _disconnect(self) -> None:
+        pass
+
+    async def _clear_context(self) -> None:
         pass
 
     async def _send_anything(self, json_payload: str) -> None:

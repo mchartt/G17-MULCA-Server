@@ -11,9 +11,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from muca_server.agents.openai.day_summarizer import OpenAIDaySummarizer
 from muca_server.agents.openai.embeddings import OpenAIEmbedder
 from muca_server.agents.openai.main_agent import (
-    ChatCompletionsSummarizer,
     MainAgentOpenAI,
     record_cost,
 )
@@ -118,9 +118,7 @@ async def test_the_summarizer_and_the_embedder_report_their_calls():
         completion_tokens=200,
         prompt_tokens_details=SimpleNamespace(cached_tokens=400),
     )
-    content = json.dumps(
-        {"history_summary": "h", "participant_roles_summary": "r", "action_points": "a"},
-    )
+    content = json.dumps({"narrative": "n"})
 
     async def chat_create(**kwargs):
         message = SimpleNamespace(content=content)
@@ -140,11 +138,10 @@ async def test_the_summarizer_and_the_embedder_report_their_calls():
         embeddings=SimpleNamespace(create=embed_create),
     )
 
-    await ChatCompletionsSummarizer(client).summarize(
-        transcript="Ada: hi",
-        previous_summary="",
-        previous_roles="",
-        previous_action_points="",
+    await OpenAIDaySummarizer(client).summarize_day(
+        day="2026-10-14",
+        log="Ada (text): hi",
+        final=False,
     )
     await OpenAIEmbedder(client).embed("hi")
     await asyncio.sleep(0)

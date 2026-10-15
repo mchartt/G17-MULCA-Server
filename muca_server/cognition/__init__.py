@@ -5,8 +5,8 @@ from .policy import CoalaPolicy
 from .ports import (
     CognitionPolicy,
     ConversationPort,
+    DaySummarizer,
     InterventionSignal,
-    Summarizer,
     Utterance,
 )
 from .strategies import Strategy, StrategyStore
@@ -17,11 +17,11 @@ __all__ = [
     "CoalaPolicy",
     "CognitionPolicy",
     "ConversationPort",
+    "DaySummarizer",
     "InterventionSignal",
     "NoCognition",
     "Strategy",
     "StrategyStore",
-    "Summarizer",
     "Utterance",
     "WorkingMemory",
     "check_forced_intervention",

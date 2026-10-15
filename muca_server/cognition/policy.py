@@ -13,18 +13,32 @@ import json
 import logging
 import time
 from contextlib import suppress
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from collections.abc import Callable
 from uuid import UUID
 
 from .forced_intervention import check_forced_intervention
 from .memory.in_memory import InMemoryEpisodicStore, InMemorySnapshotStore
 from .memory.ports import Embedder, EpisodicStore, SnapshotStore
-from .memory.records import EpisodicRecord, MemorySnapshot, StoredUtterance
+from .memory.day_memory import (
+    DAY_TZ,
+    day_bounds,
+    day_heading,
+    day_log_lines,
+    day_of,
+    estimate_tokens,
+    render_summary,
+)
+from .memory.records import (
+    EpisodicRecord,
+    MemorySnapshot,
+    MemorySummary,
+    StoredUtterance,
+)
 from .ports import (
     ConversationPort,
+    DaySummarizer,
     InterventionSignal,
-    Summarizer,
     Utterance,
     WebSearcher,
 )
@@ -36,18 +50,15 @@ from .working_memory import WorkingMemory
 logger = logging.getLogger(__name__)
 
 RETRIEVAL_LIMIT = 50
-# Sized for the actual deployment this project targets: 10 teams x 6 tasks x
-# ~30 min sessions each, one shared conversation_id per team across all of
-# them (nothing resets between tasks). A rough ~2-5 messages/minute estimate
-# for an active group discussion puts one session at ~60-150 turns; 24
-# keeps several minutes of recent back-and-forth fully verbatim (not relying
-# on the compressed summary for anything just said) without resending a huge
-# block on every single triggered reply -- that per-turn resend, not the
-# summarization call itself, is the bigger cost driver, since replies fire
-# far more often than management cycles do. The old default of 8 was a demo
-# value, not tuned for this; raising it also needed working_memory.py's
-# transcript() to stop independently re-capping at a smaller, unrelated 20.
-MANAGEMENT_CYCLE_INTERVAL = 24
+# Long-term memory (docs/MEMORY_DESIGN.md) replaced the management cycle,
+# which also bounded these two: the last messages kept verbatim, and the
+# ones participation is measured over, per modality.
+RECENT_WINDOW = 150
+PARTICIPATION_WINDOW = 50
+# Today goes to the agents verbatim up to this many tokens; past it, as
+# "today so far" plus the recent window. Leaves room under the agents'
+# ~24k-token sessions for the overview, the persona and the live turns.
+TODAY_VERBATIM_TOKENS = 12_000
 TURN_TIMEOUT_SECONDS = 30.0
 
 # How long a voice web search's interim "let me check that" is given to
@@ -102,10 +113,12 @@ class CoalaPolicy:
             [str], tuple[EpisodicStore, SnapshotStore]
         ]
         | None = None,
-        summarizer: Summarizer | None = None,
+        day_summarizer: DaySummarizer | None = None,
         embedder: Embedder | None = None,
         web_searcher: WebSearcher | None = None,
-        management_cycle_interval: int = MANAGEMENT_CYCLE_INTERVAL,
+        recent_window: int = RECENT_WINDOW,
+        participation_window: int = PARTICIPATION_WINDOW,
+        today_verbatim_tokens: int = TODAY_VERBATIM_TOKENS,
         retrieval_limit: int = RETRIEVAL_LIMIT,
         similarity_retrieval_limit: int = SIMILARITY_RETRIEVAL_LIMIT,
         turn_timeout_seconds: float = TURN_TIMEOUT_SECONDS,
@@ -127,9 +140,11 @@ class CoalaPolicy:
         # this object before the connect handshake ever runs. Takes
         # precedence over episodic_store/snapshot_store above when given.
         self._store_factory = store_factory
-        self._summarizer = summarizer
+        self._day_summarizer = day_summarizer
         self._embedder = embedder
-        self._management_cycle_interval = management_cycle_interval
+        self._recent_window = recent_window
+        self._participation_window = participation_window
+        self._today_verbatim_tokens = today_verbatim_tokens
         self._retrieval_limit = retrieval_limit
         self._similarity_retrieval_limit = similarity_retrieval_limit
         self._turn_timeout_seconds = turn_timeout_seconds
@@ -167,46 +182,38 @@ class CoalaPolicy:
         # reply are still in flight for this one.
         self._interim_ack_done: asyncio.Event | None = None
 
-        # Whether this session's main agent has already been sent the
-        # Gates summary_block/linked_tail_block in _render_prompt -- the
-        # "foreign" content (a group's own summary, or a DM's mirrored read
-        # of its linked group) the live session has no other way to learn,
-        # since it isn't present in the session's own native turn-by-turn
-        # memory. For a group this is sent once, ever, since the live
-        # session already has everything its own summary covers (it was
-        # there when it was said) -- only checked for None, never reset.
-        # For a DM it's genuinely foreign (a different conversation this
-        # session was never part of) and re-checked against
-        # DM_FULL_CONTEXT_INTERVAL_SECONDS instead of only-once. None at
-        # construction and never reset mid-session on purpose: a reconnect
-        # builds a fresh CoalaPolicy via policy_factory, so a new session
-        # starts this at None again without any explicit reset.
+        # A DM only: when its main agent was last sent the linked group's
+        # memory -- a different conversation, which moves on without it, so
+        # re-sent once DM_FULL_CONTEXT_INTERVAL_SECONDS have passed.
+        # Persisted (see _save_snapshot) so a reconnect doesn't resend it.
         self._full_context_sent_at: float | None = None
 
-        # Gates recent_block -- this conversation's OWN recent turns,
-        # verbatim. Pure redundancy once the live session has natively seen
-        # them (which happens as they're said, same as any other turn), so
-        # sent once per connection only, to cover the one case the live
-        # session genuinely doesn't have it: freshly reconnected, wm.history
-        # restored from a snapshot the new session was never actually live
-        # for. Not time-gated like the DM case above -- whether the live
-        # session has this natively is purely a function of connection
-        # lifetime, not wall-clock time elapsed.
-        self._own_tail_sent = False
+        # Long-term memory (docs/MEMORY_DESIGN.md), as last loaded: for a
+        # group its own, for a DM its linked group's (read-only).
+        self._overview: MemorySummary | None = None
+        self._days: list[MemorySummary] = []
+        self._today: MemorySummary | None = None
+        # Today's log, verbatim, one line per turn -- loaded at start, then
+        # appended to live. A group's only; a DM's own turns are in its
+        # live session already.
+        self._today_day: str | None = None
+        self._today_lines: list[str] = []
+        # Whether the main agent's live session has the memory above: sent
+        # with its first reply, and again after any context reset.
+        self._memory_sent = False
+        # Rollover/backfill and "today so far" run in the background: a
+        # summary takes seconds to a minute, and never holds up a turn.
+        self._memory_task: asyncio.Task[None] | None = None
 
         # Gates current_time_block -- re-announced only when the calendar
         # date actually changes (by the clock of each turn's own
         # timestamp_ms), not every single turn. Not persisted across a
-        # reconnect, same reasoning as _own_tail_sent above: a reconnect is
-        # a brand new main-agent session with no memory of a date
-        # announced in a previous one.
+        # reconnect: a reconnect is a brand new main-agent session with no
+        # memory of a date announced in a previous one.
         self._last_date_announced: date | None = None
         # The strategy the latest turn resolved with (None: nothing fired,
         # or forced). Read-only for the conversation's wake session.
         self._last_turn_strategy: str | None = None
-        # The message count the management cycle last ran at (see
-        # _finish_turn).
-        self._last_cycle_message_count: int | None = None
 
     async def start(self, port: ConversationPort) -> None:
         self._port = port
@@ -243,7 +250,10 @@ class CoalaPolicy:
             # to long-term memory. Without this, the "once per hour" gate
             # would silently reset on every reconnect, since a fresh
             # CoalaPolicy is built each time (session_components_factory).
-            if snapshot is not None:
+            # DMs only. Found live: restored for a group too, a fresh
+            # session after any restart counted the summary as already
+            # sent -- by a previous connection -- and never got it.
+            if snapshot is not None and port.is_private:
                 self._full_context_sent_at = snapshot.full_context_sent_at
             if snapshot is not None and not port.is_private:
                 wm.history_summary = snapshot.history_summary
@@ -252,29 +262,35 @@ class CoalaPolicy:
                 )
                 wm.action_points = snapshot.action_points
                 wm.total_message_count = snapshot.total_message_count
-                # Already cycled at this count, if it was due: the
-                # snapshot is saved again after every cycle.
-                self._last_cycle_message_count = snapshot.total_message_count
                 wm.history = [
                     stored.restore()
                     for stored in snapshot.history_tail
-                ]
+                ][-self._recent_window:]
                 wm.recent_actions = dict(snapshot.recent_actions)
                 wm.recent_action_at = dict(snapshot.recent_action_at)
 
         self._wm = wm
 
+        if port.is_private:
+            await self._apply_linked_group_context(wm, port)
+        elif self._episodic_store is not None:
+            self._today_day = day_of(time.time())
+            await self._load_memory()
+            self._start_memory_task(self._roll_over())
+
     async def close(self) -> None:
+        if self._memory_task is not None:
+            self._memory_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._memory_task
         # A turn whose reply never arrived is still worth its log entry.
         await self._flush_pending_episodic_record()
         await self._save_snapshot()
 
     async def _save_snapshot(self) -> None:
         """
-        Also called from the management cycle, not just close() -- a clean
-        shutdown is not the only way a process's memory can end. Saving here
-        too means a crash loses at most the messages since the last
-        management cycle, not everything since the last clean shutdown.
+        Called after every turn, not just close() -- a clean shutdown is
+        not the only way a process's memory can end.
         """
 
         if (
@@ -334,9 +350,21 @@ class CoalaPolicy:
         self._last_turn_strategy = None
 
         wm.append_history(utterance)
+        wm.trim_history(tail_size=self._recent_window)
         wm.increment_message_count()
 
-        await self._apply_linked_group_context(wm, port)
+        if port.is_private:
+            await self._apply_linked_group_context(wm, port)
+        else:
+            day = day_of(time.time())
+            if day != self._today_day:
+                # The first activity of a new day: yesterday gets its day
+                # summary, the overview is rebuilt (in the background).
+                self._today_day = day
+                self._today_lines = []
+                self._today = None
+                self._start_memory_task(self._roll_over())
+            self._today_lines.append(self._log_line(utterance.label(), utterance.modality, utterance.content))
 
         # Text and voice have entirely separate rosters and separate turn
         # counts -- someone present in the voice call who never types has
@@ -349,13 +377,14 @@ class CoalaPolicy:
         # one wm.trigger_variables every strategy shares.
         participants = port.participants()
         voice_participants = port.voice_participants()
+        window = self._participation_window
         text_vars = compute_trigger_variables(
-            [u for u in wm.history if u.modality == "text"],
+            [u for u in wm.history if u.modality == "text"][-window:],
             assistant_id=self._assistant_id,
             participants=participants,
         )
         voice_vars = compute_trigger_variables(
-            [u for u in wm.history if u.modality == "audio"],
+            [u for u in wm.history if u.modality == "audio"][-window:],
             assistant_id=self._assistant_id,
             participants=voice_participants,
         )
@@ -510,34 +539,17 @@ class CoalaPolicy:
         port: ConversationPort,
     ) -> None:
         """
-        Mirrors a linked group's summary AND raw tail directly into this
-        DM's own WM -- reusing exactly the fields (and _render_prompt's
-        existing rendering) a group already uses for its own memory, rather
-        than a separate DM-only concept. This DM's own raw conversation
-        still reaches the main/intervention agents the normal way
-        (Conversation forwards each utterance to their live sessions
-        directly) -- this only supplies what a DM's session cannot
-        otherwise see at all: the group's memory, since it lives in a
-        different session entirely.
+        A DM's memory is its linked group's (docs/MEMORY_DESIGN.md): the
+        group's overview and today, read-only -- what a DM's own session
+        cannot otherwise see, since it lives in a different session. This
+        DM's own turns reach its agents live, as always.
 
-        Both the summary and the tail matter here, not just the summary:
-        the group's snapshot only gets saved every management_cycle_interval
-        messages (or on a clean group shutdown), so something said in the
-        group very recently may not be reflected in history_summary yet at
-        all. The tail is what covers that gap -- it is exactly the same raw
-        messages the group's own next management cycle will summarize, just
-        not compressed yet.
+        Re-read on every DM message, not cached, so a question asked in a DM
+        sees what the group said a moment ago. Never written back.
 
-        Re-read on every message, not cached: _render_prompt sends the
-        summary and recent tail with every triggered turn anyway, so caching
-        would only save DB reads, at the cost of staleness, which matters
-        for "ask individual questions whenever you want" over a
-        long-running deployment. This never writes back to the linked
-        conversation either way.
-
-        A DM from someone not recognized as belonging to any instance simply
-        has no linked_conversation_id, so this does nothing for them --
-        no memory beyond their own live session, same as always.
+        A DM from someone not recognized as belonging to any instance has no
+        linked_conversation_id, so this does nothing: no memory beyond their
+        own live session, same as always.
         """
 
         if not (
@@ -547,20 +559,27 @@ class CoalaPolicy:
         ):
             return
 
-        _, linked_snapshot_store = self._store_factory(
+        linked_store, linked_snapshot_store = self._store_factory(
             port.linked_conversation_id,
         )
         linked_snapshot = await linked_snapshot_store.load(
             port.linked_conversation_id,
         )
         if linked_snapshot is not None:
+            # Only shown while the group has no overview yet.
             wm.history_summary = linked_snapshot.history_summary
-            wm.participant_roles_summary = (
-                linked_snapshot.participant_roles_summary
-            )
-            wm.action_points = linked_snapshot.action_points
-            wm.linked_history_tail = [
-                stored.restore() for stored in linked_snapshot.history_tail
+        self._today_day = day_of(time.time())
+        await self._load_memory(
+            store=linked_store,
+            conversation_id=port.linked_conversation_id,
+        )
+        if not self._today_lines and linked_snapshot is not None:
+            # Nothing logged yet today: the group's saved recent window,
+            # which is written every turn ("Mats says X in the group, then
+            # immediately DMs about X").
+            self._today_lines = [
+                self._log_line(u.label(), u.modality, u.content)
+                for u in (stored.restore() for stored in linked_snapshot.history_tail)
             ]
 
     async def on_intervention_signal(
@@ -855,6 +874,16 @@ class CoalaPolicy:
                     timestamp_ms=int(time.time() * 1000),
                 )
             )
+            wm.trim_history(tail_size=self._recent_window)
+            if self._port is not None and not self._port.is_private:
+                modality = (
+                    self._pending_utterance.modality
+                    if self._pending_utterance is not None
+                    else "text"
+                )
+                self._today_lines.append(
+                    self._log_line(self._assistant_name or "MULCA", modality, text)
+                )
 
         if self._interim_ack_done is not None:
             # This was the interim "let me check that" standing in for a
@@ -900,43 +929,280 @@ class CoalaPolicy:
 
     def observer_catchup_text(self) -> str:
         """
-        The whole picture for an observer that was never live for any of
-        this -- both the compressed summary of everything before the
-        current tail, and the tail itself verbatim. Found live: this used
-        to send only the raw tail, silently dropping everything a
-        management cycle had already compressed away -- a reconnecting
-        observer had zero knowledge of anything further back than its
-        last ~management_cycle_interval messages, unlike the main agent,
-        which always gets both.
+        The memory for an observer that was never live for any of it --
+        after a restart, a new observer mid-conversation, or a context
+        reset. Empty if there's nothing to catch up on.
         """
 
-        if self._wm is None:
+        memory = self.memory_text()
+        if not memory:
             return ""
+        return (
+            "Catching you up on this conversation's memory, which you were "
+            f"not connected for:\n\n{memory}"
+        )
+
+    def memory_text(self) -> str:
+        """
+        What both agents know beyond their live session (docs/
+        MEMORY_DESIGN.md): the overview, then today -- verbatim if it fits,
+        otherwise "today so far" plus the most recent messages verbatim.
+        """
 
         wm = self._wm
-        if not wm.history and not wm.history_summary:
+        if wm is None:
             return ""
 
-        summary_part = (
-            "Summary of the conversation so far:\n"
-            f"{wm.history_summary}\n\n"
-            "Participants' main contributions so far:\n"
-            f"{wm.participant_roles_summary or '(none yet)'}\n\n"
-            "Open action points:\n"
-            f"{wm.action_points or '(none yet)'}\n\n"
-            if wm.history_summary
-            else ""
+        parts = []
+        if self._overview is not None:
+            parts.append(
+                render_summary(
+                    self._overview.content,
+                    heading=f"Project overview (as of {day_heading(self._overview.day)}):",
+                )
+            )
+        elif wm.history_summary:
+            # Until the first overview exists (e.g. while past days are
+            # still being summarized after this memory was introduced).
+            parts.append(f"Summary of the conversation so far:\n{wm.history_summary}")
+
+        heading = day_heading(self._today_day) if self._today_day else "Today"
+        today = "\n".join(self._today_lines)
+        if self._today_lines and estimate_tokens(today) <= self._today_verbatim_tokens:
+            parts.append(f"Today ({heading}) so far, verbatim:\n{today}")
+        elif self._today_lines:
+            if self._today is not None:
+                parts.append(
+                    render_summary(
+                        self._today.content,
+                        heading=f"Today ({heading}) so far, summarized:",
+                    )
+                )
+            recent = wm.transcript() if not self._is_private() else ""
+            if not recent:
+                # A DM: the group's latest lines instead of the DM's own.
+                recent = "\n".join(self._today_lines[-self._recent_window:])
+            parts.append(f"Most recent messages, verbatim:\n{recent}")
+        elif wm.history and not self._is_private():
+            parts.append(f"Recent messages, verbatim:\n{wm.transcript()}")
+
+        return "\n\n".join(parts)
+
+    def _is_private(self) -> bool:
+        return self._port is not None and self._port.is_private
+
+    @staticmethod
+    def _log_line(speaker: str, modality: str, content: str) -> str:
+        channel = "voice" if modality == "audio" else "text"
+        return f"{speaker} ({channel}): {content}"
+
+    async def _load_memory(
+        self,
+        *,
+        store: EpisodicStore | None = None,
+        conversation_id: str | None = None,
+        today_log: bool = True,
+    ) -> None:
+        """
+        Summaries, and (today_log) today's log, from the store. A running
+        session reloads only the summaries: its today has lines the store
+        doesn't have yet (a turn still waiting for its reply).
+        """
+
+        store = store or self._episodic_store
+        conversation_id = conversation_id or (
+            self._port.conversation_id if self._port else ""
         )
-        tail_part = (
-            f"Recent messages, verbatim:\n{wm.transcript()}"
-            if wm.history
-            else ""
+        if store is None or self._today_day is None:
+            return
+
+        summaries = await store.load_summaries(conversation_id)
+        overviews = [s for s in summaries if s.kind == "overview"]
+        self._overview = overviews[-1] if overviews else None
+        self._days = [s for s in summaries if s.kind == "day"]
+        todays = [
+            s for s in summaries if s.kind == "today" and s.day == self._today_day
+        ]
+        self._today = todays[-1] if todays else None
+        if not today_log:
+            return
+
+        start, end = day_bounds(self._today_day)
+        self._today_lines = day_log_lines(
+            await store.records_between(conversation_id, start, end),
+            assistant_name=self._assistant_name or "MULCA",
+            call_ends=await store.call_ends_between(conversation_id, start, end),
         )
 
+    def _start_memory_task(self, coroutine) -> None:
+        if self._day_summarizer is None or self._episodic_store is None:
+            coroutine.close()
+            return
+        if self._memory_task is not None and not self._memory_task.done():
+            # One at a time; the running one already reads the latest log.
+            coroutine.close()
+            return
+        self._memory_task = asyncio.create_task(coroutine)
+
+    async def wait_for_memory(self) -> None:
+        """Until a running rollover or "today so far" finishes (tests)."""
+
+        if self._memory_task is not None:
+            with suppress(asyncio.CancelledError):
+                await self._memory_task
+
+    async def _roll_over(self) -> None:
+        """
+        Every earlier day with something said and no day summary gets one
+        (backfill, the first time), then the overview is rebuilt from all of
+        them. Then "today so far", if today has outgrown the verbatim limit.
+        Each summary is saved as soon as it exists, so a failure keeps the
+        rest and the next trigger retries what's missing.
+        """
+
+        store = self._episodic_store
+        port = self._port
+        if store is None or port is None or self._day_summarizer is None:
+            return
+        conversation_id = port.conversation_id
+        today = self._today_day or day_of(time.time())
+
+        try:
+            have = {s.day for s in self._days}
+            spoken = {day_of(ts) for ts in await store.spoken_timestamps(conversation_id)}
+            missing = sorted(day for day in spoken if day < today and day not in have)
+
+            for day in missing:
+                start, end = day_bounds(day)
+                records = await store.records_between(conversation_id, start, end)
+                lines = day_log_lines(
+                    records,
+                    assistant_name=self._assistant_name or "MULCA",
+                    call_ends=await store.call_ends_between(conversation_id, start, end),
+                )
+                if not lines:
+                    continue
+                content = await self._day_summarizer.summarize_day(
+                    day=day,
+                    log="\n".join(lines),
+                    final=True,
+                )
+                await store.save_summary(
+                    conversation_id,
+                    MemorySummary(
+                        kind="day",
+                        day=day,
+                        content=content,
+                        through_ts=records[-1].timestamp,
+                        created_at=time.time(),
+                    ),
+                )
+                logger.info("%s day summary written for %s", conversation_id, day)
+
+            summaries = await store.load_summaries(conversation_id)
+            days = [s for s in summaries if s.kind == "day"]
+            has_overview = any(s.kind == "overview" for s in summaries)
+            if days and (missing or not has_overview):
+                overview = await self._day_summarizer.build_overview(
+                    days=[(s.day, s.content) for s in days],
+                )
+                await store.save_summary(
+                    conversation_id,
+                    MemorySummary(
+                        kind="overview",
+                        day=today,
+                        content=overview,
+                        created_at=time.time(),
+                    ),
+                )
+                logger.info("%s overview rebuilt from %d days", conversation_id, len(days))
+
+            if any(s.kind == "today" and s.day != today for s in summaries):
+                # Replaced by those days' own summaries.
+                await store.delete_summaries(conversation_id, "today")
+
+            await self._load_memory(today_log=False)
+            if self._today_too_long():
+                await self._refresh_today()
+        except Exception:
+            logger.warning(
+                "%s memory rollover failed; retried at the next trigger",
+                conversation_id,
+                exc_info=True,
+            )
+            return
+
+        await self._renew_agent_memory()
+
+    def _today_too_long(self) -> bool:
         return (
-            "Catching you up on this conversation's history, which you "
-            f"were not connected for:\n{summary_part}{tail_part}"
+            estimate_tokens("\n".join(self._today_lines))
+            > self._today_verbatim_tokens
         )
+
+    async def _refresh_today(self) -> None:
+        """"Today so far", always regenerated from today's full log."""
+
+        store, port = self._episodic_store, self._port
+        assert store is not None and port is not None and self._day_summarizer is not None
+        today = self._today_day or day_of(time.time())
+        start, end = day_bounds(today)
+        records = await store.records_between(port.conversation_id, start, end)
+        lines = day_log_lines(
+            records,
+            assistant_name=self._assistant_name or "MULCA",
+            call_ends=await store.call_ends_between(port.conversation_id, start, end),
+        )
+        if not lines:
+            return
+        content = await self._day_summarizer.summarize_day(
+            day=today,
+            log="\n".join(lines),
+            final=False,
+        )
+        self._today = MemorySummary(
+            kind="today",
+            day=today,
+            content=content,
+            through_ts=records[-1].timestamp,
+            created_at=time.time(),
+        )
+        await store.save_summary(port.conversation_id, self._today)
+        logger.info("%s today so far summarized", port.conversation_id)
+
+    async def on_context_full(self) -> None:
+        """
+        An agent's live session is full: instead of dropping its oldest
+        half with nothing in its place, give both agents a fresh session
+        with the memory -- summarizing today first if it no longer fits
+        verbatim. In the background; never holds up a turn.
+        """
+
+        self._start_memory_task(self._renew_after_context_full())
+        if self._day_summarizer is None or self._episodic_store is None:
+            # Nothing to summarize with: still reset, with what there is.
+            await self._renew_agent_memory()
+
+    async def _renew_after_context_full(self) -> None:
+        try:
+            if not self._is_private() and self._today_too_long():
+                await self._refresh_today()
+        except Exception:
+            logger.warning(
+                "%s today so far failed; resetting with what there is",
+                self._port.conversation_id if self._port else "?",
+                exc_info=True,
+            )
+        await self._renew_agent_memory()
+
+    async def _renew_agent_memory(self) -> None:
+        """Both agents start over from the memory, between turns."""
+
+        if self._port is None:
+            return
+        self._memory_sent = False
+        self._full_context_sent_at = None
+        await self._port.reset_agent_contexts(self.observer_catchup_text())
 
     async def on_untranscribed_turn(
         self,
@@ -949,7 +1215,7 @@ class CoalaPolicy:
         Logs the bare fact that something happened, same file a DM's audit
         record goes to -- but doesn't touch WM: there's no content to add
         to conversational history or judge, and wm.total_message_count
-        driving cooldowns/the management cycle shouldn't advance for a turn
+        driving cooldowns shouldn't advance for a turn
         with nothing in it.
         """
 
@@ -1026,6 +1292,18 @@ class CoalaPolicy:
         store, conversation_id = self._retrieval_source(port)
         if store is None:
             wm.set_retrieved_context("(no prior conversation found)")
+            return
+
+        # The days before today, as summarized -- today itself is already
+        # in the agent's memory. The recent log only until any day has a
+        # summary.
+        if self._days:
+            wm.set_retrieved_context(
+                "\n\n".join(
+                    render_summary(day.content, heading=f"Day summary, {day_heading(day.day)}:")
+                    for day in self._days
+                )
+            )
             return
 
         records = await store.recall_recent(
@@ -1166,7 +1444,7 @@ class CoalaPolicy:
             # group. This is deliberately NOT a memory/retrieval source: a
             # DM's own retrieval always redirects to its linked group's log
             # instead (_retrieval_source), never to this file, and a
-            # group's own retrieval/management cycle has no path to a DM's
+            # group's own retrieval/memory has no path to a DM's
             # file at all (one SQLite file per conversation_id, never
             # shared). So this file exists for review, not recall.
             #
@@ -1196,31 +1474,11 @@ class CoalaPolicy:
                 # just what triggered it -- this never happened before.
                 self._pending_episodic_record = record
 
-        # Every turn, not just at a management cycle: otherwise a group's
-        # snapshot (and therefore anything a linked DM could mirror) simply
-        # doesn't exist at all until message management_cycle_interval, no
-        # matter how recently something relevant was actually said.
+        # Every turn: a restart picks up the recent window and cooldowns
+        # from here.
         await self._save_snapshot()
 
         wm.clear_turn_output()
-
-        # Once per count: found live, turns that never reach on_utterance
-        # (noise with no transcript) don't advance the count, so the same
-        # count kept re-running the cycle on material it had already
-        # summarized -- each extra pass compressed it further.
-        if (
-            message_count % self._management_cycle_interval == 0
-            and message_count != self._last_cycle_message_count
-        ):
-            self._last_cycle_message_count = message_count
-            if port.is_private:
-                # No summarization for a DM (its history_summary instead
-                # mirrors a linked group's, when it has one --
-                # _apply_linked_group_context) -- just bound how much raw
-                # history this DM's own WM holds, no LLM call involved.
-                wm.trim_history(tail_size=self._management_cycle_interval)
-            elif self._summarizer is not None:
-                await self._run_management_cycle(wm, port)
 
         if path == "none":
             # Nothing triggered, so nothing to wait for -- resolves this
@@ -1229,42 +1487,6 @@ class CoalaPolicy:
             self._pending_utterance = None
             self._turn_done.set()
             await port.no_reply()
-
-    async def _run_management_cycle(
-        self,
-        wm: WorkingMemory,
-        port: ConversationPort,
-    ) -> None:
-        assert self._summarizer is not None
-
-        history_summary, roles_summary, action_points = (
-            await self._summarizer.summarize(
-                transcript=wm.transcript(exclude_assistant=True),
-                previous_summary=wm.history_summary,
-                previous_roles=wm.participant_roles_summary,
-                previous_action_points=wm.action_points,
-            )
-        )
-        wm.apply_management_cycle(
-            history_summary,
-            roles_summary,
-            action_points,
-            tail_size=self._management_cycle_interval,
-        )
-        await self._save_snapshot()
-
-        if self._episodic_store is not None:
-            await self._episodic_store.log(
-                EpisodicRecord(
-                    timestamp=time.time(),
-                    conversation_id=port.conversation_id,
-                    intervention_path="management_cycle",
-                    trigger_variables=dict(wm.trigger_variables),
-                    history_summary=history_summary,
-                    participant_roles_summary=roles_summary,
-                    action_points=action_points,
-                )
-            )
 
     def _render_prompt(
         self,
@@ -1282,39 +1504,27 @@ class CoalaPolicy:
         Pushed as a conversation item, not a session-instructions
         overwrite -- see MainAgentOpenAI._trigger_response.
 
-        force_summary: provide_summary's own case -- a recap explicitly
-        benefits from the compressed, decision-prioritized overview (plus
-        contributions-by-person and open action points) every time it's
-        asked for, not just once per connection the way summary_block is
-        otherwise gated (the live session already natively remembers the
-        raw messages that went into it, so re-sending it on every turn
-        would normally be waste -- but an explicit "summarize this"
-        request is exactly the case where that redundancy is the point:
-        recent_block's raw tail alone can miss anything the management
-        cycle already folded into the summary). Does not affect
-        self._full_context_sent_at -- a forced render here says nothing
-        about whether the live session has organically seen this before.
+        force_summary: provide_summary's own case -- a recap is exactly
+        when the memory is worth re-sending, even if the live session has
+        it already.
         """
 
-        # A DM mirrors a *different* conversation's summary
-        # (_apply_linked_group_context), which this session was never part
-        # of and has no other way to learn about -- genuinely foreign
-        # content, re-checked against an interval rather than sent once. A
-        # group's own summary is different: once sent, the live session
-        # already has everything it covers, so it's only sent once, ever
-        # -- every turn after that would just be re-telling the model
-        # something it was already there for.
+        # The memory goes with the first reply of a session, and again after
+        # a context reset (_renew_agent_memory). A DM's memory is a
+        # different conversation's, which moves on without it -- re-sent
+        # once an hour instead of once.
         now = time.time()
         if port.is_private:
-            needs_full_context = (
+            needs_memory = (
                 self._full_context_sent_at is None
                 or now - self._full_context_sent_at
                 > DM_FULL_CONTEXT_INTERVAL_SECONDS
             )
+            if needs_memory:
+                self._full_context_sent_at = now
         else:
-            needs_full_context = self._full_context_sent_at is None
-        if needs_full_context:
-            self._full_context_sent_at = now
+            needs_memory = not self._memory_sent
+            self._memory_sent = True
 
         # Grounds "upcoming"/"next week"/etc. in an actual date -- the main
         # agent otherwise has no sense of the current date at all. Sourced
@@ -1327,7 +1537,7 @@ class CoalaPolicy:
         # waste once it was already established earlier in the connection.
         current_date = (
             datetime.fromtimestamp(
-                wm.history[-1].timestamp_ms / 1000, tz=timezone.utc
+                wm.history[-1].timestamp_ms / 1000, tz=DAY_TZ
             ).date()
             if wm.history
             else None
@@ -1340,7 +1550,7 @@ class CoalaPolicy:
             self._last_date_announced = current_date
 
         current_time_block = (
-            f"Today's date: {current_date:%A, %Y-%m-%d} (UTC)\n\n"
+            f"Today's date: {current_date:%A, %Y-%m-%d}\n\n"
             if send_date
             else ""
         )
@@ -1359,55 +1569,10 @@ class CoalaPolicy:
             else ""
         )
 
-        summary_block = (
-            (
-                "Summary of the conversation so far:\n"
-                f"{wm.history_summary or '(none yet)'}\n\n"
-                "Participants' main contributions so far:\n"
-                f"{wm.participant_roles_summary or '(none yet)'}\n\n"
-                "Open action points:\n"
-                f"{wm.action_points or '(none yet)'}\n\n"
-            )
-            if needs_full_context or force_summary
-            else ""
-        )
-
-        # General, not DM-specific: covers what the live session doesn't --
-        # e.g. after a restart, wm.history is restored from a snapshot but a
-        # freshly-connected session has never actually seen it. Sent once
-        # per connection only (not time-gated, unlike summary_block's DM
-        # case above): whether the live session has this natively is purely
-        # a function of connection lifetime, not wall-clock time elapsed,
-        # so re-sending it mid-session on every triggered reply was pure
-        # waste -- found live, this was going out on every single triggered
-        # reply, not just after a reconnect.
-        send_own_tail = not self._own_tail_sent and bool(wm.history)
-        if send_own_tail:
-            self._own_tail_sent = True
-
-        recent_block = (
-            f"Recent messages in this conversation, verbatim:\n{wm.transcript()}\n\n"
-            if send_own_tail
-            else ""
-        )
-
-        # Only ever non-empty for a DM from a recognized participant
-        # (CoalaPolicy._apply_linked_group_context) -- the group's own raw
-        # tail, covering what its own next management cycle would summarize
-        # but hasn't yet, since that group's snapshot may be more current
-        # than history_summary above (saved every turn, not just every
-        # management_cycle_interval messages). Gated the same as
-        # summary_block above: it's the same "foreign content" category,
-        # from the same linked group, so it goes stale/gets refreshed on
-        # the same schedule.
-        linked_tail_block = (
-            "Recent messages in the linked group conversation, verbatim:\n"
-            + "\n".join(
-                f"{utterance.label()}: {utterance.content}"
-                for utterance in wm.linked_history_tail
-            )
-            + "\n\n"
-            if needs_full_context and wm.linked_history_tail
+        memory = self.memory_text() if needs_memory or force_summary else ""
+        memory_block = (
+            f"What you remember of this conversation:\n{memory}\n\n"
+            if memory
             else ""
         )
 
@@ -1444,9 +1609,7 @@ class CoalaPolicy:
         return (
             f"{current_time_block}"
             f"{voice_roster_block}"
-            f"{summary_block}"
-            f"{recent_block}"
-            f"{linked_tail_block}"
+            f"{memory_block}"
             f"{retrieved_block}"
             f"{web_search_block}"
             f"{speaker_block}"

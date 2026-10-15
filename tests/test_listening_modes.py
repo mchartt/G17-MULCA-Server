@@ -956,3 +956,29 @@ async def test_a_failing_event_log_never_breaks_the_conversation():
     await voice_turn(conversation, "muca start")
 
     assert conversation._listening_window_open is True
+
+
+async def test_a_context_reset_clears_every_agent_and_catches_the_observer_up():
+    conversation, factory = await make_conversation(listening_mode="ambient")
+    cleared, told = [], []
+
+    async def clear_main():
+        cleared.append("main")
+
+    async def clear_observer():
+        cleared.append("observer")
+
+    async def tell(text, role="user"):
+        told.append(text)
+
+    factory.main.clear_context = clear_main
+    factory.auxiliary.clear_context = clear_observer
+    factory.auxiliary.send_text = tell
+    # The policy's own hook is what the agents call when they're full.
+    assert factory.main.on_context_full == conversation._policy.on_context_full
+
+    await conversation.reset_agent_contexts("the memory")
+    await conversation.wait_until_idle()
+
+    assert cleared == ["main", "observer"]
+    assert told == ["the memory"]

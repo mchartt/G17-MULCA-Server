@@ -50,6 +50,23 @@ class EpisodicRecord(BaseModel):
     action_points: str | None = None
 
 
+class MemorySummary(BaseModel):
+    """
+    A day summary, "today so far", or the overview (docs/MEMORY_DESIGN.md),
+    as stored -- generated from the log, never from a previous summary.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["day", "today", "overview"]
+    # The day it covers; for an overview, the day it was built.
+    day: str
+    content: dict
+    # The latest log timestamp it covers.
+    through_ts: float = 0.0
+    created_at: float = 0.0
+
+
 class StoredUtterance(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

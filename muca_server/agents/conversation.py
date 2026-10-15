@@ -396,6 +396,26 @@ class Conversation:
     async def no_reply(self) -> None:
         await self._send(TurnSkippedMessage())
 
+    async def reset_agent_contexts(self, observer_memory: str) -> None:
+        """
+        Between turns, so nothing is cleared mid-reply: every agent's live
+        session starts over; the observers get observer_memory straight
+        away, the main agent its memory with its next reply.
+        """
+
+        self._enqueue_turn(lambda: self._reset_agent_contexts(observer_memory))
+
+    async def _reset_agent_contexts(self, observer_memory: str) -> None:
+        if self._main_agent is not None:
+            with suppress(Exception):
+                await self._main_agent.clear_context()
+        for agent in list(self._auxiliary_agents.values()):
+            with suppress(Exception):
+                await agent.clear_context()
+                if observer_memory:
+                    await agent.send_text(observer_memory, role="user")
+        logger.info("%s agents' sessions renewed from memory", self._conversation_id)
+
     # ------------------------------------------------------------------
     # Conversation state, derived from the turns rather than tracked
     # ------------------------------------------------------------------
@@ -1082,6 +1102,7 @@ class Conversation:
         )
         agent.on_decision = self._handle_intervention_signal
         agent.on_connection_lost = self._handle_agent_connection_lost
+        agent.on_context_full = getattr(self._policy, "on_context_full", None)
         agent.log_label = self._conversation_id
         agent.instance_label = self._instance_label
 
@@ -2101,6 +2122,9 @@ class Conversation:
             )
             self._main_agent.on_connection_lost = (
                 self._handle_agent_connection_lost
+            )
+            self._main_agent.on_context_full = getattr(
+                self._policy, "on_context_full", None
             )
 
         self._main_agent.log_label = self._conversation_id

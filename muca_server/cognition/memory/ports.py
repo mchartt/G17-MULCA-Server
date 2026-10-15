@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from .records import EpisodicRecord, MemorySnapshot
+from .records import EpisodicRecord, MemorySnapshot, MemorySummary
 
 
 class Embedder(Protocol):
@@ -67,6 +67,41 @@ class EpisodicStore(Protocol):
         Needs an embedder to have been configured at construction time;
         raises if one wasn't, rather than silently returning nothing.
         """
+        ...
+
+    # Long-term memory by day (docs/MEMORY_DESIGN.md).
+
+    async def records_between(
+        self,
+        conversation_id: str,
+        start: float,
+        end: float,
+    ) -> list[EpisodicRecord]:
+        """Everything said in [start, end), oldest first."""
+        ...
+
+    async def spoken_timestamps(self, conversation_id: str) -> list[float]:
+        ...
+
+    async def call_ends_between(
+        self,
+        conversation_id: str,
+        start: float,
+        end: float,
+    ) -> list[float]:
+        ...
+
+    async def save_summary(
+        self,
+        conversation_id: str,
+        summary: MemorySummary,
+    ) -> None:
+        ...
+
+    async def delete_summaries(self, conversation_id: str, kind: str) -> None:
+        ...
+
+    async def load_summaries(self, conversation_id: str) -> list[MemorySummary]:
         ...
 
 

@@ -4,6 +4,7 @@ from .records import (
     EpisodicRecord,
     InterventionPath,
     MemorySnapshot,
+    MemorySummary,
     StoredUtterance,
 )
 
@@ -22,6 +23,7 @@ __all__ = [
     "InMemorySnapshotStore",
     "InterventionPath",
     "MemorySnapshot",
+    "MemorySummary",
     "SnapshotStore",
     "StoredUtterance",
 ]

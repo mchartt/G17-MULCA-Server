@@ -13,6 +13,9 @@ dependencies = [
     "pydantic>=2.11,<3",
     "pyyaml>=6,<7",
     "numpy>=1.26,<3",
+    # Day boundaries in Europe/Rome (cognition/memory/day_memory.py); slim
+    # images and Windows ship no time zone data.
+    "tzdata",
 ]
 
 [project.optional-dependencies]

@@ -63,19 +63,13 @@ class WorkingMemory:
 
     # Monotonic: survives the history truncation below.
     total_message_count: int = 0
+    # The management cycle's running summary, from before day summaries
+    # (docs/MEMORY_DESIGN.md): no longer written, only carried over in the
+    # snapshot (so an older server version still finds it) and shown
+    # until the first overview exists.
     history_summary: str = ""
     participant_roles_summary: str = ""
-    # Open, outstanding items raised in the conversation (and who's
-    # responsible, when stated) that haven't been resolved yet -- distinct
-    # from history_summary's own "key decisions and their outcomes", which
-    # is about what was already decided, not what's still pending.
     action_points: str = ""
-
-    # A DM's mirror of its linked group's own raw tail (CoalaPolicy
-    # ._apply_linked_group_context) -- kept separate from `history` above,
-    # which is this conversation's own messages, not the linked group's.
-    # Always empty for a group's own WM; this concept only applies to DMs.
-    linked_history_tail: list[Utterance] = field(default_factory=list)
 
     def append_history(self, utterance: Utterance) -> None:
         self.history.append(utterance)
@@ -84,38 +78,8 @@ class WorkingMemory:
         self.total_message_count += 1
         return self.total_message_count
 
-    def apply_management_cycle(
-        self,
-        history_summary: str,
-        participant_roles_summary: str,
-        action_points: str,
-        *,
-        tail_size: int,
-    ) -> None:
-        """
-        Replace the raw history with a summary plus a verbatim tail.
-
-        tail_size is the caller's management_cycle_interval, not an
-        independent constant -- since a cycle runs every tail_size messages,
-        keeping exactly that many raw ones means the verbatim tail always
-        covers everything back to the previous cycle, with no gap and no
-        overlap against what the summary already absorbed.
-        """
-
-        self.history_summary = history_summary
-        self.participant_roles_summary = participant_roles_summary
-        self.action_points = action_points
-        self.history = self.history[-tail_size:]
-
     def trim_history(self, *, tail_size: int) -> None:
-        """
-        Drop old raw history with no summarization -- for a DM, which gets
-        no management-cycle summary of its own (its history_summary instead
-        mirrors a linked group's, when it has one -- CoalaPolicy
-        ._apply_linked_group_context). Without this, a DM session left open
-        for a long-running deployment would grow this list forever, since
-        nothing else ever trims it for a private conversation.
-        """
+        """Keep the recent window: the last tail_size messages, verbatim."""
 
         self.history = self.history[-tail_size:]
 
@@ -141,7 +105,7 @@ class WorkingMemory:
         Two independent gates, either one enough to veto: the message-count
         one (measured against `total_message_count`, never against
         `trigger_variables["message_count"]` -- the latter is the length of
-        the history, which the management cycle truncates, so the gap could
+        the history, which the recent window truncates, so the gap could
         reset or go negative and leave a strategy stuck in cooldown
         forever), and a flat wall-clock one (SECONDARY_COOLDOWN_SECONDS) on
         top of it. The message-count gate alone means the same "N turns"
@@ -221,12 +185,8 @@ class WorkingMemory:
         it should see what it itself just said for continuity.
 
         limit defaults to None (render all of self.history), not an
-        independent cap -- self.history's size is already controlled by
-        apply_management_cycle/trim_history's tail_size. A second,
-        separately-tuned limit here would have to be kept in sync by hand
-        with whatever tail_size is configured, and silently re-truncating
-        below it (as a stale smaller default once did) would quietly drop
-        messages the management cycle hadn't summarized yet.
+        independent cap -- self.history is already the recent window
+        (trim_history).
         """
 
         history = self.history if limit is None else self.history[-limit:]

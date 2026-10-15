@@ -48,7 +48,7 @@ def db_path_for(conversation_id: str, *, base_dir: str | Path) -> Path:
     safe_name = _UNSAFE_FILENAME_CHARS.sub("_", conversation_id)
     return Path(base_dir) / f"{safe_name}.db"
 
-from .records import EpisodicRecord, MemorySnapshot, StoredUtterance
+from .records import EpisodicRecord, MemorySnapshot, MemorySummary, StoredUtterance
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS episodic_log (
@@ -91,6 +91,22 @@ CREATE TABLE IF NOT EXISTS session_event (
     detail TEXT NOT NULL DEFAULT '',
     data TEXT NOT NULL DEFAULT '{}'
 );
+
+-- Day summaries, "today so far" and the overview (docs/MEMORY_DESIGN.md):
+-- generated from episodic_log, never from a previous summary. Its own
+-- table, so episodic_log and memory_snapshot keep exactly the shape older
+-- server versions read.
+CREATE TABLE IF NOT EXISTS memory_summary (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    day TEXT NOT NULL,
+    content TEXT NOT NULL,
+    through_ts REAL NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_memory_summary_conversation
+    ON memory_summary (conversation_id, kind, day);
 
 CREATE TABLE IF NOT EXISTS memory_snapshot (
     conversation_id TEXT PRIMARY KEY,
@@ -158,6 +174,24 @@ async def _migrate(db: aiosqlite.Connection) -> None:
             "TEXT NOT NULL DEFAULT ''"
         )
         await db.commit()
+
+
+def _row_to_record(row) -> EpisodicRecord:
+    return EpisodicRecord(
+        timestamp=row["timestamp"],
+        conversation_id=row["conversation_id"],
+        intervention_path=row["intervention_path"],
+        speaker=row["speaker"],
+        content=row["content"],
+        modality=row["modality"],
+        trigger_variables=json.loads(row["trigger_variables"]),
+        strategy_id=row["strategy_id"],
+        prompt_fragment=row["prompt_fragment"],
+        assistant_output=row["assistant_output"],
+        history_summary=row["history_summary"],
+        participant_roles_summary=row["participant_roles_summary"],
+        action_points=row["action_points"],
+    )
 
 
 def _pack_embedding(vector: list[float]) -> bytes:
@@ -389,24 +423,7 @@ class SqliteEpisodicStore:
             by_id = {row["id"]: row for row in await cursor.fetchall()}
 
         # top_ids' order (most similar first), not by_id's arbitrary one.
-        return [
-            EpisodicRecord(
-                timestamp=by_id[i]["timestamp"],
-                conversation_id=by_id[i]["conversation_id"],
-                intervention_path=by_id[i]["intervention_path"],
-                speaker=by_id[i]["speaker"],
-                content=by_id[i]["content"],
-                modality=by_id[i]["modality"],
-                trigger_variables=json.loads(by_id[i]["trigger_variables"]),
-                strategy_id=by_id[i]["strategy_id"],
-                prompt_fragment=by_id[i]["prompt_fragment"],
-                assistant_output=by_id[i]["assistant_output"],
-                history_summary=by_id[i]["history_summary"],
-                participant_roles_summary=by_id[i]["participant_roles_summary"],
-                action_points=by_id[i]["action_points"],
-            )
-            for i in top_ids
-        ]
+        return [_row_to_record(by_id[i]) for i in top_ids]
 
     async def recall_recent(
         self,
@@ -431,24 +448,119 @@ class SqliteEpisodicStore:
             )
             rows = await cursor.fetchall()
 
-        return [
-            EpisodicRecord(
-                timestamp=row["timestamp"],
-                conversation_id=row["conversation_id"],
-                intervention_path=row["intervention_path"],
-                speaker=row["speaker"],
-                content=row["content"],
-                modality=row["modality"],
-                trigger_variables=json.loads(row["trigger_variables"]),
-                strategy_id=row["strategy_id"],
-                prompt_fragment=row["prompt_fragment"],
-                assistant_output=row["assistant_output"],
-                history_summary=row["history_summary"],
-                participant_roles_summary=row["participant_roles_summary"],
-                action_points=row["action_points"],
+        return [_row_to_record(row) for row in reversed(rows)]
+
+    async def records_between(
+        self,
+        conversation_id: str,
+        start: float,
+        end: float,
+    ) -> list[EpisodicRecord]:
+        async with aiosqlite.connect(self._db_path) as db:
+            await _ensure_schema(db)
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                """
+                SELECT * FROM episodic_log
+                WHERE conversation_id = ? AND timestamp >= ? AND timestamp < ?
+                    AND intervention_path NOT IN ('management_cycle', 'untranscribed')
+                ORDER BY timestamp, id
+                """,
+                (conversation_id, start, end),
             )
-            for row in reversed(rows)
-        ]
+            return [_row_to_record(row) for row in await cursor.fetchall()]
+
+    async def spoken_timestamps(self, conversation_id: str) -> list[float]:
+        """When anything was said -- which days have something to summarize."""
+
+        async with aiosqlite.connect(self._db_path) as db:
+            await _ensure_schema(db)
+            cursor = await db.execute(
+                """
+                SELECT timestamp FROM episodic_log
+                WHERE conversation_id = ? AND content != ''
+                    AND intervention_path NOT IN ('management_cycle', 'untranscribed')
+                """,
+                (conversation_id,),
+            )
+            return [row[0] for row in await cursor.fetchall()]
+
+    async def call_ends_between(
+        self,
+        conversation_id: str,
+        start: float,
+        end: float,
+    ) -> list[float]:
+        async with aiosqlite.connect(self._db_path) as db:
+            await _ensure_schema(db)
+            cursor = await db.execute(
+                """
+                SELECT timestamp FROM session_event
+                WHERE conversation_id = ? AND event = 'voice_call_ended'
+                    AND timestamp >= ? AND timestamp < ?
+                """,
+                (conversation_id, start, end),
+            )
+            return [row[0] for row in await cursor.fetchall()]
+
+    async def save_summary(self, conversation_id: str, summary: MemorySummary) -> None:
+        """Replaces any summary of the same kind for the same day."""
+
+        async with aiosqlite.connect(self._db_path) as db:
+            await _ensure_schema(db)
+            await db.execute(
+                "DELETE FROM memory_summary"
+                " WHERE conversation_id = ? AND kind = ? AND day = ?",
+                (conversation_id, summary.kind, summary.day),
+            )
+            await db.execute(
+                """
+                INSERT INTO memory_summary (
+                    conversation_id, kind, day, content, through_ts, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    conversation_id,
+                    summary.kind,
+                    summary.day,
+                    json.dumps(summary.content),
+                    summary.through_ts,
+                    summary.created_at,
+                ),
+            )
+            await db.commit()
+
+    async def delete_summaries(self, conversation_id: str, kind: str) -> None:
+        async with aiosqlite.connect(self._db_path) as db:
+            await _ensure_schema(db)
+            await db.execute(
+                "DELETE FROM memory_summary WHERE conversation_id = ? AND kind = ?",
+                (conversation_id, kind),
+            )
+            await db.commit()
+
+    async def load_summaries(self, conversation_id: str) -> list[MemorySummary]:
+        """Oldest day first."""
+
+        async with aiosqlite.connect(self._db_path) as db:
+            await _ensure_schema(db)
+            cursor = await db.execute(
+                """
+                SELECT kind, day, content, through_ts, created_at FROM memory_summary
+                WHERE conversation_id = ? ORDER BY day, id
+                """,
+                (conversation_id,),
+            )
+            return [
+                MemorySummary(
+                    kind=row[0],
+                    day=row[1],
+                    content=json.loads(row[2]),
+                    through_ts=row[3],
+                    created_at=row[4],
+                )
+                for row in await cursor.fetchall()
+            ]
 
 
 class SqliteSnapshotStore:
