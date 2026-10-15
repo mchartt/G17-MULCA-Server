@@ -1321,12 +1321,12 @@ class Conversation:
                 "(likely noise, not speech) -- nothing intelligible was "
                 "said, so there is nothing to react to."
             )
-            # Outside a non-ambient window, nothing is judged -- noise
-            # included (the prompt-echo filter makes these more common).
-            if (
-                self._listening_mode not in NON_AMBIENT_LISTENING_MODES
-                or in_open_window
-            ):
+            # Only ambient judges noise. Found live (group 10, 14 Oct): while
+            # MULCA was awake, each noise turn was judged with no words to
+            # judge, so the newest thing in the observer's context -- MULCA's
+            # own "MULCA here..." -- read as being addressed, and it answered
+            # itself, again and again (16 replies in one session).
+            if self._listening_mode not in NON_AMBIENT_LISTENING_MODES:
                 self._ask_observers_to_consider(speaker)
             return
 

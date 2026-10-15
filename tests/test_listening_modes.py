@@ -563,10 +563,12 @@ async def test_a_bare_wake_forces_a_reply_to_the_same_speakers_next_turn_only():
     assert "Respond directly" in factory.main.instructions[1]
 
 
-async def test_untranscribed_turns_are_judged_only_inside_a_window():
+async def test_untranscribed_turns_are_judged_only_in_ambient():
+    # Never inside a window: with no words to judge, the observer answered
+    # MULCA's own last reply, over and over (found live, 14 Oct).
     for mode, engage, judged in [
         ("wake", False, 0),
-        ("wake", True, 1),
+        ("wake", True, 0),
         ("transcribe", False, 0),
         ("ambient", False, 1),
     ]:
