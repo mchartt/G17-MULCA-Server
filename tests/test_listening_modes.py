@@ -747,6 +747,13 @@ def test_dismissal_matching():
         "grazie, adesso passiamo al prossimo punto",
         "MULCA stop",
         "stop, muca",
+        # Found live (group 10, 14 Oct):
+        "MULCA turn off.",
+        "Ok, power off.",
+        "switch it off",
+        "shut down please",
+        "mulca spegniti",
+        "Mulca, off",
         "muca stai zitto",
         "basta così mulca",
         "stop mulca",
@@ -775,6 +782,8 @@ def test_dismissal_matching():
     ):
         assert _matches_dismissal(transcript)
     assert not _matches_dismissal("let us move on")
+    for transcript in ("I turned it off and on", "the offline mode", "off-topic"):
+        assert not _matches_dismissal(transcript), transcript
     # Known, accepted cost of this flexibility (see DISMISSAL_PATTERN's own
     # comment): a longer sentence that happens to contain a dismissal word
     # now also matches, even when it wasn't really goodbye -- the mirror

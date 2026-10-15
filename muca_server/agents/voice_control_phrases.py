@@ -60,7 +60,9 @@ DISMISSAL_PATTERN = re.compile(
     r"|shut up|go away|leave us|(good)?bye|shh+|hush|silence"
     r"|thank(s| you)|grazie|basta( così)?|ho finito"
     r"|abbiamo finito|puoi andare|smettila|fermati|(stai )?zitt[oa]|silenzio"
-    r"|vai via|lasciaci|non ora|pausa|dormire|fine( della)? sessione)\b",
+    r"|vai via|lasciaci|non ora|pausa|dormire|fine( della)? sessione"
+    # Found live (group 10, 14 Oct): "MULCA turn off", "Ok, power off".
+    rf"|(turn|power|switch) (it )?off|shut ?down|spegni(ti)?|{_NAME},? off)\b",
     re.IGNORECASE,
 )
 
