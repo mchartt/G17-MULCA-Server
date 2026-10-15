@@ -56,6 +56,9 @@ class UserTextMessage(IncomingMessage):
     speaker: int
     speaker_name: str = Field(default="", alias="speakerName")
     text: str
+    # The client knows its own @mention ("<@1557...>"); the text alone doesn't
+    # say whose id that is.
+    mentions_assistant: bool = Field(default=False, alias="mentionsAssistant")
 
 
 class Participant(BaseModel):

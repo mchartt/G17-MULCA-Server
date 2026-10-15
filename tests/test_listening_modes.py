@@ -810,6 +810,36 @@ async def test_a_dismissal_ends_the_session_unanswered_and_never_starts_one():
     assert listening_states(conversation) == [True, False]
 
 
+async def typed(conversation, text: str, *, mentions: bool = False) -> None:
+    await conversation._take_text_turn(
+        parse_incoming_message(
+            {
+                "event": "user_text",
+                "speaker": 1,
+                "speakerName": "Ada",
+                "text": text,
+                "mentionsAssistant": mentions,
+            }
+        )
+    )
+    await conversation.wait_until_idle()
+
+
+async def test_a_typed_stop_naming_muca_ends_the_voice_session():
+    conversation, _ = await make_conversation(listening_mode="wake")
+
+    await voice_turn(conversation, "muca start, what is the deadline")
+    await typed(conversation, "thanks, stop sharing the screen")  # not named
+    assert conversation._listening_window_open is True
+
+    await typed(conversation, "MULCA stop")
+    assert conversation._listening_window_open is False
+
+    await voice_turn(conversation, "muca start, what is the deadline")
+    await typed(conversation, "<@1557331332789702666>  stop", mentions=True)
+    assert conversation._listening_window_open is False
+
+
 async def test_interruptions_are_scored_by_how_long_muca_was_heard(monkeypatch):
     # Scoring only: keep the session from ending partway through.
     monkeypatch.setattr(conversation_module, "INTERRUPTION_THRESHOLD_START", 10)

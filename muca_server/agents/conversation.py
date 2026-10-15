@@ -1208,6 +1208,17 @@ class Conversation:
         if message.speaker_name:
             self._participants[message.speaker] = message.speaker_name
 
+        # A typed "MULCA stop" ends the voice session too. Found live (group
+        # 6, 15 Oct): "@MULCA stop" got "I'm stepping back" in the chat while
+        # MULCA kept talking in the call. Named, unlike a spoken dismissal: a
+        # typed "thanks" is far likelier to be meant for someone else.
+        if (
+            self._engaged()
+            and (message.mentions_assistant or _addresses_assistant(message.text))
+            and _matches_dismissal(message.text)
+        ):
+            await self._disengage("dismissed in text")
+
         label = self._username(message.speaker)
         spoken = f"{label}: {message.text}"
 
