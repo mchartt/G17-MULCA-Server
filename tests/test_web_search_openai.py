@@ -108,3 +108,42 @@ async def test_a_failed_search_records_no_cost():
     await searcher.search("weather in Rome today")
 
     assert tracker.recorded == []
+
+
+async def test_cited_pages_are_listed_as_sources_once_each():
+    def cite(title, url):
+        return SimpleNamespace(type="url_citation", title=title, url=url)
+
+    response = SimpleNamespace(
+        output_text="Warming is unequivocal.",
+        usage=None,
+        output=[
+            SimpleNamespace(type="web_search_call"),
+            SimpleNamespace(
+                type="message",
+                content=[
+                    SimpleNamespace(
+                        annotations=[
+                            cite("AR6 Synthesis Report", "https://www.ipcc.ch/ar6"),
+                            cite("AR6 Synthesis Report", "https://www.ipcc.ch/ar6"),
+                            cite("State of the Global Climate", "https://wmo.int/s"),
+                        ]
+                    )
+                ],
+            ),
+        ],
+    )
+    client = FakeClient()
+
+    async def create(**kwargs):
+        return response
+
+    client.responses.create = create
+
+    result = await OpenAIWebSearcher(client).search("is climate change real")
+
+    assert result == (
+        "Warming is unequivocal.\n\nSources:\n"
+        "- AR6 Synthesis Report: https://www.ipcc.ch/ar6\n"
+        "- State of the Global Climate: https://wmo.int/s"
+    )

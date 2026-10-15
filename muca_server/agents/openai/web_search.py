@@ -79,9 +79,33 @@ class OpenAIWebSearcher:
             )
 
         result = response.output_text or "(no results found)"
+        sources = _sources(response)
+        if sources:
+            result += "\n\nSources:\n" + "\n".join(
+                f"- {title}: {url}" for title, url in sources
+            )
         logger.info(
             "Web search for %r returned %d chars",
             query,
             len(result),
         )
         return result
+
+
+def _sources(response) -> list[tuple[str, str]]:
+    """
+    The pages the search cited, each once, in order. Listed separately:
+    found live (15 Oct), the answer named its sources but never linked
+    them -- the summary text doesn't reliably carry the URLs.
+    """
+
+    seen: dict[str, str] = {}
+    for item in getattr(response, "output", None) or []:
+        for content in getattr(item, "content", None) or []:
+            for annotation in getattr(content, "annotations", None) or []:
+                if getattr(annotation, "type", None) != "url_citation":
+                    continue
+                url = getattr(annotation, "url", "")
+                if url and url not in seen:
+                    seen[url] = getattr(annotation, "title", "") or url
+    return [(title, url) for url, title in seen.items()]
