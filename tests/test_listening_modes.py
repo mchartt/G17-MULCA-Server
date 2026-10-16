@@ -975,6 +975,46 @@ async def test_wake_sessions_log_their_trigger_and_why_they_ended():
     ]
 
 
+REPLY = (
+    "Here is a quick summary of your doubts: you tested the audio, decided "
+    "to stay in Italian, and want to read the papers before building."
+)
+
+
+def test_a_turn_repeating_a_fresh_reply_is_a_suspected_echo():
+    from muca_server.agents.conversation import _is_echo
+
+    replies = [(100_000, REPLY)]
+    # Heard back almost word for word, soon after.
+    assert _is_echo(
+        "a quick summary of your doubts you tested the audio decided to stay in Italian",
+        replies,
+        110_000,
+    )
+    # Long after the reply, short, or someone quoting a few words of it in
+    # their own sentence: not an echo.
+    assert not _is_echo("a quick summary of your doubts you tested the audio", replies, 200_000)
+    assert not _is_echo("a quick summary", replies, 110_000)
+    assert not _is_echo(
+        "she said a quick summary of your doubts but I think we should do it in English instead today",
+        replies,
+        110_000,
+    )
+
+
+async def test_a_suspected_echo_is_logged_and_still_judged():
+    conversation, factory = await make_conversation(listening_mode="wake")
+    log = EventLog(conversation._policy)
+    await voice_turn(conversation, "muca start")
+    conversation._recent_replies = [(conversation_module._now_ms(), REPLY)]
+    asked = factory.auxiliary.asked
+
+    await voice_turn(conversation, "a quick summary of your doubts you tested the audio decided to stay")
+
+    assert "echo_suspected" in log.names()
+    assert factory.auxiliary.asked == asked + 1  # logged only, nothing dropped
+
+
 async def test_talk_overs_are_logged_with_their_score():
     conversation, _ = await make_conversation(listening_mode="wake")
     await conversation._handle_wake_phrase(speaker=1)

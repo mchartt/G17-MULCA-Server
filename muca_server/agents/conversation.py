@@ -185,6 +185,36 @@ MAX_SAMPLES_PER_FRAME = 3000
 
 TurnJob = Callable[[], Awaitable[None]]
 
+# A participant's microphone picking MULCA up from their speakers: suspected
+# from the 15-16 Oct exports, not confirmed (the clearest case turned out to
+# be someone reading a text reply aloud). A voice turn this soon after a
+# reply, made mostly of that reply's word sequences, is logged as an
+# echo_suspected session event -- logged only, nothing dropped, so the
+# exports can show whether echo happens before anything acts on it.
+ECHO_WINDOW_MS = 30_000
+ECHO_MIN_WORDS = 4
+ECHO_MIN_SHARE = 0.6
+
+
+def _trigrams(text: str) -> set[tuple[str, ...]]:
+    words = re.findall(r"\w+", text.lower())
+    return {tuple(words[i : i + 3]) for i in range(len(words) - 2)}
+
+
+def _is_echo(transcript: str, replies, now_ms: int) -> bool:
+    """Whether `transcript` mostly repeats a reply MULCA just gave."""
+
+    if len(re.findall(r"\w+", transcript)) < ECHO_MIN_WORDS:
+        return False
+    heard = _trigrams(transcript)
+    for said_at, reply in replies:
+        if now_ms - said_at > ECHO_WINDOW_MS:
+            continue
+        shared = heard & _trigrams(reply)
+        if len(shared) >= ECHO_MIN_SHARE * len(heard):
+            return True
+    return False
+
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
@@ -294,6 +324,8 @@ class Conversation:
 
         # Deltas of the reply being streamed, until it completes.
         self._assistant_reply: list[str] = []
+        # (when, text) of MULCA's latest replies, for _is_echo.
+        self._recent_replies: list[tuple[int, str]] = []
 
         # What the client reports about its own playback of the main
         # agent's audio: the server cannot see it directly. When the client
@@ -1312,6 +1344,13 @@ class Conversation:
         if self._listening_mode == "wake":
             await self._settle_interruption(speaker, ended_at, transcript)
 
+        if transcript and _is_echo(transcript, self._recent_replies, _now_ms()):
+            await self._session_event(
+                "echo_suspected",
+                transcript[:300],
+                speaker=self._username(speaker),
+            )
+
         if not transcript:
             # Nothing understood (noise, or transcription failed) --
             # explicitly told, rather than asking the observers to judge
@@ -2046,6 +2085,8 @@ class Conversation:
         if is_final:
             reply = "".join(self._assistant_reply)
             self._assistant_reply.clear()
+            if reply:
+                self._recent_replies = self._recent_replies[-4:] + [(_now_ms(), reply)]
 
             # Observers otherwise only ever hear that MULCA spoke (the
             # generic "started/stopped speaking" notices below), never what
