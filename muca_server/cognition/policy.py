@@ -1638,10 +1638,18 @@ class CoalaPolicy:
             else ""
         )
 
+        # Found live (15-19 Oct, four times): MULCA followed briefs that
+        # were wrong about what it could see -- a pasted analysis "not
+        # included", "only a header" of a 20,000-character file, the wrong
+        # text for "do that" -- since this used to leave it only phrasing,
+        # tone and delivery.
         directive_label = (
-            "High-level guidance from a lightweight judgment step -- this "
-            "is the rationale and rough target, not literal wording. Use "
-            "your own judgment for exact phrasing, tone, and delivery:"
+            "Guidance from a lightweight judgment step: it decided that you "
+            "should reply and roughly how, but it doesn't see everything "
+            "you see -- attached files, documents, web search results, "
+            "retrieved history, the full conversation. Where it conflicts "
+            "with what you can see, go by what you see. Phrasing, tone, "
+            "delivery and content are your call:"
             if wm.latest_strategy_id is not None
             else "Current directive:"
         )

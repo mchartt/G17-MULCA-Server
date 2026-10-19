@@ -304,11 +304,12 @@ def test_attachments_are_given_in_full_or_as_a_note():
     assert "[Attached photo.png: could not be read as text]" in full
 
     note = _with_attachments("", attachments[:1], full=False)
-    assert note.startswith("[Attached message.txt, 22 characters; MULCA has all of it.")
-    assert "don't describe what it contains" in note
-    assert note.endswith('First words: "PRIMARY USERS children..."]')
+    assert note == (
+        '[Attached message.txt, 22 characters; MULCA reads it. '
+        'First words: "PRIMARY USERS children..."]'
+    )
     cut_note = _with_attachments("", attachments[1:2], full=False)
-    assert "MULCA has the first 3." in cut_note
+    assert "MULCA reads it (the first 3)." in cut_note
 
 
 async def test_mulca_and_the_log_get_an_attachment_the_observers_a_note():
@@ -350,6 +351,6 @@ async def test_mulca_and_the_log_get_an_attachment_the_observers_a_note():
 
     assert "x" * 500 in to_main[0]
     assert "x" * 500 not in to_observer[0]
-    assert to_observer[0].startswith("Delia: [Attached message.txt, 514 characters; MULCA has all of it.")
+    assert to_observer[0].startswith("Delia: [Attached message.txt, 514 characters; MULCA reads it.")
     assert 'First words: "PRIMARY USERS' in to_observer[0]
     assert "x" * 500 in policy.utterances[0].content

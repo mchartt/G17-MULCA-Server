@@ -194,10 +194,9 @@ ATTACHMENT_PREVIEW_CHARS = 200
 def _with_attachments(text: str, attachments, *, full: bool) -> str:
     """
     A text message with its attachments: in full for MULCA, as a note for
-    the observers. Found live (19 Oct): from a 200-character preview of a
-    pasted Wikipedia article, the intervention agent briefed MULCA that the
-    text "only shows a Wikipedia header" -- so the note now says it isn't
-    the content. And a cut file says so, for MULCA to tell the user.
+    the observers -- what to do with a file is theirs to say, what's in it
+    MULCA's (see the intervention agent's instructions). A cut file says so,
+    for MULCA to tell the user.
     """
 
     parts = [text] if text else []
@@ -221,12 +220,10 @@ def _with_attachments(text: str, attachments, *, full: bool) -> str:
             )
         else:
             start = attachment.text[:ATTACHMENT_PREVIEW_CHARS].replace("\n", " ")
-            has = f"the first {len(attachment.text):,}" if cut else "all of it"
+            reads = f" (the first {len(attachment.text):,})" if cut else ""
             parts.append(
                 f"[Attached {attachment.name}, {attachment.chars:,} characters; "
-                f"MULCA has {has}. You only see its first words, not its "
-                f"content -- don't describe what it contains. First words: "
-                f"\"{start}...\"]"
+                f"MULCA reads it{reads}. First words: \"{start}...\"]"
             )
     return "\n\n".join(parts)
 

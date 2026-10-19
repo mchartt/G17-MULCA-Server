@@ -2344,3 +2344,18 @@ async def test_a_summary_of_everything_still_gets_everything():
     sent = port.instructions[0]
     for text in ("yesterday's work", "older work", "the group discussed the deadline", "today's question"):
         assert text in sent
+
+
+async def test_the_brief_leaves_the_content_to_mulca():
+    # Found live: MULCA followed briefs that were wrong about what it could
+    # see. The heading above every brief gives it the final say.
+    policy, port = await summary_policy_with_days()
+
+    await policy.on_intervention_signal(
+        object(),
+        InterventionSignal(strategy_id="provide_summary", prompt_fragment="only the header"),
+    )
+
+    sent = port.instructions[0]
+    assert "go by what you see" in sent
+    assert "attached files, documents, web search results" in sent
