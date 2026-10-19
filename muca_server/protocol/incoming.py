@@ -44,6 +44,17 @@ class TextMessage(TargetedMessage):
     role: str = "system"
 
 
+class Attachment(IncomingMessage):
+    """The text a client read out of a file attached to a message."""
+
+    name: str
+    text: str = ""
+    # The whole document's length; more than len(text) when it was cut.
+    chars: int = 0
+    # False: attached, but nothing could be read (an image, a scan).
+    readable: bool = True
+
+
 class UserTextMessage(IncomingMessage):
     """
     One user's utterance, in text.
@@ -59,6 +70,7 @@ class UserTextMessage(IncomingMessage):
     # The client knows its own @mention ("<@1557...>"); the text alone doesn't
     # say whose id that is.
     mentions_assistant: bool = Field(default=False, alias="mentionsAssistant")
+    attachments: list[Attachment] = Field(default_factory=list)
 
 
 class Participant(BaseModel):

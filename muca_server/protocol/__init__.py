@@ -20,6 +20,7 @@ from .incoming import (
     TextMessage,
     TriggerResponseMessage,
     UserTextMessage,
+    Attachment,
     parse_incoming_message,
 )
 from .outgoing import (
@@ -68,6 +69,7 @@ __all__ = [
     "TextMessage",
     "TriggerResponseMessage",
     "UserTextMessage",
+    "Attachment",
     "parse_incoming_message",
     "serialize_outgoing_message",
 ]

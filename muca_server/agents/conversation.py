@@ -185,6 +185,35 @@ MAX_SAMPLES_PER_FRAME = 3000
 
 TurnJob = Callable[[], Awaitable[None]]
 
+# What the intervention agent sees of an attachment: that it's there and how
+# it starts. It only decides whether MULCA speaks; the full text would fill
+# its context, which also holds the whole call.
+ATTACHMENT_PREVIEW_CHARS = 200
+
+
+def _with_attachments(text: str, attachments, *, full: bool) -> str:
+    """A text message with its attachments, in full or as short notes."""
+
+    parts = [text] if text else []
+    for attachment in attachments:
+        if not attachment.readable:
+            parts.append(f"[Attached {attachment.name}: could not be read as text]")
+        elif full:
+            size = (
+                f"first {len(attachment.text):,} of {attachment.chars:,} characters"
+                if len(attachment.text) < attachment.chars
+                else f"{attachment.chars:,} characters"
+            )
+            parts.append(f"[Attached {attachment.name}, {size}:]\n{attachment.text}")
+        else:
+            start = attachment.text[:ATTACHMENT_PREVIEW_CHARS].replace("\n", " ")
+            parts.append(
+                f"[Attached {attachment.name}, {attachment.chars:,} characters, "
+                f"starting: \"{start}...\"]"
+            )
+    return "\n\n".join(parts)
+
+
 # A participant's microphone picking MULCA up from their speakers: suspected
 # from the 15-16 Oct exports, not confirmed (the clearest case turned out to
 # be someone reading a text reply aloud). A voice turn this soon after a
@@ -1252,14 +1281,17 @@ class Conversation:
             await self._disengage("dismissed in text")
 
         label = self._username(message.speaker)
-        spoken = f"{label}: {message.text}"
+        # MULCA, the log and the memory get attachments in full; the
+        # observers a note of each.
+        content = _with_attachments(message.text, message.attachments, full=True)
+        noted = _with_attachments(message.text, message.attachments, full=False)
 
         if self._main_agent is not None:
-            await self._main_agent.send_text(spoken, role="user")
+            await self._main_agent.send_text(f"{label}: {content}", role="user")
 
         for agent in list(self._auxiliary_agents.values()):
             if agent.listens_to_user(message.speaker):
-                await agent.send_text(spoken, role="user")
+                await agent.send_text(f"{label}: {noted}", role="user")
 
         timestamp = _now_ms()
         self.turns.append(
@@ -1277,7 +1309,7 @@ class Conversation:
             Utterance(
                 speaker_id=message.speaker,
                 speaker_name=label,
-                content=message.text,
+                content=content,
                 timestamp_ms=timestamp,
                 modality="text",
             )

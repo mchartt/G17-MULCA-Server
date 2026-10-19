@@ -278,3 +278,71 @@ def test_a_user_message_is_answered_over_the_socket():
         assert websocket.receive()["type"] == "websocket.close"
 
     assert "".join(f["text"] for f in frames) == "Hello there."
+
+
+# ----------------------------------------------------------------------
+# Attachments
+# ----------------------------------------------------------------------
+
+
+def test_attachments_are_given_in_full_or_as_a_note():
+    from muca_server.agents.conversation import _with_attachments
+    from muca_server.protocol import Attachment
+
+    attachments = [
+        Attachment(name="message.txt", text="PRIMARY USERS children", chars=22),
+        Attachment(name="long.pdf", text="abc", chars=10),
+        Attachment(name="photo.png", readable=False),
+    ]
+
+    full = _with_attachments("review this", attachments, full=True)
+    assert full.startswith("review this")
+    assert "[Attached message.txt, 22 characters:]\nPRIMARY USERS children" in full
+    assert "[Attached long.pdf, first 3 of 10 characters:]\nabc" in full
+    assert "[Attached photo.png: could not be read as text]" in full
+
+    note = _with_attachments("", attachments[:1], full=False)
+    assert note == '[Attached message.txt, 22 characters, starting: "PRIMARY USERS children..."]'
+
+
+async def test_mulca_and_the_log_get_an_attachment_the_observers_a_note():
+    from muca_server.protocol import parse_incoming_message
+
+    conversation, policy, factory, _ = make_conversation()
+    await conversation.start()
+    to_main, to_observer = [], []
+
+    async def main_text(text, *, role="system"):
+        to_main.append(text)
+
+    class Observer:
+        listen_to_assistant = False
+
+        def listens_to_user(self, user_id):
+            return True
+
+        async def send_text(self, text, *, role="system"):
+            to_observer.append(text)
+
+    factory.main.send_text = main_text
+    conversation._auxiliary_agents[uuid4()] = Observer()
+
+    await conversation.route_user_text(
+        parse_incoming_message(
+            {
+                "event": "user_text",
+                "speaker": 1,
+                "speakerName": "Delia",
+                "text": "",
+                "attachments": [
+                    {"name": "message.txt", "text": "PRIMARY USERS " + "x" * 500, "chars": 514}
+                ],
+            }
+        )
+    )
+    await conversation.wait_until_idle()
+
+    assert "x" * 500 in to_main[0]
+    assert "x" * 500 not in to_observer[0]
+    assert to_observer[0].startswith('Delia: [Attached message.txt, 514 characters, starting: "PRIMARY USERS')
+    assert "x" * 500 in policy.utterances[0].content
