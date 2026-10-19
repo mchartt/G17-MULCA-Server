@@ -192,24 +192,41 @@ ATTACHMENT_PREVIEW_CHARS = 200
 
 
 def _with_attachments(text: str, attachments, *, full: bool) -> str:
-    """A text message with its attachments, in full or as short notes."""
+    """
+    A text message with its attachments: in full for MULCA, as a note for
+    the observers. Found live (19 Oct): from a 200-character preview of a
+    pasted Wikipedia article, the intervention agent briefed MULCA that the
+    text "only shows a Wikipedia header" -- so the note now says it isn't
+    the content. And a cut file says so, for MULCA to tell the user.
+    """
 
     parts = [text] if text else []
     for attachment in attachments:
+        cut = len(attachment.text) < attachment.chars
         if not attachment.readable:
             parts.append(f"[Attached {attachment.name}: could not be read as text]")
-        elif full:
-            size = (
-                f"first {len(attachment.text):,} of {attachment.chars:,} characters"
-                if len(attachment.text) < attachment.chars
-                else f"{attachment.chars:,} characters"
+        elif full and cut:
+            parts.append(
+                f"[Attached {attachment.name} -- only the first "
+                f"{len(attachment.text):,} of {attachment.chars:,} characters were "
+                "received; the rest is missing. When you answer about this file, "
+                f"say that you only read the first {len(attachment.text):,} "
+                "characters, and that anything not in them may be in the part "
+                "you didn't get:]\n" + attachment.text
             )
-            parts.append(f"[Attached {attachment.name}, {size}:]\n{attachment.text}")
+        elif full:
+            parts.append(
+                f"[Attached {attachment.name}, {attachment.chars:,} characters:]\n"
+                + attachment.text
+            )
         else:
             start = attachment.text[:ATTACHMENT_PREVIEW_CHARS].replace("\n", " ")
+            has = f"the first {len(attachment.text):,}" if cut else "all of it"
             parts.append(
-                f"[Attached {attachment.name}, {attachment.chars:,} characters, "
-                f"starting: \"{start}...\"]"
+                f"[Attached {attachment.name}, {attachment.chars:,} characters; "
+                f"MULCA has {has}. You only see its first words, not its "
+                f"content -- don't describe what it contains. First words: "
+                f"\"{start}...\"]"
             )
     return "\n\n".join(parts)
 
