@@ -744,7 +744,9 @@ def test_dismissal_matching():
     for transcript in (
         "thank you very much muca",
         "ok that's all",
-        "grazie, adesso passiamo al prossimo punto",
+        "grazie mille mulca",
+        "Mulca, grazie.",
+        "thanks, assistant",
         "MULCA stop",
         "stop, muca",
         # Found live (group 10, 14 Oct):
@@ -784,13 +786,21 @@ def test_dismissal_matching():
     assert not _matches_dismissal("let us move on")
     for transcript in ("I turned it off and on", "the offline mode", "off-topic"):
         assert not _matches_dismissal(transcript), transcript
+    # A thanks between students, not to MULCA (found live, 19-25 Oct).
+    for transcript in (
+        "grazie, adesso passiamo al prossimo punto",
+        "No grazie.",
+        "Mi sento bene, grazie.",
+        "Grazie mille di parlare.",
+        "thanks Ada, now let us move on to the budget",
+    ):
+        assert not _matches_dismissal(transcript), transcript
     # Known, accepted cost of this flexibility (see DISMISSAL_PATTERN's own
     # comment): a longer sentence that happens to contain a dismissal word
     # now also matches, even when it wasn't really goodbye -- the mirror
     # image of _matches_wake_phrase's own "any sentence naming MULCA opens
     # a window" trade-off.
     assert _matches_dismissal("thanks muca, can you also check the budget")
-    assert _matches_dismissal("thanks Ada, now let us move on to the budget")
     assert _matches_dismissal("stop sharing your screen and look at this, Ada")
 
 

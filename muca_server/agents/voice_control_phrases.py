@@ -54,11 +54,21 @@ def addresses_assistant(transcript: str) -> bool:
 # on to the budget" now also ends an engaged session, same as "mulca,
 # that bot answer was great" would already falsely open one -- accepted
 # for both, not just one.
+#
+# The exception: a thanks only counts said to MULCA ("grazie MULCA",
+# "thanks, assistant"). Found live (19-25 Oct): a passing "grazie" between
+# students ("No grazie", "Mi sento bene, grazie") ended 28 of 54
+# dismissed sessions, and 23 of those were woken again within a minute.
+_THANKS = r"(thank(s| you)|grazie)"
+_TO_MULCA = rf"({_NAME}|{_ALIAS})"
 DISMISSAL_PATTERN = re.compile(
     r"\b(that'?s (all|it|enough)|we'?re done|you can (go|leave)|sleep"
     r"|go to bed|end( the| this)? session|stop|quiet|pause|not now"
-    r"|shut up|go away|leave us|(good)?bye|shh+|hush|silence"
-    r"|thank(s| you)|grazie|basta( così)?|ho finito"
+    r"|shut up|go away|leave us|(good)?bye|shh+|hush|silence|wrap (it|this) up"
+    # Up to two words between ("thank you very much MULCA", "grazie
+    # mille MULCA").
+    rf"|{_THANKS}(\W+\w+){{0,2}}?\W+{_TO_MULCA}|{_TO_MULCA}\W+{_THANKS}"
+    r"|basta( così)?|ho finito"
     r"|abbiamo finito|puoi andare|smettila|fermati|(stai )?zitt[oa]|silenzio"
     r"|vai via|lasciaci|non ora|pausa|dormire|fine( della)? sessione"
     # Found live (group 10, 14 Oct): "MULCA turn off", "Ok, power off".
