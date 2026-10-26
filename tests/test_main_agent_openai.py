@@ -12,7 +12,7 @@ from muca_server.agents.openai.main_agent import (
     MAIN_TOKEN_LIMIT,
     MainAgentOpenAI,
     _looks_like_low_confidence_transcription,
-    _looks_like_prompt_echo,
+    _strip_prompt_echo,
     log_usage,
     trim_context,
 )
@@ -453,36 +453,64 @@ async def test_user_transcripts_reach_the_transcript_hook():
     assert received == [("in-1", "hello there")]
 
 
-def test_prompt_echo_detection_is_deterministic_string_matching():
+def test_prompt_echo_is_cut_and_real_speech_kept():
     prompt = (
         'The conversation is in English or Italian, sometimes switching '
         'between the two. One participant is an AI assistant named '
-        'MULCA, often addressed by that name, "assistant", or "bot".'
+        'MULCA, often addressed by that name, "assistant", or "bot", and '
+        'woken with "MULCA start".'
     )
 
-    # Confirmed live: both the full prompt verbatim, and its first
-    # sentence duplicated, are real transcripts an ASR model produced
-    # instead of actual speech.
-    assert _looks_like_prompt_echo(prompt, prompt)
-    assert _looks_like_prompt_echo(
+    # Confirmed live: the full prompt verbatim, and its first sentence
+    # duplicated, are real transcripts an ASR model produced instead of
+    # actual speech.
+    assert _strip_prompt_echo(prompt, prompt) == ""
+    assert _strip_prompt_echo(
         "The conversation is in English or Italian, sometimes switching "
         "between the two. The conversation is in English or Italian, "
         "sometimes switching between the two.",
         prompt,
+    ) == ""
+
+    # Found live, 19-25 Oct -- each one woke MULCA up ("MULCA start"):
+    # wrapped, with punctuation moved, and after real speech.
+    assert _strip_prompt_echo(
+        'context: ###\nThe conversation is in English or Italian, sometimes '
+        'switching between the two. One participant is an AI assistant '
+        'named MULCA, often addressed by that name, "assistant", or "bot", '
+        'and woken with "MULCA start".\n###',
+        prompt,
+    ) == ""
+    assert _strip_prompt_echo(
+        'context: the conversation is in English or Italian, sometimes '
+        'switching between the two. One participant is an AI assistant '
+        'named MULCA, often addressed by that name, "assistant", or "bot", '
+        'and woken with "MULCA start".',
+        prompt,
+    ) == ""
+    assert _strip_prompt_echo(
+        "Ah, perché magari posso prendere dagli artefatti. The conversation "
+        "is in English or Italian, sometimes switching between the two. One "
+        "participant is an AI assistant named MULCA, often addressed by "
+        'that name, "assistant," or "bot," and woken with "MULCA start."',
+        prompt,
+    ) == "Ah, perché magari posso prendere dagli artefatti."
+    assert _strip_prompt_echo(
+        "context: ###\nThe conversation is in English or Italian, sometimes "
+        "switching between the two. Ciao Eero.",
+        prompt,
+    ) == "Ciao Eero."
+
+    assert _strip_prompt_echo("what time is the meeting", prompt) == (
+        "what time is the meeting"
     )
+    assert _strip_prompt_echo("", prompt) == ""
 
-    assert not _looks_like_prompt_echo("what time is the meeting", prompt)
-    assert not _looks_like_prompt_echo("", prompt)
-
-    # Found live: a bare "MULCA." or "assistant" is *always* a substring
-    # of the prompt (it contains those exact words) -- without a minimum
-    # length, these were being discarded as if they were echoes, silently
-    # swallowing genuine short wake-word attempts instead of just the real
-    # multi-sentence echo this was built to catch.
-    assert not _looks_like_prompt_echo("MULCA.", prompt)
-    assert not _looks_like_prompt_echo("MULCA", prompt)
-    assert not _looks_like_prompt_echo("assistant", prompt)
-    assert not _looks_like_prompt_echo("Hey MULCA", prompt)
+    # Found live: a bare "MULCA." or "assistant" always shares words with
+    # the prompt -- without a minimum run, genuine short wake-word attempts
+    # were swallowed along with the real multi-sentence echo.
+    for real in ("MULCA.", "MULCA", "assistant", "Hey MULCA", "MULCA start."):
+        assert _strip_prompt_echo(real, prompt) == real
 
 
 async def test_a_transcript_that_echoes_the_bias_prompt_is_discarded():
@@ -526,7 +554,7 @@ def test_low_confidence_detection_is_a_plain_average_over_logprobs():
 async def test_a_low_confidence_transcript_is_discarded():
     # Found live: coherent, fluent sentences ("I'm reading a book.")
     # hallucinated from pure kitchen noise -- no relation to the bias
-    # prompt at all, so _looks_like_prompt_echo alone wouldn't catch it.
+    # prompt at all, so _strip_prompt_echo alone wouldn't catch it.
     # -1.5 checked against a real live sample before re-enabling this:
     # across a full test session, the only confirmed-genuine utterance
     # under this cutoff was a wake-phrase attempt ("assistente"); every

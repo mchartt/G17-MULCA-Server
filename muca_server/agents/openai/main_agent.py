@@ -9,6 +9,7 @@ import asyncio
 import base64
 import logging
 import os
+import re
 from contextlib import suppress
 from uuid import uuid4
 
@@ -35,43 +36,76 @@ logger = logging.getLogger(__name__)
 MIN_PROMPT_ECHO_WORDS = 6
 
 
-def _looks_like_prompt_echo(transcript: str, prompt: str) -> bool:
+_WORD = re.compile(r"[\w']+")
+
+# The wrapper the ASR model sometimes puts around an echoed prompt
+# ("context: ###\n<prompt>\n###"), found live 19-25 Oct.
+_ECHO_WRAPPER = re.compile(r"^\W*context\s*:|#+", re.IGNORECASE)
+
+
+def _strip_prompt_echo(transcript: str, prompt: str) -> str:
     """
-    Whether `transcript` looks like the ASR model echoing its own
-    vocabulary-bias prompt back, rather than a real spoken turn -- a known
-    failure mode (OpenAI's gpt-4o-transcribe/Whisper-family models) when
-    there's little real speech signal: it hallucinates by repeating the
-    prompt it was given, verbatim or with a sentence repeated, instead of
-    an empty/low-confidence result. Confirmed live.
+    `transcript` without the ASR model echoing its own vocabulary-bias
+    prompt back -- a known failure mode (OpenAI's gpt-4o-transcribe/
+    Whisper-family models) when there's little real speech signal: it
+    hallucinates by repeating the prompt it was given instead of an
+    empty/low-confidence result. Confirmed live: verbatim, with a sentence
+    repeated, wrapped in "context: ###", and appended to real speech ("Ah,
+    perché magari posso prendere dagli artefatti. The conversation is in
+    English or Italian..."). The prompt says "MULCA start", so an echo
+    left in woke MULCA up.
 
-    Cheap, deterministic string containment -- no model call, no
-    embeddings: dedupe consecutive repeated sentences (the exact pattern
-    seen live), then check whether what's left is substantially the bias
-    prompt itself. Requires MIN_PROMPT_ECHO_WORDS words before considering
-    it at all, so a short, genuine wake-word utterance that merely shares
-    a word with the prompt is never mistaken for echoing it.
+    Cheap, deterministic word matching -- no model call: every run of at
+    least MIN_PROMPT_ECHO_WORDS words that also appears, in order, in the
+    prompt is cut, along with the wrapper; the real speech around it is
+    kept. "" when nothing real is left. The minimum keeps a short, genuine
+    address that merely shares words with the prompt ("Hey MULCA").
     """
 
-    normalized_prompt = " ".join(prompt.lower().split())
+    prompt_words = [w.lower() for w in _WORD.findall(prompt)]
+    spans = [(m.start(), m.end(), m.group().lower()) for m in _WORD.finditer(transcript)]
 
-    sentences = [s.strip() for s in transcript.lower().split(".") if s.strip()]
-    deduped: list[str] = []
-    for sentence in sentences:
-        if not deduped or deduped[-1] != sentence:
-            deduped.append(sentence)
-    normalized_transcript = ". ".join(deduped)
+    cuts: list[tuple[int, int]] = []
+    i = 0
+    while i < len(spans):
+        longest = 0
+        for j, word in enumerate(prompt_words):
+            if word != spans[i][2]:
+                continue
+            length = 0
+            while (
+                i + length < len(spans)
+                and j + length < len(prompt_words)
+                and spans[i + length][2] == prompt_words[j + length]
+            ):
+                length += 1
+            longest = max(longest, length)
+        if longest >= MIN_PROMPT_ECHO_WORDS:
+            cuts.append((spans[i][0], spans[i + longest - 1][1]))
+            i += longest
+        else:
+            i += 1
 
-    if len(normalized_transcript.split()) < MIN_PROMPT_ECHO_WORDS:
-        return False
+    if not cuts:
+        return transcript
 
-    return normalized_transcript in normalized_prompt
+    kept, start = [], 0
+    for cut_start, cut_end in cuts:
+        kept.append(transcript[start:cut_start])
+        start = cut_end
+    kept.append(transcript[start:])
+    # A piece with no words in it is punctuation the cut left dangling
+    # ('", or "bot".' and the like).
+    rest = " ".join(piece for piece in kept if _WORD.search(_ECHO_WRAPPER.sub("", piece)))
+    rest = _ECHO_WRAPPER.sub(" ", rest)
+    return re.sub(r"^[\W_]+", "", " ".join(rest.split()))
 
 
 # A rough "don't trust this as real speech" cutoff on the ASR's own
 # per-token confidence. Hallucinated transcripts (invented over
 # near-silent/noisy audio -- confirmed live: coherent, fluent sentences
 # ("I'm reading a book.") generated from pure kitchen noise, not just the
-# bias-prompt echo _looks_like_prompt_echo already catches) are typically
+# bias-prompt echo _strip_prompt_echo already catches) are typically
 # produced with much lower confidence than genuine transcription, even
 # when fluent. A starting point, not calibrated against a real sample yet
 # -- tune once there's confirmed-hallucination data to compare against
@@ -93,7 +127,7 @@ def _looks_like_low_confidence_transcription(logprobs) -> bool:
     """
     Whether the ASR's own per-token confidence for this transcript is low
     enough to doubt it's real speech, rather than something hallucinated.
-    Unlike _looks_like_prompt_echo (one specific known string), this
+    Unlike _strip_prompt_echo (one specific known string), this
     catches hallucinated content with no relation to any prompt text at
     all -- the general case, at the cost of needing a threshold rather
     than an exact match. None/empty logprobs (not every provider response
@@ -277,7 +311,7 @@ class MainAgentOpenAI(MainAgent):
         return f"{self._persona}\n\nTask context:\n{self._task_knowledge}"
 
     def _transcription_prompt(self) -> str:
-        # Factored out of _session_config so _looks_like_prompt_echo can
+        # Factored out of _session_config so _strip_prompt_echo can
         # compare a completed transcript against this exact same string --
         # the one place this is worded.
         return (
@@ -699,14 +733,16 @@ class MainAgentOpenAI(MainAgent):
                     transcript,
                     average_logprob,
                 )
-                if _looks_like_prompt_echo(transcript, self._transcription_prompt()):
+                stripped = _strip_prompt_echo(transcript, self._transcription_prompt())
+                if stripped != transcript:
                     logger.warning(
-                        "%s discarded a transcript that looked like a "
-                        "prompt echo, not real speech: %r",
+                        "%s cut a prompt echo, not real speech, from a "
+                        "transcript: %r -> %r",
                         self.log_label,
                         transcript,
+                        stripped,
                     )
-                    transcript = ""
+                    transcript = stripped
                 elif (
                     average_logprob is not None
                     and average_logprob < MIN_AVERAGE_LOGPROB
