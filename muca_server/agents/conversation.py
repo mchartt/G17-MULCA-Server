@@ -1272,6 +1272,16 @@ class Conversation:
         seeing one half of this turn's information.
         """
 
+        # Nothing to answer. Found live (21-24 Oct): empty text turns got
+        # "I can't see content in that message since it's blank."
+        if not message.text.strip() and not message.attachments:
+            logger.info(
+                "%s ignored an empty text turn from %s",
+                self._conversation_id,
+                message.speaker,
+            )
+            return
+
         self._turn_modality = "text"
         logger.info(
             "%s text turn from %s (%d chars)",

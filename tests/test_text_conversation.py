@@ -154,6 +154,24 @@ async def test_a_text_utterance_is_a_whole_turn():
     assert conversation.last_speaker == 1
 
 
+async def test_an_empty_text_turn_is_ignored():
+    conversation, _, factory, _ = make_conversation()
+    await conversation.start()
+
+    sent: list[str] = []
+
+    async def record(text: str, *, role: str) -> None:
+        sent.append(text)
+
+    factory.main._send_text = record
+
+    await conversation.route_user_text(user_text(1, "  \n", name="Ada"))
+    await conversation.wait_until_idle()
+
+    assert conversation.turns == []
+    assert sent == []
+
+
 async def test_the_utterance_reaches_the_main_agent_labelled():
     conversation, _, factory, _ = make_conversation()
     await conversation.start()
