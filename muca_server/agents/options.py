@@ -55,6 +55,9 @@ class AgentOptions(BaseModel):
 class MainAgentOptions(AgentOptions):
     name: str = "ASSISTANT"
     agent_id: int = MAIN_AGENT_ID
+    # The conversation's mode, as the handshake named it ("wake_v2"
+    # changes the transcription prompt).
+    listening_mode: str = ""
 
 
 class AuxiliaryAgentOptions(AgentOptions):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import binascii
 import logging
+import os
 import re
 import time
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
@@ -16,9 +17,11 @@ from ..audio.pcm import split_float32
 from .voice_control_phrases import (
     DISMISSAL_PATTERN,
     WAKE_PHRASE_PATTERN,
+    address_word as _address_word,
     addresses_assistant as _addresses_assistant,
     matches_dismissal as _matches_dismissal,
     matches_wake_phrase as _matches_wake_phrase,
+    voice_command_v2 as _voice_command_v2,
 )
 from ..cognition.noop import NoCognition
 from ..cognition.ports import (
@@ -78,7 +81,9 @@ logger = logging.getLogger(__name__)
 # that shared check.
 NON_AMBIENT_LISTENING_MODES = ("toggle", "transcribe", "wake")
 
-ListeningMode = Literal["ambient", "toggle", "transcribe", "wake"]
+# "wake_v2" is "wake" with the fixes from the 15-28 Oct exports (see
+# Conversation._v2); every "wake" check below applies to it too.
+ListeningMode = Literal["ambient", "toggle", "transcribe", "wake", "wake_v2"]
 
 NO_SPEAKER = -1
 
@@ -178,6 +183,23 @@ INTERRUPTION_MIN_WORDS = 2
 INTERRUPTION_THRESHOLD_START = 2
 INTERRUPTION_THRESHOLD_STEP_MS = 60_000
 INTERRUPTION_THRESHOLD_FLOOR = 1
+
+# "wake_v2": a longer session, more talk-overs before it ends, and a hint
+# instead of a forced reply for the question after a bare wake phrase.
+# Saying "MULCA start" again restarts the clock (and with it the threshold);
+# MUCA_WAKE_V2_RESTART_ACK=0 drops the one-word ack that answers it.
+ENGAGED_MAX_MS_V2 = int(os.environ.get("MUCA_WAKE_V2_MAX_MS", 180_000))
+INTERRUPTION_THRESHOLD_START_V2 = int(
+    os.environ.get("MUCA_WAKE_V2_INTERRUPTION_START", 3)
+)
+INTERRUPTION_THRESHOLD_FLOOR_V2 = int(
+    os.environ.get("MUCA_WAKE_V2_INTERRUPTION_FLOOR", 2)
+)
+FOLLOWUP_HINT_MS_V2 = int(os.environ.get("MUCA_WAKE_V2_FOLLOWUP_WINDOW_MS", 10_000))
+RESTART_ACK_V2 = os.environ.get("MUCA_WAKE_V2_RESTART_ACK", "1") != "0"
+# How soon after MULCA stops speaking the person it answered counts as
+# following up, in the turn facts the observers get.
+FOLLOWUP_FACT_MS_V2 = 15_000
 
 # Unity's receive loop reads 16 KB per frame; 3000 float32 samples, base64
 # encoded, keep a state_update well under that.
@@ -310,7 +332,8 @@ class Conversation:
         # the manual control. "transcribe" (the wake phrase) is different:
         # there's no spoken "stop", so it needs one (WAKE_PHRASE_SILENCE_MS)
         # to close itself.
-        self._listening_mode = listening_mode
+        self._v2 = listening_mode == "wake_v2"
+        self._listening_mode = "wake" if self._v2 else listening_mode
         self._listening_window_open = False
         self._wake_phrase_timer: asyncio.Task[None] | None = None
         # "wake" only: _listening_window_open doubles as "engaged". When
@@ -327,12 +350,18 @@ class Conversation:
         # Who said a bare wake phrase: their next turn is the question it
         # was said for, so it always gets a reply.
         self._followup_speaker: int | None = None
+        # Whose turn is being handled, and whose MULCA last answered.
+        self._turn_speaker: int | None = None
+        self._last_answered_speaker: int | None = None
+        self._mulca_last_answered_ms = 0
         if model_settings is not None:
             model_settings.watch(outbound_queue)
         # This session's own models, from the handshake; empty means the
         # server's.
         self._intervention_model = ""
-        self._main_agent_options = main_agent_options
+        self._main_agent_options = main_agent_options.model_copy(
+            update={"listening_mode": listening_mode},
+        )
         self._agent_factory = (
             agent_factory or DefaultAgentFactory()
         )
@@ -843,7 +872,11 @@ class Conversation:
             self._linked_conversation_id = message.linked_conversation_id
             self._intervention_model = message.intervention_model
             if message.listening_mode is not None:
-                self._listening_mode = message.listening_mode
+                self._v2 = message.listening_mode == "wake_v2"
+                self._listening_mode = "wake" if self._v2 else message.listening_mode
+                self._main_agent_options = self._main_agent_options.model_copy(
+                    update={"listening_mode": message.listening_mode},
+                )
             if message.main_model:
                 self._main_agent_options = (
                     self._main_agent_options.model_copy(
@@ -1057,13 +1090,20 @@ class Conversation:
 
         if now - self._last_speech_ms >= ENGAGED_SILENCE_MS:
             await self._disengage("silence")
-        elif now - self._engaged_since_ms >= ENGAGED_MAX_MS:
+        elif now - self._engaged_since_ms >= (
+            ENGAGED_MAX_MS_V2 if self._v2 else ENGAGED_MAX_MS
+        ):
             await self._disengage("time limit")
 
     def _interruption_threshold(self, now: int) -> int:
         elapsed_steps = (
             now - self._engaged_since_ms
         ) // INTERRUPTION_THRESHOLD_STEP_MS
+        if self._v2:
+            return max(
+                INTERRUPTION_THRESHOLD_FLOOR_V2,
+                INTERRUPTION_THRESHOLD_START_V2 - elapsed_steps,
+            )
         return max(
             INTERRUPTION_THRESHOLD_FLOOR,
             INTERRUPTION_THRESHOLD_START - elapsed_steps,
@@ -1169,7 +1209,7 @@ class Conversation:
         # override -- already applied by the time this runs), not a guess:
         # decides which strategy catalog this agent is built with (see
         # OpenAIAgentFactory.build_auxiliary).
-        options.listening_mode = self._listening_mode
+        options.listening_mode = "wake_v2" if self._v2 else self._listening_mode
 
         agent = self._agent_factory.build_auxiliary(options)
         agent.on_message = self._auxiliary_message_handler(
@@ -1283,6 +1323,7 @@ class Conversation:
             return
 
         self._turn_modality = "text"
+        self._turn_speaker = message.speaker
         logger.info(
             "%s text turn from %s (%d chars)",
             self._conversation_id,
@@ -1353,6 +1394,7 @@ class Conversation:
         """
 
         self._turn_modality = "audio"
+        self._turn_speaker = speaker
 
         # Snapshot now, before the slow transcript wait below -- not after
         # it. Found live: pressing /listen while a just-finished utterance's
@@ -1399,6 +1441,13 @@ class Conversation:
         )
         if self._listening_mode == "wake":
             await self._settle_interruption(speaker, ended_at, transcript)
+            # "wake_v2": the turn that just ended the session (talked over
+            # once too often, or past the time limit while it was being
+            # transcribed) is not answered. Found in the 15-28 Oct exports:
+            # 43 replies came seconds after the session closed.
+            if self._v2 and not self._engaged():
+                in_open_window = False
+                is_followup = False
 
         if transcript and _is_echo(transcript, self._recent_replies, _now_ms()):
             await self._session_event(
@@ -1436,29 +1485,67 @@ class Conversation:
                 self._ask_observers_to_consider(speaker)
             return
 
-        is_wake_phrase = self._listening_mode in (
-            "transcribe",
-            "wake",
-        ) and _matches_wake_phrase(transcript)
+        # "wake_v2": wake, dismissal and hold, whichever is said last.
+        command = _voice_command_v2(transcript) if self._v2 else None
+        is_wake_phrase = (
+            command == "wake"
+            if self._v2
+            else self._listening_mode in ("transcribe", "wake")
+            and _matches_wake_phrase(transcript)
+        )
+        followup_hint = (
+            is_followup and self._mulca_quiet_for_ms() <= FOLLOWUP_HINT_MS_V2
+        )
         engaged_turn = False
         named = False
+        wake_restart = False
 
         # "wake": a dismissal wins over the wake phrase -- it ends an
         # engaged session unanswered, and never starts one.
-        if self._listening_mode == "wake" and _matches_dismissal(transcript):
+        if self._listening_mode == "wake" and (
+            command == "dismiss" if self._v2 else _matches_dismissal(transcript)
+        ):
             await self._disengage("dismissed")
             is_wake_phrase = False
+            is_followup = False
+            in_open_window = False
+        elif command == "hold":
+            # "wake_v2": stop talking, keep the session, don't answer this.
+            if self._assistant_turn_open():
+                await self._interrupt_assistant_turn()
             is_followup = False
             in_open_window = False
         elif self._listening_mode == "wake" and in_open_window:
             engaged_turn = True
             named = is_wake_phrase or is_followup or _addresses_assistant(transcript)
-            # Already engaged, even "mulca start" is just an addressed turn: the
-            # judge decides (respond_when_addressed), nothing is forced
-            # and nothing restarts. Found live: every passing mention
-            # forced a reply and reset the time limit and the
-            # interruption score, so the session never ended.
-            is_wake_phrase = False
+            if (
+                self._v2
+                and is_wake_phrase
+                and RESTART_ACK_V2
+                and not _wake_phrase_has_question(transcript)
+            ):
+                # "wake_v2": a bare "MULCA start" restarts the session and
+                # gets a one-word ack (_handle_wake_phrase, below). Found in
+                # the 15-28 Oct exports: 447 replies were acks to it.
+                wake_restart = True
+            elif self._v2 and is_wake_phrase:
+                # "wake_v2": restarted all the same; a question with it is
+                # judged as below, a bare one gets nothing.
+                await self._engage(
+                    speaker,
+                    has_question=_wake_phrase_has_question(transcript),
+                    trigger=transcript,
+                )
+                in_open_window = _wake_phrase_has_question(transcript)
+                is_followup = False
+                is_wake_phrase = False
+            else:
+                # Already engaged, even "mulca start" is just an addressed
+                # turn: the judge decides (respond_when_addressed), nothing
+                # is forced and nothing restarts. Found live: every passing
+                # mention forced a reply and reset the time limit and the
+                # interruption score, so the session never ended.
+                is_wake_phrase = False
 
         wake_phrase_has_question = is_wake_phrase and _wake_phrase_has_question(
             transcript
@@ -1498,9 +1585,16 @@ class Conversation:
         spoken = f"{self._username(speaker)}: {transcript}"
         if self._main_agent is not None:
             await self._main_agent.send_text(spoken, role="user")
+        # "wake_v2": the observers also get what they'd otherwise have to
+        # infer about this turn (see the wake_v2 intervention persona).
+        observed = (
+            f"{spoken}\n{self._turn_facts(speaker, transcript, followup_hint)}"
+            if self._v2
+            else spoken
+        )
         for agent in list(self._auxiliary_agents.values()):
             if agent.listens_to_user(speaker):
-                await agent.send_text(spoken, role="user")
+                await agent.send_text(observed, role="user")
 
         await self._judge(
             Utterance(
@@ -1511,14 +1605,18 @@ class Conversation:
                 modality="audio",
                 # "wake" judges an engaged turn like ambient: only the
                 # question after a bare wake phrase must get a reply.
+                # "wake_v2" judges that one too (with a hint in the turn
+                # facts): 140 of 168 forced replies to it were wrong.
                 always_reply=(
-                    is_followup
+                    is_followup and not self._v2
                     if self._listening_mode == "wake"
                     else in_open_window
                 ),
                 is_wake_phrase=is_wake_phrase,
                 wake_phrase_has_question=wake_phrase_has_question,
                 judge_wake_question=judge_wake_question,
+                wake_v2=self._v2,
+                wake_restart=wake_restart,
             ),
             # judge_wake_question: in_open_window was snapshotted before
             # _handle_wake_phrase (above) opened the window for this very
@@ -1533,6 +1631,55 @@ class Conversation:
 
         if engaged_turn and self._engaged():
             await self._count_addressed_turn(named)
+
+    def _mulca_quiet_for_ms(self) -> int:
+        """
+        How long since MULCA last answered (in text or voice) or stopped
+        speaking: 0 while it speaks.
+        """
+
+        if self._assistant_turn_open():
+            return 0
+        return _now_ms() - self._mulca_last_answered_ms
+
+    def _turn_facts(
+        self,
+        speaker: int,
+        transcript: str,
+        followup_hint: bool,
+    ) -> str:
+        """
+        "wake_v2": a spoken turn's facts, for the observers. Found in the
+        15-28 Oct exports: 634 of 764 wrong replies came on turns that
+        neither named MULCA nor followed up on its answer.
+        """
+
+        word = _address_word(transcript)
+        quiet_ms = self._mulca_quiet_for_ms()
+        answered = self._last_answered_speaker
+        followup = answered == speaker and quiet_ms <= FOLLOWUP_FACT_MS_V2
+        facts = [
+            f"speaker={self._username(speaker)}",
+            f"words={len(transcript.split())}",
+            f'names MULCA=yes ("{word}")' if word else "names MULCA=no",
+            "follow-up of MULCA's last answer="
+            + ("yes" if followup else "no")
+            + (
+                f" (MULCA last answered {self._username(answered)}, "
+                f"{quiet_ms // 1000} s ago)"
+                if answered is not None
+                else " (MULCA hasn't answered anyone yet)"
+            ),
+            f"session open for {(_now_ms() - self._engaged_since_ms) // 1000} s"
+            if self._engaged()
+            else "session not open",
+        ]
+        if followup_hint:
+            facts.append(
+                "they just woke MULCA with a bare wake phrase, so this is "
+                "probably what they woke it for"
+            )
+        return "Turn facts: " + "; ".join(facts) + "."
 
     async def _count_addressed_turn(self, named: bool) -> None:
         """
@@ -2142,6 +2289,8 @@ class Conversation:
             reply = "".join(self._assistant_reply)
             self._assistant_reply.clear()
             if reply:
+                self._last_answered_speaker = self._turn_speaker
+                self._mulca_last_answered_ms = _now_ms()
                 self._recent_replies = self._recent_replies[-4:] + [(_now_ms(), reply)]
 
             # Observers otherwise only ever hear that MULCA spoke (the
@@ -2330,6 +2479,7 @@ class Conversation:
         if self._main_agent is None:
             return
 
+        self._mulca_last_answered_ms = timestamp
         for turn in reversed(self.turns):
             if turn.speaker_id == self._main_agent.agent_id:
                 if turn.is_open:

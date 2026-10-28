@@ -459,11 +459,18 @@ class CoalaPolicy:
             if utterance.always_reply or utterance.judge_wake_question
             else ""
         )
-        await port.tell_observers(
-            "Current trigger variables: "
-            f"{json.dumps(wm.trigger_variables)}.{cooldown_note}"
-            f"{modality_note}{window_note}"
-        )
+        # "wake_v2": a spoken turn already came with its turn facts
+        # (conversation.py); no voice strategy reads these variables.
+        if utterance.wake_v2 and utterance.modality == "audio":
+            notes = f"{cooldown_note}{modality_note}{window_note}".strip()
+            if notes:
+                await port.tell_observers(notes)
+        else:
+            await port.tell_observers(
+                "Current trigger variables: "
+                f"{json.dumps(wm.trigger_variables)}.{cooldown_note}"
+                f"{modality_note}{window_note}"
+            )
 
         # A decision -- forced or observer-judged -- is now pending for
         # this exact utterance. Cleared again once that decision's whole
@@ -499,22 +506,35 @@ class CoalaPolicy:
             # the listening window/engaged session itself (that state lives
             # there, not here) -- this is the forced directive, same shape
             # as a forced intervention.
-            directive = (
-                "Directly and helpfully answer what they just asked -- no "
-                "need to acknowledge or confirm you heard them first, just "
-                "answer."
-                if utterance.wake_phrase_has_question
-                else "Briefly acknowledge in your own words that you're "
-                "listening and ready (a word or two, not a fixed phrase). "
-                "Nothing else -- they haven't said anything to respond to yet."
-            )
+            # "wake_v2": a bare one said again in an open session gets a
+            # single word. Found in the 15-28 Oct exports: students said it
+            # again and again, and each time got a sentence back.
+            one_word = utterance.wake_restart
+            if utterance.wake_phrase_has_question:
+                directive = (
+                    "Directly and helpfully answer what they just asked -- no "
+                    "need to acknowledge or confirm you heard them first, just "
+                    "answer."
+                )
+            elif one_word:
+                directive = (
+                    "Say one word that tells them you're listening (e.g. "
+                    '"Listening"), in the language they spoke. Nothing else.'
+                )
+            else:
+                directive = (
+                    "Briefly acknowledge in your own words that you're "
+                    "listening and ready (a word or two, not a fixed phrase). "
+                    "Nothing else -- they haven't said anything to respond to yet."
+                )
             wm.set_forced_context(directive)
             await port.instruct_main_agent(
                 self._render_prompt(
                     wm,
                     directive=directive,
                     port=port,
-                )
+                ),
+                max_tokens=INTERIM_ACK_MAX_TOKENS if one_word else None,
             )
             await self._finish_turn(path="forced", strategy_id=None)
             return False
@@ -593,8 +613,10 @@ class CoalaPolicy:
         port = self._port
         assert wm is not None and port is not None
 
-        strategy_id = signal.strategy_id if signal else None
+        # An empty strategy_id is a chosen silence (no_intervention).
+        strategy_id = (signal.strategy_id or None) if signal else None
         prompt_fragment = signal.prompt_fragment if signal else None
+        silence_reason = signal.silence_reason if signal else ""
         needs_history = bool(signal and signal.needs_history)
         history_period = signal.history_period if signal else "all"
         needs_web_search = bool(signal and signal.needs_web_search)
@@ -691,7 +713,11 @@ class CoalaPolicy:
             wm.set_intervention_result(None, None)
 
         if path == "none":
-            await self._finish_turn(path=path, strategy_id=None)
+            await self._finish_turn(
+                path=path,
+                strategy_id=None,
+                prompt_fragment=silence_reason or None,
+            )
             return
 
         if strategy_id == "remember":

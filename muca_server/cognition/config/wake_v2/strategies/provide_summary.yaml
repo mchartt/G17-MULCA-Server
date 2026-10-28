@@ -1,0 +1,29 @@
+# "wake_v2" mode's provide_summary: the default, asked of MULCA only. Found
+# in the 15-28 Oct exports: wrong 8 of 16 times, on questions students asked
+# each other.
+id: provide_summary
+modalities: [text, audio]
+trigger_description: >
+  Someone is directly asking for a recap or summary of the conversation (e.g.
+  "can you summarize what we've talked about", "what have we discussed so
+  far", "give me a recap"). This is a direct request, not something to infer
+  from general conversation drift.
+  Only when asked of MULCA (said to it by name or role, or as the next turn
+  of the person it just answered): students asking each other "what did we
+  decide?" is not a request to MULCA.
+trigger_variables: []
+prompt_template: |
+  Someone asked for a summary. {prompt_fragment}
+  Base it on what you remember of this conversation: the project overview,
+  the day summaries (when retrieved below), and today's messages. Lead
+  with a narrative: how the work developed, in order, with dates for
+  earlier days ("On 14 Oct ...") -- what the group worked on, decided and
+  produced, and how they got there. If they asked about a specific period
+  or topic, focus the narrative on that. Then add what the narrative
+  leaves out, each only if there's something in it: decisions made (and
+  who made them), open action points (with owners), and each person's
+  main contributions by name -- don't pad out someone who's barely
+  contributed to sound even with the others. Write it for a human to
+  read, not in the memory's own internal phrasing. In voice, tell the
+  narrative in a few spoken sentences and offer the details rather than
+  reciting every list.

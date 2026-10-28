@@ -44,6 +44,13 @@ def addresses_assistant(transcript: str) -> bool:
     return _ADDRESS_PATTERN.search(transcript) is not None
 
 
+def address_word(transcript: str) -> str:
+    """The words that address MULCA, or "" (for the "wake_v2" turn facts)."""
+
+    match = _ADDRESS_PATTERN.search(transcript)
+    return match.group().strip() if match else ""
+
+
 # A spoken way out, in either language. Deliberately broad -- broader than
 # waking, on purpose: a false stop costs one "mulca start", a false wake
 # costs a group being talked over. A plain substring search, no length
@@ -79,3 +86,45 @@ DISMISSAL_PATTERN = re.compile(
 
 def matches_dismissal(transcript: str) -> bool:
     return DISMISSAL_PATTERN.search(transcript) is not None
+
+
+# "wake_v2" only. "Start MULCA" wakes too, a dismissal also takes "go out",
+# "get out" and "esci", and a hold stops the reply without ending the
+# session. Found in the 15-28 Oct exports: "grazie... MULCA start" ended
+# sessions instead of opening them, "basta che cerchi" ended one mid-talk,
+# and "aspetta" or "wait" got an answer.
+_WAKE_V2 = re.compile(
+    rf"{WAKE_PHRASE_PATTERN.pattern}|\bstart\b[\s,.!?:;-]*({_NAME}|{_ALIAS})\b",
+    re.IGNORECASE,
+)
+_DISMISSAL_V2 = re.compile(
+    rf"{DISMISSAL_PATTERN.pattern}|\b(go out|get out|esci)\b",
+    re.IGNORECASE,
+)
+HOLD_PATTERN = re.compile(
+    r"\b(wait|hold on|one (sec|second|moment)|let me (think|finish)"
+    r"|not (you|talking to you)|don'?t (answer|reply)"
+    r"|aspett(a|ate)|un (attimo|momento|secondo)|non (iniziare|cominciare)"
+    r"|non rispondere|fammi (pensare|finire)|non parlavo con te|non a te)\b",
+    re.IGNORECASE,
+)
+# A stop or hold buried in a longer sentence is talk between students.
+MAX_COMMAND_WORDS = 5
+_WORD_V2 = re.compile(r"\w+")
+
+
+def voice_command_v2(transcript: str) -> str | None:
+    """
+    "wake", "dismiss", "hold" or None: whichever comes last in the turn
+    ("MULCA stop. MULCA start" wakes). A dismissal or hold counts only in a
+    short turn or one that names MULCA.
+    """
+
+    commands = [(m.start(), "wake") for m in _WAKE_V2.finditer(transcript)]
+    if (
+        len(_WORD_V2.findall(transcript)) <= MAX_COMMAND_WORDS
+        or addresses_assistant(transcript)
+    ):
+        commands += [(m.start(), "dismiss") for m in _DISMISSAL_V2.finditer(transcript)]
+        commands += [(m.start(), "hold") for m in HOLD_PATTERN.finditer(transcript)]
+    return max(commands, key=lambda command: command[0])[1] if commands else None

@@ -35,6 +35,8 @@ class OpenAIAgentFactory:
         models: ModelSettings,
         usage_tracker: UsageTracker | None = None,
         non_ambient_strategies: StrategyStore | None = None,
+        wake_v2_strategies: StrategyStore | None = None,
+        wake_v2_intervention_persona: str | None = None,
     ) -> None:
         self._client = client
         self._models = models
@@ -48,6 +50,11 @@ class OpenAIAgentFactory:
         # actually select from (see InterventionAgentOpenAI._tool_definition),
         # not just prose it might misjudge.
         self._non_ambient_strategies = non_ambient_strategies or strategies
+        # "wake_v2" conversations' own judge (see run_server.py).
+        self._wake_v2_strategies = wake_v2_strategies or strategies
+        self._wake_v2_intervention_persona = (
+            wake_v2_intervention_persona or intervention_persona
+        )
         self._main_persona = main_persona
         self._intervention_persona = intervention_persona
         self._task_knowledge = task_knowledge
@@ -71,16 +78,22 @@ class OpenAIAgentFactory:
         options: AuxiliaryAgentOptions,
     ) -> AuxiliaryAgent:
         if options.agent_type == INTERVENTION_DETECTION:
-            strategies = (
-                self._non_ambient_strategies
-                if options.listening_mode in ("toggle", "transcribe")
-                else self._strategies
-            )
+            wake_v2 = options.listening_mode == "wake_v2"
+            if wake_v2:
+                strategies = self._wake_v2_strategies
+            elif options.listening_mode in ("toggle", "transcribe"):
+                strategies = self._non_ambient_strategies
+            else:
+                strategies = self._strategies
             return InterventionAgentOpenAI(
                 options=options,
                 client=self._client,
                 strategies=strategies,
-                persona=self._intervention_persona,
+                persona=(
+                    self._wake_v2_intervention_persona
+                    if wake_v2
+                    else self._intervention_persona
+                ),
                 task_knowledge=self._task_knowledge,
                 model=options.model or self._models.intervention,
                 # Per-session, not per-deployment: one factory instance is

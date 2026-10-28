@@ -1,0 +1,18 @@
+# "wake_v2" mode's remember: the default, asked of MULCA only. Found in the
+# 15-28 Oct exports: wrong all 5 times, on questions students asked each
+# other. No cooldown_messages, same as the default.
+id: remember
+modalities: [text, audio]
+trigger_description: >
+  Someone asks you to recall a specific past fact, topic, or detail -- e.g.
+  "tell me something about the budget", "what do you know about Ada's
+  proposal", "do you remember anything about the deadline" -- not a general
+  recap of the whole conversation (that's provide_summary instead).
+  Only when asked of MULCA (said to it by name or role, or as the next turn
+  of the person it just answered): students asking each other "what did we
+  decide?" is not a request to MULCA.
+trigger_variables: []
+prompt_template: |
+  Someone asked you to recall something specific. {prompt_fragment}
+  Use the retrieved context below. If it doesn't actually answer what
+  they asked, say so plainly rather than guessing or making something up.

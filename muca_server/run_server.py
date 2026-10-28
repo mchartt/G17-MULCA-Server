@@ -33,7 +33,12 @@ from .agents.openai.day_summarizer import DAILY_SUMMARY_MODEL
 from .agents.openai.model_settings import ModelSettings
 from .usage_report import UsageTracker
 from .cognition import CoalaPolicy
-from .cognition.loader import load_persona, load_strategy_store, load_task
+from .cognition.loader import (
+    WAKE_V2_CONFIG_DIR,
+    load_persona,
+    load_strategy_store,
+    load_task,
+)
 from .cognition.memory.sqlite import (
     SqliteEpisodicStore,
     SqliteSnapshotStore,
@@ -100,10 +105,10 @@ def build_app():
     load_dotenv()
 
     listening_mode = os.environ.get(LISTENING_MODE_ENV_VAR, "wake")
-    if listening_mode not in ("ambient", "toggle", "transcribe", "wake"):
+    if listening_mode not in ("ambient", "toggle", "transcribe", "wake", "wake_v2"):
         raise ValueError(
             f"{LISTENING_MODE_ENV_VAR} must be 'ambient', 'toggle', "
-            f"'transcribe', or 'wake', got {listening_mode!r}"
+            f"'transcribe', 'wake' or 'wake_v2', got {listening_mode!r}"
         )
 
     # This is the server-wide default only -- a link can still override it
@@ -149,6 +154,16 @@ def build_app():
     )
     main_persona = load_persona("main_default")
     intervention_persona = load_persona("intervention_default")
+    # "wake_v2": the ambient catalog with its own respond_when_addressed,
+    # provide_summary and remember, and its own intervention persona.
+    wake_v2_strategy_store = load_strategy_store(
+        ACTIVE_STRATEGY_IDS,
+        overrides_dir=WAKE_V2_CONFIG_DIR,
+    )
+    wake_v2_intervention_persona = load_persona(
+        "intervention_default",
+        config_dir=WAKE_V2_CONFIG_DIR,
+    )
     task_knowledge = load_task(TASK_ID)
     # Which prompt a reply came from, for the logs: changes with any edit to
     # the persona or the task. A client's session.update replaces both (and
@@ -206,8 +221,10 @@ def build_app():
         client=client,
         strategies=strategy_store,
         non_ambient_strategies=non_ambient_strategy_store,
+        wake_v2_strategies=wake_v2_strategy_store,
         main_persona=main_persona,
         intervention_persona=intervention_persona,
+        wake_v2_intervention_persona=wake_v2_intervention_persona,
         task_knowledge=task_knowledge,
         models=model_settings,
         usage_tracker=usage_tracker,

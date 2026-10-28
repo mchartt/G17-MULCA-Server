@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from contextlib import suppress
 
 from openai import AsyncOpenAI
@@ -36,12 +37,39 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL = "gpt-realtime-2.1-mini"
 TOOL_NAME = "signal_intervention"
 
+# "wake_v2": silence is a tool call too, and every judgement must make one --
+# with tool_choice "auto" and only signal_intervention, staying silent meant
+# producing nothing, and the 15-28 Oct exports show 634 replies on turns
+# that met none of respond_when_addressed's conditions. The reason it gives
+# goes into the turn's log. MUCA_WAKE_V2_FORCED_TOOL=0 turns this off.
+SILENCE_TOOL_NAME = "no_intervention"
+SILENCE_REASONS = (
+    "not_addressed",
+    "about_mulca",
+    "reaction_or_fragment",
+    "teammate_talk",
+    "unclear_transcript",
+    "other",
+)
+FORCED_TOOL_V2 = os.environ.get("MUCA_WAKE_V2_FORCED_TOOL", "1") != "0"
+
 # The same as the main agent's (docs/MEMORY_DESIGN.md): it decides whether
 # MULCA speaks, so it shouldn't know less than the agent that speaks. It
 # does respond on every judged turn, but mostly from cache, where the extra
 # context costs ~$0.0005 per turn. Input tokens per judgement, instructions
 # included; see trim_context.
 INTERVENTION_TOKEN_LIMIT = 24_000
+
+
+HISTORY_NOTE = (
+    "This session keeps growing for as long as the conversation "
+    "lasts, so most of what you see below at any given moment is "
+    "history, not something to react to now. Each time you're "
+    "asked to decide, your judgment is about the most recent "
+    "message and the most recent 'Current trigger variables' "
+    "update specifically -- not something earlier in this "
+    "conversation you may already have reacted to."
+)
 
 
 class InterventionAgentOpenAI(AuxiliaryAgent):
@@ -74,6 +102,8 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
         self._is_dm = is_dm
         self._model = model
         self._usage_tracker = usage_tracker
+        self._v2 = options.listening_mode == "wake_v2"
+        self._forced_tool = self._v2 and FORCED_TOOL_V2
 
         self._connection_manager = None
         self._connection = None
@@ -98,8 +128,12 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
                 "type": "realtime",
                 "output_modalities": ["text"],
                 "instructions": self._build_instructions(),
-                "tools": [self._tool_definition()],
-                "tool_choice": "auto",
+                "tools": (
+                    [self._silence_tool_definition(), self._tool_definition()]
+                    if self._forced_tool
+                    else [self._tool_definition()]
+                ),
+                "tool_choice": "required" if self._forced_tool else "auto",
                 # It hears the conversation's audio too (the Unity
                 # original's intervention agent does), and VAD commits that
                 # audio into its context -- but it only ever judges when the
@@ -299,10 +333,12 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
 
         if (
             event.type == "response.function_call_arguments.done"
-            and event.name == TOOL_NAME
+            and event.name in (TOOL_NAME, SILENCE_TOOL_NAME)
         ):
-            self._pending_signal = self._parse_signal(
-                event.arguments,
+            self._pending_signal = (
+                self._parse_signal(event.arguments)
+                if event.name == TOOL_NAME
+                else self._parse_silence(event.arguments)
             )
 
             # The session is never told the call resolved, MULCA never
@@ -362,6 +398,46 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
                 args.get("nudge_participation", False),
             ),
         )
+
+    def _parse_silence(self, raw_arguments: str) -> InterventionSignal:
+        """A chosen silence: no strategy, and why, for the turn's log."""
+
+        try:
+            args = json.loads(raw_arguments)
+        except json.JSONDecodeError:
+            args = {}
+        reason = f"{SILENCE_TOOL_NAME}: {args.get('reason') or 'other'}"
+        if args.get("note"):
+            reason += f" -- {args['note']}"
+        logger.info("%s judge chose silence (%s)", self.log_label, reason)
+        return InterventionSignal(
+            strategy_id="",
+            prompt_fragment="",
+            silence_reason=reason,
+        )
+
+    def _silence_tool_definition(self) -> dict:
+        return {
+            "type": "function",
+            "name": SILENCE_TOOL_NAME,
+            "description": (
+                "The usual answer: MULCA stays silent on this turn."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "enum": list(SILENCE_REASONS),
+                    },
+                    "note": {
+                        "type": "string",
+                        "description": "Optional, at most 12 words.",
+                    },
+                },
+                "required": ["reason"],
+            },
+        }
 
     def _tool_definition(self) -> dict:
         return {
@@ -456,6 +532,39 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
             "one message at a time, as it happens."
         )
 
+        if self._v2:
+            # "wake_v2": the decision first, the brief and the flags after.
+            decision = (
+                f"{audience_note} For each new message, call exactly one "
+                f"tool: `{SILENCE_TOOL_NAME}` (the usual answer: MULCA stays "
+                f"silent) with your reason, or `{TOOL_NAME}` with the "
+                "strategy that should fire. "
+                if self._forced_tool
+                else f"{audience_note} For each new message, either call "
+                f"`{TOOL_NAME}` with the strategy that should fire, or call "
+                "no tool at all (the usual answer: MULCA stays silent). "
+            )
+            return (
+                f"{self._persona}\n\n"
+                f"Task context:\n{self._task_knowledge}\n\n"
+                f"{decision}With `{TOOL_NAME}`, prompt_fragment is a short, "
+                "high-level instruction for the main response generator: "
+                "the rationale and, if relevant, a rough target -- what the "
+                "reply should do, not literal wording. A brief never "
+                "mentions MULCA's capabilities or limitations and never asks "
+                "people to paste or share something, unless the speaker "
+                "asked for exactly that. "
+                f"{self._flags_instructions()} Never produce a "
+                "conversational reply yourself; your only job is this "
+                "judgment call.\n\n"
+                "Available strategies:\n"
+                f"{self._strategies.catalog_for_prompt()}\n\n"
+                "This session keeps growing for as long as the conversation "
+                "lasts, so most of what you see is history, not something to "
+                "react to now: each decision is about the most recent message "
+                "and its turn facts only."
+            )
+
         return (
             f"{self._persona}\n\n"
             f"Task context:\n{self._task_knowledge}\n\n"
@@ -476,7 +585,19 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
             "them. For a request about an attached file, say "
             "what to do with the file; never describe or limit what it "
             "contains -- you only get a note of it, the response generator "
-            "reads it. Plus two independent flags: needs_history "
+            f"reads it. {self._flags_instructions()} If "
+            "no strategy should fire, produce no output and do not call "
+            "the tool. "
+            "Never produce a conversational reply yourself; your only "
+            "job is this judgment call.\n\n"
+            "Available strategies:\n"
+            f"{self._strategies.catalog_for_prompt()}\n\n"
+            f"{HISTORY_NOTE}"
+        )
+
+    def _flags_instructions(self) -> str:
+        return (
+            "Plus two independent flags: needs_history "
             "if answering well requires looking up something from earlier "
             "in the conversation -- with it, and whenever you select "
             "provide_summary, set history_period to the period the "
@@ -502,18 +623,5 @@ class InterventionAgentOpenAI(AuxiliaryAgent):
             "strategy_id instead of setting its flag -- these flags are "
             "only for riding along, never a replacement for the normal "
             "standalone firing of pleasant_conversation or "
-            "participation_equality_text. All flags default to false. If "
-            "no strategy should fire, produce no output and do not call "
-            "the tool. "
-            "Never produce a conversational reply yourself; your only "
-            "job is this judgment call.\n\n"
-            "Available strategies:\n"
-            f"{self._strategies.catalog_for_prompt()}\n\n"
-            "This session keeps growing for as long as the conversation "
-            "lasts, so most of what you see below at any given moment is "
-            "history, not something to react to now. Each time you're "
-            "asked to decide, your judgment is about the most recent "
-            "message and the most recent 'Current trigger variables' "
-            "update specifically -- not something earlier in this "
-            "conversation you may already have reacted to."
+            "participation_equality_text. All flags default to false."
         )

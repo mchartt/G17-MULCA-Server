@@ -156,7 +156,9 @@ class ConnectAgentMessage(TargetedMessage):
     # (run_server.py) -- None means use the server's setting, same
     # precedence as main_model/intervention_model above. Lets different
     # teams run different modes without a server-wide redeploy.
-    listening_mode: Literal["ambient", "toggle", "transcribe", "wake"] | None = Field(
+    listening_mode: (
+        Literal["ambient", "toggle", "transcribe", "wake", "wake_v2"] | None
+    ) = Field(
         default=None,
         alias="listeningMode",
     )

@@ -53,6 +53,12 @@ class Utterance:
     # announces_once), consistent with "wake" judging only later, engaged
     # turns, never the one that starts the session.
     judge_wake_question: bool = False
+    # A spoken turn in "wake_v2": its observers get the turn facts instead of
+    # the trigger variables.
+    wake_v2: bool = False
+    # "wake_v2": a bare wake phrase said again in an open session -- it gets
+    # a one-word ack.
+    wake_restart: bool = False
 
     def label(self) -> str:
         return self.speaker_name or f"User {self.speaker_id}"
@@ -88,6 +94,9 @@ class InterventionSignal:
     # existing standalone path. See CoalaPolicy.on_intervention_signal.
     flag_offensive_language: bool = False
     nudge_participation: bool = False
+    # "wake_v2": the observer chose silence (no_intervention, strategy_id
+    # empty) and said why -- logged with the turn.
+    silence_reason: str = ""
 
 
 class ConversationPort(Protocol):

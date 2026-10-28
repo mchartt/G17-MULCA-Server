@@ -101,6 +101,21 @@ def _strip_prompt_echo(transcript: str, prompt: str) -> str:
     return re.sub(r"^[\W_]+", "", " ".join(rest.split()))
 
 
+# "wake_v2": the transcriber's prompt wrapper left behind on its own, around
+# real speech or nothing at all ("context:", "context: Hello.", "... You will
+# receive additional context/instructions (separated by ### delimiters) from
+# the user."). Found in the 26-28 Oct exports, after the echo itself was cut.
+_PROMPT_WRAPPER_V2 = re.compile(
+    r"you will receive additional context.*?from the user\.?|\bcontext\s*:|#+",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _strip_prompt_wrapper(transcript: str) -> str:
+    rest = _PROMPT_WRAPPER_V2.sub(" ", transcript)
+    return re.sub(r"^[\W_]+", "", " ".join(rest.split()))
+
+
 # A rough "don't trust this as real speech" cutoff on the ASR's own
 # per-token confidence. Hallucinated transcripts (invented over
 # near-silent/noisy audio -- confirmed live: coherent, fluent sentences
@@ -288,6 +303,7 @@ class MainAgentOpenAI(MainAgent):
         self._task_knowledge = task_knowledge
         self._model = model
         self._usage_tracker = usage_tracker
+        self._v2 = options.listening_mode == "wake_v2"
 
         self._connection_manager = None
         self._connection = None
@@ -314,12 +330,15 @@ class MainAgentOpenAI(MainAgent):
         # Factored out of _session_config so _strip_prompt_echo can
         # compare a completed transcript against this exact same string --
         # the one place this is worded.
+        # "wake_v2" leaves the wake phrase out: an echoed prompt can't wake
+        # MULCA up if it doesn't contain one.
         return (
             f"The conversation is in English or Italian, "
             f"sometimes switching between the two. One "
             f"participant is an AI assistant named "
             f"{self.name}, often addressed by that name, "
-            f'"assistant", or "bot", and woken with "{self.name} start".'
+            f'"assistant", or "bot"'
+            + ("." if self._v2 else f', and woken with "{self.name} start".')
         )
 
     def _session_config(self) -> dict:
@@ -734,6 +753,8 @@ class MainAgentOpenAI(MainAgent):
                     average_logprob,
                 )
                 stripped = _strip_prompt_echo(transcript, self._transcription_prompt())
+                if self._v2:
+                    stripped = _strip_prompt_wrapper(stripped)
                 if stripped != transcript:
                     logger.warning(
                         "%s cut a prompt echo, not real speech, from a "

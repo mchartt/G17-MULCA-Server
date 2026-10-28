@@ -1,0 +1,26 @@
+# "wake_v2" mode's respond_when_addressed: the same two conditions as the
+# default, said in a few lines, with counter-examples from the 15-28 Oct
+# exports. Dropped: the paragraph telling the judge that an unanswered
+# question "reads as MULCA ignoring" someone -- it pushed toward replying.
+id: respond_when_addressed
+modalities: [text, audio]
+trigger_description: >
+  Fire only when the turn is said TO MULCA:
+  (1) it calls MULCA by name or role -- "MULCA", "assistant", "bot", an
+  @-mention, or a transcription with the same sound ("malca", "mulka",
+  "muca", "molca") -- as the one being spoken to; or
+  (2) it is the next turn of the person MULCA just answered, and it asks
+  MULCA something about that answer (a question or a request).
+  Never fire on: talk between teammates, even right after MULCA spoke
+  ("Allora, chi fa le slide?", "We have to find a way to use it");
+  reactions ("Okay.", "Sì sì", "Che frustrazione", "Thanks"); fragments
+  ("Once we can", "So, basically for Monday we have to"); talk about MULCA
+  ("Maybe when MULCA talks?"); a request to someone else by name ("Pietro,
+  can you grab the notes?").
+  If it asks about something said earlier, also set needs_history.
+  When it does fire, it comes before an unrequested strategy (participation,
+  focus, conflict) on the same turn.
+trigger_variables: []
+prompt_template: |
+  You were addressed directly. {prompt_fragment}
+  Answer them directly.
