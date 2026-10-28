@@ -200,6 +200,9 @@ RESTART_ACK_V2 = os.environ.get("MUCA_WAKE_V2_RESTART_ACK", "1") != "0"
 # How soon after MULCA stops speaking the person it answered counts as
 # following up, in the turn facts the observers get.
 FOLLOWUP_FACT_MS_V2 = 15_000
+# After MULCA steps back on its own (not dismissed), a turn starting this
+# soon that names it opens the session again.
+STEP_BACK_GRACE_MS_V2 = 5_000
 
 # Unity's receive loop reads 16 KB per frame; 3000 float32 samples, base64
 # encoded, keep a state_update well under that.
@@ -354,6 +357,10 @@ class Conversation:
         self._turn_speaker: int | None = None
         self._last_answered_speaker: int | None = None
         self._mulca_last_answered_ms = 0
+        # "wake_v2": the reply now playing answers a turn that named MULCA.
+        self._restart_when_heard_out = False
+        # "wake_v2": when MULCA last stepped back on its own, or 0.
+        self._stepped_back_ms = 0
         if model_settings is not None:
             model_settings.watch(outbound_queue)
         # This session's own models, from the handshake; empty means the
@@ -1057,6 +1064,10 @@ class Conversation:
         self._listening_window_open = False
         self._followup_speaker = None
         self._pending_interruption_ms = None
+        self._stepped_back_ms = (
+            0 if reason in ("dismissed", "dismissed in text", "session closed")
+            else _now_ms()
+        )
         duration_s = (_now_ms() - self._engaged_since_ms) // 1000
         logger.info(
             "%s engaged session ended (%s) after %ds, interruption score %d",
@@ -1500,6 +1511,28 @@ class Conversation:
         named = False
         wake_restart = False
 
+        # "wake_v2": MULCA stepped back on its own a moment ago, and this
+        # turn, started since, names it: it steps back in, and the turn is
+        # judged as one said to it.
+        started_at = next(
+            (
+                t.start_time
+                for t in reversed(self.turns)
+                if t.speaker_id == speaker and t.end_time == ended_at
+            ),
+            ended_at,
+        )
+        if (
+            self._v2
+            and command is None
+            and not self._engaged()
+            and self._stepped_back_ms
+            and 0 <= started_at - self._stepped_back_ms <= STEP_BACK_GRACE_MS_V2
+            and _addresses_assistant(transcript)
+        ):
+            await self._engage(speaker, has_question=True, trigger=transcript)
+            in_open_window = True
+
         # "wake": a dismissal wins over the wake phrase -- it ends an
         # engaged session unanswered, and never starts one.
         if self._listening_mode == "wake" and (
@@ -1630,6 +1663,13 @@ class Conversation:
         )
 
         if engaged_turn and self._engaged():
+            # "wake_v2": an answer to a turn that said MULCA's name, once
+            # heard out in full, restarts the session (_end_assistant_turn).
+            self._restart_when_heard_out = (
+                self._v2
+                and _addresses_assistant(transcript)
+                and self._policy.last_turn_strategy() is not None
+            )
             await self._count_addressed_turn(named)
 
     def _mulca_quiet_for_ms(self) -> int:
@@ -2187,6 +2227,15 @@ class Conversation:
         # Heard out in full: MUCA is wanted after all.
         self._interruption_score = 0
         self._warned_about_interruptions = False
+        # "wake_v2": and if it answered someone who named MULCA, the session
+        # restarts, as with "MULCA start" (the clock and the threshold).
+        if self._restart_when_heard_out and self._engaged():
+            self._engaged_since_ms = _now_ms()
+            logger.info(
+                "%s engaged session restarted (answer heard out)",
+                self._conversation_id,
+            )
+        self._restart_when_heard_out = False
 
         await self._send(
             StateUpdateMessage.response_completed(
@@ -2206,6 +2255,7 @@ class Conversation:
         )
 
         self._assistant_turn_ending = True
+        self._restart_when_heard_out = False
 
         # Scored once the interrupting turn closes (_settle_interruption):
         # only then is it known whether it was a real talk-over.

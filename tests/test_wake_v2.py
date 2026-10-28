@@ -247,6 +247,99 @@ async def test_longer_sessions_and_more_talk_overs():
     assert conversation._listening_window_open is True
 
 
+async def test_an_answer_to_mulca_by_name_heard_out_restarts_the_session():
+    conversation, _ = await v2(auxiliary_cls=FakeInterventionAgent)
+    await voice_turn(conversation, "muca start")
+    conversation._engaged_since_ms = 1
+
+    await voice_turn(conversation, "muca, what is the deadline")
+    assert conversation._engaged_since_ms == 1  # not until it's heard out
+
+    await conversation._end_assistant_turn()
+    assert conversation._engaged_since_ms > 1
+
+
+async def test_no_restart_when_talked_over_unnamed_or_unanswered():
+    # Talked over.
+    conversation, _ = await v2(auxiliary_cls=FakeInterventionAgent)
+    await voice_turn(conversation, "muca start")
+    conversation._engaged_since_ms = 1
+    await voice_turn(conversation, "muca, what is the deadline")
+    await conversation._interrupt_assistant_turn()
+    await conversation._end_assistant_turn()
+    assert conversation._engaged_since_ms == 1
+
+    # A follow-up without the name.
+    conversation, _ = await v2(auxiliary_cls=FakeInterventionAgent)
+    await voice_turn(conversation, "muca start")
+    conversation._engaged_since_ms = 1
+    await voice_turn(conversation, "and the one after that")
+    await conversation._end_assistant_turn()
+    assert conversation._engaged_since_ms == 1
+
+    # Named, but the judge kept MULCA silent.
+    conversation, _ = await v2()
+    await voice_turn(conversation, "muca start")
+    conversation._engaged_since_ms = 1
+    await voice_turn(conversation, "muca, what is the deadline")
+    await conversation._end_assistant_turn()
+    assert conversation._engaged_since_ms == 1
+
+    # Plain "wake".
+    conversation, _ = await make_conversation(listening_mode="wake")
+    await voice_turn(conversation, "muca start")
+    conversation._engaged_since_ms = 1
+    await voice_turn(conversation, "muca, what is the deadline")
+    await conversation._end_assistant_turn()
+    assert conversation._engaged_since_ms == 1
+
+
+async def stepped_back(reason: str, *, mode: str = "wake_v2", after_ms: int = 1_000):
+    """MULCA's session ended for `reason`; a turn starts `after_ms` later."""
+
+    if mode == "wake_v2":
+        conversation, factory = await v2(auxiliary_cls=FakeInterventionAgent)
+    else:
+        conversation, factory = await make_conversation(listening_mode=mode)
+    await voice_turn(conversation, "muca start")
+    await conversation._disengage(reason)
+    start = conversation._stepped_back_ms + after_ms
+    conversation.turns.append(Turn(start_time=start, end_time=start + 2_000, speaker_id=2))
+    return conversation, factory, start + 2_000
+
+
+async def take(conversation, text: str, ended_at: int) -> None:
+    async def collect(_speaker):
+        return text
+
+    conversation._collect_transcript = collect
+    await conversation._take_voice_turn(2, ended_at)
+    await conversation.wait_until_idle()
+
+
+async def test_naming_mulca_right_after_it_steps_back_brings_it_back():
+    conversation, factory, ended_at = await stepped_back("silence")
+    asked = factory.auxiliary.asked
+
+    await take(conversation, "hey assistant, what was the deadline", ended_at)
+
+    assert conversation._listening_window_open is True
+    assert factory.auxiliary.asked == asked + 1  # judged, as said to MULCA
+
+
+async def test_no_step_back_in_late_unnamed_after_a_dismissal_or_in_wake():
+    cases = (
+        ("silence", "wake_v2", 6_000, "assistant, what was the deadline"),
+        ("silence", "wake_v2", 1_000, "what was the deadline"),
+        ("dismissed", "wake_v2", 1_000, "assistant, what was the deadline"),
+        ("silence", "wake", 1_000, "assistant, what was the deadline"),
+    )
+    for reason, mode, after_ms, text in cases:
+        conversation, _, ended_at = await stepped_back(reason, mode=mode, after_ms=after_ms)
+        await take(conversation, text, ended_at)
+        assert conversation._listening_window_open is False, (reason, mode, after_ms, text)
+
+
 async def test_spoken_turns_come_with_facts_instead_of_the_variables():
     conversation, factory = await v2(auxiliary_cls=ObservedInterventionAgent)
     await voice_turn(conversation, "muca start, what is the deadline")
