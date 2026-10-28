@@ -546,7 +546,8 @@ async def test_engaged_turns_are_judged_like_ambient_and_heard():
     assert factory.auxiliary.audio_chunks_received == 1
 
 
-async def test_a_bare_wake_forces_a_reply_to_the_same_speakers_next_turn_only():
+async def test_a_bare_wakes_next_turn_is_judged_not_forced():
+    # Found in the 15-28 Oct exports: 140 of 168 forced replies were wrong.
     conversation, factory = await make_conversation(
         listening_mode="wake",
         strategies=STRATEGIES_WITH_ALWAYS_REPLY,
@@ -559,8 +560,7 @@ async def test_a_bare_wake_forces_a_reply_to_the_same_speakers_next_turn_only():
     await voice_turn(conversation, "and another thing")
 
     assert factory.auxiliary.asked == 3
-    assert len(factory.main.instructions) == 2
-    assert "Respond directly" in factory.main.instructions[1]
+    assert len(factory.main.instructions) == 1  # only the ack
 
 
 async def test_untranscribed_turns_are_judged_only_in_ambient():

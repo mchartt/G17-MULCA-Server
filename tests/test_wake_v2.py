@@ -84,7 +84,7 @@ def turn_line(told: list[str]) -> str:
     return next(text for text in reversed(told) if "Turn facts" in text)
 
 
-async def v2(auxiliary_cls: type = DecliningInterventionAgent):
+async def v2(auxiliary_cls: type = DecliningInterventionAgent, *, mode: str = "wake_v2"):
     state = SessionState(session_id=uuid4())
     factory = CappedFactory(auxiliary_cls=auxiliary_cls)
     conversation = Conversation(
@@ -93,7 +93,7 @@ async def v2(auxiliary_cls: type = DecliningInterventionAgent):
         main_agent_options=MainAgentOptions(),
         agent_factory=factory,
         policy=CoalaPolicy(strategy_store=STRATEGIES_WITH_ALWAYS_REPLY),
-        listening_mode="wake_v2",
+        listening_mode=mode,
     )
     await conversation.start()
     await conversation.create_auxiliary_agent(create_auxiliary())
@@ -133,45 +133,60 @@ async def test_the_mode_is_wake_with_the_fixes_from_handshake_or_server():
 
 
 async def test_a_bare_start_restarts_the_session_with_a_one_word_ack():
-    conversation, factory = await v2()
-    await voice_turn(conversation, "muca start")
-    # Only a repeat gets the one-word ack, not the start of a session.
-    assert "Say one word" not in factory.main.instructions[-1]
-    assert factory.main.max_tokens[-1] is None
-    conversation._engaged_since_ms = 1
-    conversation._interruption_score = 2
+    for mode in ("wake", "wake_v2"):
+        conversation, factory = await v2(mode=mode)
+        await voice_turn(conversation, "muca start")
+        # Only a repeat gets the one-word ack, not the start of a session.
+        assert "Say one word" not in factory.main.instructions[-1]
+        assert factory.main.max_tokens[-1] is None
+        conversation._engaged_since_ms = 1
+        conversation._interruption_score = 2
 
-    await voice_turn(conversation, "muca start")
+        await voice_turn(conversation, "muca start")
 
-    assert conversation._engaged_since_ms > 1
-    assert conversation._interruption_score == 0
-    assert factory.auxiliary.asked == 0  # forced, never judged
-    assert "Say one word" in factory.main.instructions[-1]
-    assert factory.main.max_tokens[-1] is not None
+        assert conversation._engaged_since_ms > 1, mode
+        assert conversation._interruption_score == 0
+        assert factory.auxiliary.asked == 0  # forced, never judged
+        assert "Say one word" in factory.main.instructions[-1]
+        assert factory.main.max_tokens[-1] is not None
+
+
+async def test_start_mulca_wakes_too_and_alone_has_no_question():
+    assert not conversation_module._wake_phrase_has_question("Start MULCA.")
+    assert conversation_module._wake_phrase_has_question("start muca, what is due")
+    for mode in ("wake", "wake_v2"):
+        conversation, factory = await v2(mode=mode)
+
+        await voice_turn(conversation, "Start MULCA.")
+
+        assert conversation._listening_window_open is True, mode
+        assert "Briefly acknowledge" in factory.main.instructions[-1], mode
 
 
 async def test_without_the_ack_a_bare_start_only_restarts(monkeypatch):
-    monkeypatch.setattr(conversation_module, "RESTART_ACK_V2", False)
-    conversation, factory = await v2()
-    await voice_turn(conversation, "muca start")
-    conversation._engaged_since_ms = 1
+    monkeypatch.setattr(conversation_module, "RESTART_ACK", False)
+    for mode in ("wake", "wake_v2"):
+        conversation, factory = await v2(mode=mode)
+        await voice_turn(conversation, "muca start")
+        conversation._engaged_since_ms = 1
 
-    await voice_turn(conversation, "muca start")
+        await voice_turn(conversation, "muca start")
 
-    assert conversation._engaged_since_ms > 1
-    assert len(factory.main.instructions) == 1
-    assert factory.auxiliary.asked == 0
+        assert conversation._engaged_since_ms > 1, mode
+        assert len(factory.main.instructions) == 1
+        assert factory.auxiliary.asked == 0
 
 
 async def test_a_start_with_a_question_restarts_and_is_judged():
-    conversation, factory = await v2()
-    await voice_turn(conversation, "muca start")
-    conversation._engaged_since_ms = 1
+    for mode in ("wake", "wake_v2"):
+        conversation, factory = await v2(mode=mode)
+        await voice_turn(conversation, "muca start")
+        conversation._engaged_since_ms = 1
 
-    await voice_turn(conversation, "muca start, what is the deadline")
+        await voice_turn(conversation, "muca start, what is the deadline")
 
-    assert conversation._engaged_since_ms > 1
-    assert factory.auxiliary.asked == 1
+        assert conversation._engaged_since_ms > 1, mode
+        assert factory.auxiliary.asked == 1, mode
 
 
 async def test_the_follow_up_to_a_bare_start_is_judged_not_forced():
@@ -183,6 +198,24 @@ async def test_the_follow_up_to_a_bare_start_is_judged_not_forced():
     assert factory.auxiliary.asked == 1
     assert len(factory.main.instructions) == 1  # only the ack
     assert "probably what they woke it for" in turn_line(factory.auxiliary.told)
+
+
+async def test_in_wake_the_follow_up_gets_only_the_hint_line():
+    conversation, factory = await v2(auxiliary_cls=ObservedInterventionAgent, mode="wake")
+
+    await voice_turn(conversation, "muca start")
+    await voice_turn(conversation, "what is the deadline")
+    await voice_turn(conversation, "and the budget", speaker=2)
+
+    def line(words):
+        return next(text for text in factory.auxiliary.told if words in text)
+
+    hint = conversation_module.FOLLOWUP_HINT_WAKE
+    assert factory.auxiliary.asked == 2
+    assert len(factory.main.instructions) == 1  # only the ack
+    assert line("what is the deadline").endswith(hint)
+    assert hint not in line("and the budget")
+    assert not any("Turn facts" in text for text in factory.auxiliary.told)
 
 
 async def test_a_hold_answers_nothing_and_keeps_the_session():
@@ -211,17 +244,18 @@ async def test_a_thanks_before_the_start_wakes_and_a_long_basta_doesnt_end():
 
 
 async def test_the_turn_that_ends_the_session_is_not_answered():
-    conversation, factory = await v2(auxiliary_cls=FakeInterventionAgent)
-    await voice_turn(conversation, "muca start, what is the deadline")
-    conversation._interruption_score = 2
-    conversation.turns.append(Turn(start_time=-1_000, end_time=0, speaker_id=1))
-    conversation._pending_interruption_ms = 500
+    for mode in ("wake", "wake_v2"):
+        conversation, factory = await v2(auxiliary_cls=FakeInterventionAgent, mode=mode)
+        await voice_turn(conversation, "muca start, what is the deadline")
+        conversation._interruption_score = 2
+        conversation.turns.append(Turn(start_time=-1_000, end_time=0, speaker_id=1))
+        conversation._pending_interruption_ms = 500
 
-    await voice_turn(conversation, "no no we were saying the budget is late")
+        await voice_turn(conversation, "no no we were saying the budget is late")
 
-    assert conversation._listening_window_open is False
-    assert factory.auxiliary.asked == 0
-    assert len(factory.main.instructions) == 1
+        assert conversation._listening_window_open is False, mode
+        assert factory.auxiliary.asked == 0, mode
+        assert len(factory.main.instructions) == 1, mode
 
 
 async def test_longer_sessions_and_more_talk_overs():
@@ -248,15 +282,16 @@ async def test_longer_sessions_and_more_talk_overs():
 
 
 async def test_an_answer_to_mulca_by_name_heard_out_restarts_the_session():
-    conversation, _ = await v2(auxiliary_cls=FakeInterventionAgent)
-    await voice_turn(conversation, "muca start")
-    conversation._engaged_since_ms = 1
+    for mode in ("wake", "wake_v2"):
+        conversation, _ = await v2(auxiliary_cls=FakeInterventionAgent, mode=mode)
+        await voice_turn(conversation, "muca start")
+        conversation._engaged_since_ms = 1
 
-    await voice_turn(conversation, "muca, what is the deadline")
-    assert conversation._engaged_since_ms == 1  # not until it's heard out
+        await voice_turn(conversation, "muca, what is the deadline")
+        assert conversation._engaged_since_ms == 1, mode  # not until heard out
 
-    await conversation._end_assistant_turn()
-    assert conversation._engaged_since_ms > 1
+        await conversation._end_assistant_turn()
+        assert conversation._engaged_since_ms > 1, mode
 
 
 async def test_no_restart_when_talked_over_unnamed_or_unanswered():
@@ -285,22 +320,11 @@ async def test_no_restart_when_talked_over_unnamed_or_unanswered():
     await conversation._end_assistant_turn()
     assert conversation._engaged_since_ms == 1
 
-    # Plain "wake".
-    conversation, _ = await make_conversation(listening_mode="wake")
-    await voice_turn(conversation, "muca start")
-    conversation._engaged_since_ms = 1
-    await voice_turn(conversation, "muca, what is the deadline")
-    await conversation._end_assistant_turn()
-    assert conversation._engaged_since_ms == 1
-
 
 async def stepped_back(reason: str, *, mode: str = "wake_v2", after_ms: int = 1_000):
     """MULCA's session ended for `reason`; a turn starts `after_ms` later."""
 
-    if mode == "wake_v2":
-        conversation, factory = await v2(auxiliary_cls=FakeInterventionAgent)
-    else:
-        conversation, factory = await make_conversation(listening_mode=mode)
+    conversation, factory = await v2(auxiliary_cls=FakeInterventionAgent, mode=mode)
     await voice_turn(conversation, "muca start")
     await conversation._disengage(reason)
     start = conversation._stepped_back_ms + after_ms
@@ -318,21 +342,24 @@ async def take(conversation, text: str, ended_at: int) -> None:
 
 
 async def test_naming_mulca_right_after_it_steps_back_brings_it_back():
-    conversation, factory, ended_at = await stepped_back("silence")
-    asked = factory.auxiliary.asked
+    for mode in ("wake", "wake_v2"):
+        conversation, factory, ended_at = await stepped_back("silence", mode=mode)
+        asked = factory.auxiliary.asked
 
-    await take(conversation, "hey assistant, what was the deadline", ended_at)
+        await take(conversation, "hey assistant, what was the deadline", ended_at)
 
-    assert conversation._listening_window_open is True
-    assert factory.auxiliary.asked == asked + 1  # judged, as said to MULCA
+        assert conversation._listening_window_open is True, mode
+        assert factory.auxiliary.asked == asked + 1, mode  # judged, said to MULCA
 
 
-async def test_no_step_back_in_late_unnamed_after_a_dismissal_or_in_wake():
+async def test_no_step_back_in_late_unnamed_after_a_dismissal_or_a_stop():
     cases = (
         ("silence", "wake_v2", 6_000, "assistant, what was the deadline"),
         ("silence", "wake_v2", 1_000, "what was the deadline"),
         ("dismissed", "wake_v2", 1_000, "assistant, what was the deadline"),
-        ("silence", "wake", 1_000, "assistant, what was the deadline"),
+        ("silence", "wake", 6_000, "assistant, what was the deadline"),
+        ("dismissed", "wake", 1_000, "assistant, what was the deadline"),
+        ("silence", "wake", 1_000, "muca stop"),
     )
     for reason, mode, after_ms, text in cases:
         conversation, _, ended_at = await stepped_back(reason, mode=mode, after_ms=after_ms)

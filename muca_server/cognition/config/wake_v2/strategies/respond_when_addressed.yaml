@@ -15,7 +15,7 @@ trigger_description: >
   ("Allora, chi fa le slide?", "We have to find a way to use it");
   reactions ("Okay.", "Sì sì", "Che frustrazione", "Thanks"); fragments
   ("Once we can", "So, basically for Monday we have to"); talk about MULCA
-  ("Maybe when MULCA talks?"); a request to someone else by name ("Pietro,
+  ("Maybe when MULCA talks?"); a request to someone else by name ("<name>,
   can you grab the notes?").
   If it asks about something said earlier, also set needs_history.
   When it does fire, it comes before an unrequested strategy (participation,

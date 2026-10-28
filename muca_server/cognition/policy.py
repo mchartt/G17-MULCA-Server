@@ -506,7 +506,7 @@ class CoalaPolicy:
             # the listening window/engaged session itself (that state lives
             # there, not here) -- this is the forced directive, same shape
             # as a forced intervention.
-            # "wake_v2": a bare one said again in an open session gets a
+            # "wake": a bare one said again in an open session gets a
             # single word. Found in the 15-28 Oct exports: students said it
             # again and again, and each time got a sentence back.
             one_word = utterance.wake_restart

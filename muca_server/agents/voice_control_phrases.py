@@ -88,15 +88,22 @@ def matches_dismissal(transcript: str) -> bool:
     return DISMISSAL_PATTERN.search(transcript) is not None
 
 
-# "wake_v2" only. "Start MULCA" wakes too, a dismissal also takes "go out",
-# "get out" and "esci", and a hold stops the reply without ending the
-# session. Found in the 15-28 Oct exports: "grazie... MULCA start" ended
-# sessions instead of opening them, "basta che cerchi" ended one mid-talk,
-# and "aspetta" or "wait" got an answer.
-_WAKE_V2 = re.compile(
+# "wake" and "wake_v2": "start MULCA" wakes too.
+WAKE_ANY_ORDER_PATTERN = re.compile(
     rf"{WAKE_PHRASE_PATTERN.pattern}|\bstart\b[\s,.!?:;-]*({_NAME}|{_ALIAS})\b",
     re.IGNORECASE,
 )
+
+
+def matches_wake_any_order(transcript: str) -> bool:
+    return WAKE_ANY_ORDER_PATTERN.search(transcript) is not None
+
+
+# "wake_v2" only. A dismissal also takes "go out", "get out" and "esci", and
+# a hold stops the reply without ending the session. Found in the 15-28 Oct
+# exports: "grazie... MULCA start" ended sessions instead of opening them,
+# "basta che cerchi" ended one mid-talk, and "aspetta" or "wait" got an
+# answer.
 _DISMISSAL_V2 = re.compile(
     rf"{DISMISSAL_PATTERN.pattern}|\b(go out|get out|esci)\b",
     re.IGNORECASE,
@@ -120,7 +127,7 @@ def voice_command_v2(transcript: str) -> str | None:
     short turn or one that names MULCA.
     """
 
-    commands = [(m.start(), "wake") for m in _WAKE_V2.finditer(transcript)]
+    commands = [(m.start(), "wake") for m in WAKE_ANY_ORDER_PATTERN.finditer(transcript)]
     if (
         len(_WORD_V2.findall(transcript)) <= MAX_COMMAND_WORDS
         or addresses_assistant(transcript)
