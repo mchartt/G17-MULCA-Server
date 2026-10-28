@@ -1462,11 +1462,11 @@ class Conversation:
         )
         if self._listening_mode == "wake":
             await self._settle_interruption(speaker, ended_at, transcript)
-            # The turn that just ended the session (talked over once too
-            # often, or past the time limit while it was being transcribed)
-            # is not answered. Found in the 15-28 Oct exports: 43 replies
-            # came seconds after the session closed.
-            if not self._engaged():
+            # "wake_v2": the turn that just ended the session (talked over
+            # once too often, or past the time limit while it was being
+            # transcribed) is not answered. Found in the 15-28 Oct exports:
+            # 43 replies came seconds after the session closed.
+            if self._v2 and not self._engaged():
                 in_open_window = False
                 is_followup = False
 

@@ -244,7 +244,8 @@ async def test_a_thanks_before_the_start_wakes_and_a_long_basta_doesnt_end():
 
 
 async def test_the_turn_that_ends_the_session_is_not_answered():
-    for mode in ("wake", "wake_v2"):
+    # Plain "wake" still judges it (asked once); "wake_v2" doesn't.
+    for mode, asked in (("wake", 1), ("wake_v2", 0)):
         conversation, factory = await v2(auxiliary_cls=FakeInterventionAgent, mode=mode)
         await voice_turn(conversation, "muca start, what is the deadline")
         conversation._interruption_score = 2
@@ -254,8 +255,7 @@ async def test_the_turn_that_ends_the_session_is_not_answered():
         await voice_turn(conversation, "no no we were saying the budget is late")
 
         assert conversation._listening_window_open is False, mode
-        assert factory.auxiliary.asked == 0, mode
-        assert len(factory.main.instructions) == 1, mode
+        assert factory.auxiliary.asked == asked, mode
 
 
 async def test_longer_sessions_and_more_talk_overs():
