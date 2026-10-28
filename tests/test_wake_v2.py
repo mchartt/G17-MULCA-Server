@@ -44,6 +44,7 @@ from test_listening_modes import (
     create_auxiliary,
     interrupted,
     make_conversation,
+    typed,
     voice_turn,
 )
 
@@ -365,6 +366,26 @@ async def test_no_step_back_in_late_unnamed_after_a_dismissal_or_a_stop():
         conversation, _, ended_at = await stepped_back(reason, mode=mode, after_ms=after_ms)
         await take(conversation, text, ended_at)
         assert conversation._listening_window_open is False, (reason, mode, after_ms, text)
+
+
+async def test_a_stop_during_the_grace_cancels_it():
+    for mode in ("wake", "wake_v2"):
+        for stop in ("spoken", "typed"):
+            conversation, _, ended_at = await stepped_back("silence", mode=mode)
+            stepped_back_ms = conversation._stepped_back_ms
+            if stop == "spoken":
+                await take(conversation, "muca stop", ended_at)
+            else:
+                await typed(conversation, "MULCA stop")
+            assert conversation._stepped_back_ms == 0, (mode, stop)
+
+            # Still within 5 s of stepping back, and naming it.
+            start = stepped_back_ms + 3_000
+            conversation.turns.append(
+                Turn(start_time=start, end_time=start + 1_000, speaker_id=2)
+            )
+            await take(conversation, "hey assistant, what was the deadline", start + 1_000)
+            assert conversation._listening_window_open is False, (mode, stop)
 
 
 async def test_spoken_turns_come_with_facts_instead_of_the_variables():

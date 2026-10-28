@@ -1068,16 +1068,19 @@ class Conversation:
             await self._send(ListeningStateMessage(open=True))
 
     async def _disengage(self, reason: str) -> None:
+        # An explicit stop gets no step-back grace, and cancels one left by
+        # an earlier step back on MULCA's own.
+        explicit = reason in ("dismissed", "dismissed in text", "session closed")
+        if explicit:
+            self._stepped_back_ms = 0
         if not self._listening_window_open:
             return
 
         self._listening_window_open = False
         self._followup_speaker = None
         self._pending_interruption_ms = None
-        self._stepped_back_ms = (
-            0 if reason in ("dismissed", "dismissed in text", "session closed")
-            else _now_ms()
-        )
+        if not explicit:
+            self._stepped_back_ms = _now_ms()
         duration_s = (_now_ms() - self._engaged_since_ms) // 1000
         logger.info(
             "%s engaged session ended (%s) after %ds, interruption score %d",
@@ -1359,8 +1362,9 @@ class Conversation:
         # 6, 15 Oct): "@MULCA stop" got "I'm stepping back" in the chat while
         # MULCA kept talking in the call. Named, unlike a spoken dismissal: a
         # typed "thanks" is far likelier to be meant for someone else.
+        # Also during the step-back grace, which it cancels.
         if (
-            self._engaged()
+            (self._engaged() or self._stepped_back_ms)
             and (message.mentions_assistant or _addresses_assistant(message.text))
             and _matches_dismissal(message.text)
         ):
