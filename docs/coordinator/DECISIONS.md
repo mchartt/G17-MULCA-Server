@@ -2,6 +2,21 @@
 
 Newest first. Each entry: date, decision, alternatives, reason, status.
 
+## 2026-11-15 · Kickoff runs in the background
+
+- **Decision:** `kickoff` starts a task and returns at once; one kickoff per
+  group at a time; each model call has a 30 s limit.
+- **Alternative:** wait for the model inside the dispatcher (first version).
+- **Reason:** the session reads messages one at a time
+  (`session_runtime.py` `receive_loop`): waiting froze the group's chat and
+  voice (found by the M1 review).
+
+## 2026-11-15 · Azure stays independent of the coordinator switch
+
+- **Decision:** `AZURE_OPENAI_*` alone selects Azure, as the project
+  instructions want the whole chain on Azure. Voice on Azure is marked NOT
+  VERIFIED (transcription connects without a deployment name).
+
 ## 2026-11-15 · Coordinator plugged in as a wrapper of the Conversation
 
 - **Decision:** when on, `session_components_factory.py` wraps the session's

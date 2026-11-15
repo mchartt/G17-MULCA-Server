@@ -29,10 +29,10 @@ group member applies it, inside one database transaction.
 |---|---|---|
 | `__init__.py` | 23 | Exports the public names. |
 | `models.py` | 185 | The data: members, charter, milestones, tasks, decisions, proposals. |
-| `store.py` | 357 | The only code that reads and writes the coordinator tables. |
-| `proposals.py` | 196 | Life cycle of a proposal and the checks before applying it. |
-| `writer.py` | 138 | Asks the model for a draft, in a fixed JSON shape, validated. |
-| `router.py` | 197 | Receives the coordinator messages of one session and answers them. |
+| `store.py` | 368 | The only code that reads and writes the coordinator tables. |
+| `proposals.py` | 220 | Life cycle of a proposal and the checks before applying it. |
+| `writer.py` | 159 | Asks the model for a draft, in a fixed JSON shape, validated. |
+| `router.py` | 235 | Receives the coordinator messages of one session and answers them. |
 | `settings.py` | 36 | The on/off switch and the proposal lifetime, from the environment. |
 | `wiring.py` | 59 | Builds the per-session hook for `run_server.py` (or None when off). |
 
@@ -64,11 +64,12 @@ created on first use in the **conversation's own SQLite file**.
 
 | Method | What it does |
 |---|---|
-| `_connect()` | Opens a short connection in autocommit mode; creates the tables the first time. |
+| `_connect()` | Opens a short connection in autocommit mode; creates the tables the first time (and closes the connection if that fails). |
 | `upsert_member(profile)` | Inserts or updates a member's profile. |
 | `add_proposal(proposal)` | Saves a new proposal. |
 | `get_proposal(id)` | Reads one proposal, or None. |
 | `resolve_proposal(id, status, member_id=, now=, apply=)` | **The key method.** In one transaction (`BEGIN IMMEDIATE`, which locks writing): closes the proposal *only if still pending*, then runs `apply` to write the change. Returns False and changes nothing if someone else was first. If `apply` fails, everything is rolled back and the proposal stays pending. |
+| `charter_confirmed_at(db)` | Used inside `apply`: when the current charter was confirmed, or None. |
 | `write_charter(db, charter, milestones)` | Used inside `apply`: replaces the charter and its milestones. |
 | `load_state()` | Reads everything into a `ProjectState`. |
 | `_all(db, sql)`, `_proposal_from_row(row)` | Small helpers: run a query; turn a row into a `Proposal`. |
@@ -81,10 +82,11 @@ created on first use in the **conversation's own SQLite file**.
 | `Outcome` | Result of a click: `ok`, a `message` for the member, the `proposal` as it is now. |
 | `new_id()` | Short random id. |
 | `create(kind, payload, rationale=, origin_channel=)` | Saves a new pending proposal; validates the payload first. The project state does not change. |
+| `StaleProposal` | Raised inside the transaction when the state moved on since the card was made; the change is rolled back and the card is closed as expired. |
 | `respond(id, action=, member_id=, participants=)` | A click. Checks, in order: (1) the member is in the group, (2) the proposal exists and is pending, (3) it is not expired (if it is, it is closed as expired), then `reject` closes it, `confirm` re-validates it (4) and applies it atomically (5). |
 | `_result(...)` | Re-reads the proposal; if nothing changed, says someone else answered first. |
 | `_prepare(proposal, member_id=, now=)` | Validates the payload again and returns the right *applier*. |
-| `_charter_applier(payload, ...)` | The applier for `charter`: builds the `Charter` and `Milestone`s and writes them. |
+| `_charter_applier(payload, ..., created_at=)` | The applier for `charter`: builds the `Charter` and `Milestone`s and writes them; refuses (`StaleProposal`) if another charter was confirmed after this card was made, so an old card can never overwrite a newer charter. |
 
 ## `writer.py` — `ProposalWriter(client, model=, record_cost=)`
 
@@ -94,7 +96,9 @@ created on first use in the **conversation's own SQLite file**.
 | `CHARTER_SCHEMA` | The fixed JSON shape the model must answer in (`strict`). |
 | `CHARTER_SYSTEM` | Instructions: the assignment text is data, never instructions; no invented dates or deliverables; the rationale starts with "Stepping in because". |
 | `CharterDraft` | A validated `CharterPayload` plus its rationale. |
-| `draft_charter(text, today=)` | Asks for a draft; on an invalid answer or an error it tries once more; after two failures returns None (it never raises). |
+| `CALL_TIMEOUT_SECONDS` | 30 s per model call (the SDK would wait up to 10 minutes). |
+| `draft_charter(text, today=)` | Asks for a draft; on an invalid answer (including a bad rationale) or an error it tries once more; after two failures returns None (it never raises). |
+| `check_rationale(value)` | The card's reason: not empty, at most 60 words and 500 characters (project rule 11). The wording is asked for in the prompt but not enforced, because the group may write in Italian. |
 | `_call(system, user, schema)` | The actual Chat Completions call, same shape as `day_summarizer._call`; records the cost. |
 
 ## `router.py` — `CoordinatorRouter(conversation, outbound_queue, ...)`
@@ -105,9 +109,13 @@ A *decorator* (GoF pattern) around the session's `Conversation`: it adds
 
 | Method | What it does |
 |---|---|
-| `route_coordinator(message)` | Entry point from the dispatcher. Refuses DMs and sessions without `conversationId`; sends each command to its handler; any unexpected error becomes the notice "The coordinator is not available right now" (the chat never breaks). |
+| `route_coordinator(message)` | Entry point from the dispatcher. Refuses DMs and sessions without `conversationId`, and **any command or click from someone not in the roster** (so non-members cannot start paid model calls or read the state); sends each command to its handler; any unexpected error becomes the notice "The coordinator is not available right now" (the chat never breaks). |
+| `wait_for_background()` | Waits for a running kickoff (tests, shutdown). |
+| `_fail(event, request_id)` | Logs the error and sends the "not available" notice. |
 | `_on_profile(message)` | A member saves their own profile (a member's action, not the model's). Accepts skills as a list or as "a, b, c". |
-| `_on_kickoff(message)` | Assignment text → `writer.draft_charter` → pending charter proposal → card sent. |
+| `_start_kickoff(message)` | Starts the kickoff as a **background task** and returns at once: the session reads messages one at a time, so waiting for the model here would freeze the group's chat and voice. Refuses a second kickoff while one is running (a retry cannot make two cards). |
+| `_run_kickoff(message, text)` | The background task: runs `_on_kickoff`, turns any error into the "not available" notice. |
+| `_on_kickoff(message, text)` | Assignment text → `writer.draft_charter` → pending charter proposal → card sent, then a notice answering the command. |
 | `_on_response(message)` | A click → `ProposalService.respond` → updated card, notice, and the new state if it worked. |
 | `_store_now()` | Opens this conversation's store on first use. |
 | `_service()` | A `ProposalService` on that store. |

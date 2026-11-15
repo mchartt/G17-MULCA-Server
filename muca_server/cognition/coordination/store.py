@@ -108,7 +108,11 @@ class CoordinationStore:
         """
         db = await aiosqlite.connect(self._db_path, isolation_level=None)
         if not self._ready:
-            await db.executescript(SCHEMA)
+            try:
+                await db.executescript(SCHEMA)
+            except Exception:
+                await db.close()
+                raise
             self._ready = True
         return db
 
@@ -233,6 +237,13 @@ class CoordinationStore:
     # ------------------------------------------------------------------
     # Writers used by appliers (inside resolve_proposal's transaction)
     # ------------------------------------------------------------------
+
+    @staticmethod
+    async def charter_confirmed_at(db: aiosqlite.Connection) -> float | None:
+        """When the current charter was confirmed, or None (inside a transaction)."""
+        cursor = await db.execute("SELECT confirmed_at FROM coord_charter WHERE id = 1")
+        row = await cursor.fetchone()
+        return row[0] if row else None
 
     @staticmethod
     async def write_charter(

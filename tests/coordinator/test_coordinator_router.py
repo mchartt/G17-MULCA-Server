@@ -64,6 +64,7 @@ async def test_kickoff_then_confirm_saves_the_charter(store):
     router, queue = make_router(store, GOOD_CHARTER)
 
     await router.route_coordinator(command("kickoff", text="Assignment text"))
+    await router.wait_for_background()
     sent = await drain(queue)
     (card,) = of_type(sent, CoordinatorProposalMessage)
     (posted,) = of_type(sent, CoordinatorNoticeMessage)
@@ -85,6 +86,7 @@ async def test_kickoff_then_confirm_saves_the_charter(store):
 async def test_a_click_from_a_non_member_is_refused(store):
     router, queue = make_router(store, GOOD_CHARTER)
     await router.route_coordinator(command("kickoff", text="x"))
+    await router.wait_for_background()
     (card,) = of_type(await drain(queue), CoordinatorProposalMessage)
 
     await router.route_coordinator(click(card.proposal["proposal_id"], member=77))
@@ -106,6 +108,7 @@ async def test_kickoff_without_text_asks_for_it(store):
 async def test_kickoff_when_the_model_fails_says_unavailable(store):
     router, queue = make_router(store, RuntimeError("down"), RuntimeError("down"))
     await router.route_coordinator(command("kickoff", text="x"))
+    await router.wait_for_background()
     (notice,) = await drain(queue)
     assert (notice.ok, notice.text) == (False, UNAVAILABLE)
 
@@ -165,3 +168,40 @@ async def test_an_unexpected_error_never_breaks_the_chat(store, monkeypatch):
     await router.route_coordinator(command("state"))
     (notice,) = await drain(queue)
     assert (notice.ok, notice.text) == (False, UNAVAILABLE)
+
+
+async def test_kickoff_runs_in_the_background_and_only_once_at_a_time(store):
+    """The session must keep reading messages while the model writes."""
+    release = asyncio.Event()
+
+    class SlowClient(FakeChatClient):
+        async def _create(self, **kwargs):
+            await release.wait()
+            return await super()._create(**kwargs)
+
+    queue: asyncio.Queue = asyncio.Queue()
+    router = CoordinatorRouter(
+        FakeConversation(), queue,
+        store_for=lambda conversation_id: store,
+        writer=ProposalWriter(SlowClient(GOOD_CHARTER)),
+        proposal_ttl_seconds=3600,
+    )
+    await asyncio.wait_for(router.route_coordinator(command("kickoff", text="x")), 1)
+    await router.route_coordinator(command("kickoff", text="again"))
+    (busy,) = await drain(queue)
+    assert not busy.ok and "already running" in busy.text
+    await router.route_coordinator(command("state"))  # not blocked meanwhile
+    assert isinstance((await drain(queue))[0], CoordinatorStateMessage)
+    release.set()
+    await router.wait_for_background()
+    assert of_type(await drain(queue), CoordinatorProposalMessage)
+
+
+@pytest.mark.parametrize("name", ["kickoff", "state", "profile"])
+async def test_a_non_member_cannot_run_any_command(store, name):
+    client_answers = []  # an empty fake model: any call would fail the test
+    router, queue = make_router(store, *client_answers)
+    await router.route_coordinator(command(name, member=99, text="x"))
+    await router.wait_for_background()
+    (notice,) = await drain(queue)
+    assert not notice.ok and "Only members" in notice.text

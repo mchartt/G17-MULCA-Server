@@ -7,7 +7,9 @@ can change the project state.
                     1. the member must be in the group           (else refused)
                     2. the proposal must exist and be pending    (else refused)
                     3. it must not be past its expiry            (else EXPIRED)
-                    4. it is checked again against today's state (else refused)
+                    4. it is checked again against today's state (else refused; a charter
+                       card made before the current charter was confirmed is
+                       closed as expired, inside the same transaction)
                     5. CONFIRM: status APPLIED and the change, in one transaction
                        REJECT:  status REJECTED, nothing else changes
 
@@ -37,6 +39,10 @@ from .store import Applier, CoordinationStore
 
 # How long a proposal waits for a click before it expires.
 DEFAULT_TTL_SECONDS = 48 * 3600
+
+
+class StaleProposal(Exception):
+    """Raised inside the transaction: the state moved on since the card was made."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,13 +144,20 @@ class ProposalService:
         problem, applier = self._prepare(proposal, member_id=member_id, now=now)
         if problem:
             return Outcome(False, problem, proposal)
-        applied = await self._store.resolve_proposal(
-            proposal_id,
-            ProposalStatus.APPLIED,
-            member_id=member_id,
-            now=now,
-            apply=applier,
-        )
+        try:
+            applied = await self._store.resolve_proposal(
+                proposal_id,
+                ProposalStatus.APPLIED,
+                member_id=member_id,
+                now=now,
+                apply=applier,
+            )
+        except StaleProposal as exc:
+            # Rolled back: close the card so it cannot be confirmed later.
+            await self._store.resolve_proposal(
+                proposal_id, ProposalStatus.EXPIRED, member_id=None, now=now
+            )
+            return Outcome(False, str(exc), await self._store.get_proposal(proposal_id))
         return await self._result(proposal_id, applied, "Confirmed and saved.")
 
     async def _result(self, proposal_id: str, changed: bool, done: str) -> Outcome:
@@ -172,13 +185,21 @@ class ProposalService:
 
         if proposal.kind is ProposalKind.CHARTER:
             assert isinstance(payload, CharterPayload)
-            return "", _charter_applier(payload, member_id=member_id, now=now)
+            return "", _charter_applier(
+                payload, member_id=member_id, now=now, created_at=proposal.created_at
+            )
 
         return f"Unsupported card kind {proposal.kind.value!r}.", None
 
 
-def _charter_applier(payload: CharterPayload, *, member_id: int, now: float) -> Applier:
-    """The change a confirmed charter makes: charter + milestones replaced."""
+def _charter_applier(
+    payload: CharterPayload, *, member_id: int, now: float, created_at: float
+) -> Applier:
+    """
+    The change a confirmed charter makes: charter + milestones replaced.
+    Refused (StaleProposal) if another charter was confirmed after this card
+    was made: an old card must never overwrite a newer charter.
+    """
     charter = Charter(
         goal=payload.goal,
         deliverables=payload.deliverables,
@@ -191,6 +212,9 @@ def _charter_applier(payload: CharterPayload, *, member_id: int, now: float) -> 
     ]
 
     async def apply(db) -> None:
+        confirmed_at = await CoordinationStore.charter_confirmed_at(db)
+        if confirmed_at is not None and confirmed_at > created_at:
+            raise StaleProposal("A newer charter was confirmed after this card was made.")
         await CoordinationStore.write_charter(db, charter, milestones)
 
     return apply

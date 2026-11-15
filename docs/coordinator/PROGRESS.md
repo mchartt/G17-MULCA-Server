@@ -41,6 +41,16 @@ Confirm on the card, `/coordinator plan`; note cost.
   cards); hooks in `muca_client.py`, `sessions.py`, `__main__.py`.
   Tests: 21 new (one end to end against a real local MUCA-Server with the
   coordinator on); MULCA suite 257 passed; coverage 98–100 %.
+- 15/11 · Fresh-eyes review of M1 (sub-agent): 11 findings, all fixed or
+  recorded — kickoff no longer blocks the session (background task, 30 s per
+  call, one kickoff at a time); bots added later get coordinator events
+  (hook on the `SessionRegistry` class) and card buttons (registered on the
+  posting bot's client); an old charter card cannot overwrite a newer one
+  (checked inside the transaction); every command and click needs a member
+  of the roster; rationale checked inside the retry loop (≤ 60 words);
+  "did not answer" no longer invites a retry; Azure vs voice documented in
+  AZURE_SETUP.md; TRACEABILITY statuses corrected (no DONE without a live
+  run). Server suite 481 passed + the known failure; MULCA 258 passed.
 
 ## How to measure coverage
 
@@ -86,7 +96,7 @@ blocks the slice.
     then silence), `settings.py` (the on/off switch), `INDICE.md`.
   - `muca_server/cognition/config/tasks/group_coordinator.yaml`.
   - `mulca_discord/coordinator/` — `commands.py` (`/coordinator profile`,
-    `kickoff`, `plan`), `cards.py` (persistent `discord.ui.View`), `INDICE.md`.
+    `kickoff`, `plan`), `cards.py` (persistent buttons, `discord.ui.DynamicItem`), `INDICE.md`.
 - **Protocol events (added, none changed):** server → client
   `coordinator_proposal`, `coordinator_state`; client → server
   `proposal_response`, `coordinator_command`. Documented in `docs/PROTOCOL.md`.

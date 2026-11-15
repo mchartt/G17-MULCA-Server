@@ -43,6 +43,17 @@ the code does not change (INTEGRATION_MAP.md, section 6).
 
 `gpt-4o-transcribe` is voice only: skip it.
 
+## Azure is independent of the coordinator switch
+
+The client goes to Azure whenever both `AZURE_OPENAI_*` variables are set,
+also with `MUCA_COORDINATOR_ENABLED` off: that is intended (project
+instructions, section 5: the whole model chain runs on Azure).
+**Voice on Azure is NOT VERIFIED and probably does not work as is:**
+`agents/openai/transcription_agent.py:106` calls `realtime.connect()` with
+no `model=`, and Azure needs the deployment in the URL. Our groups use text
+replies only; do not use voice on an Azure-configured server until this is
+tested. Proof needed: one spoken turn with `scripts/smoke_client.py`.
+
 ## Steps in the portal
 
 Menu names in the Azure portal change often. If a label differs, look for

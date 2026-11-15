@@ -45,6 +45,8 @@ logger = logging.getLogger(__name__)
 
 UNAVAILABLE = "The coordinator is not available right now. Try again in a few minutes."
 GROUP_ONLY = "The coordinator works only in a group channel, not in a direct message."
+MEMBERS_ONLY = "Only members of this group can use the coordinator here."
+KICKOFF_RUNNING = "A kickoff is already running for this group: its card will appear here."
 
 
 class CoordinatorRouter:
@@ -66,6 +68,8 @@ class CoordinatorRouter:
         self._ttl = proposal_ttl_seconds
         self._today = today
         self._store: CoordinationStore | None = None
+        # The kickoff running in the background, if any (one per group).
+        self._kickoff: asyncio.Task | None = None
 
     def __getattr__(self, name: str) -> Any:
         """Everything not defined here is the Conversation's (see module docstring)."""
@@ -83,23 +87,37 @@ class CoordinatorRouter:
         if self._conversation.is_private or self._conversation.is_ephemeral:
             await self._notice(False, GROUP_ONLY, request_id)
             return
+        # Every command and click needs a member of the group (the client
+        # sends the roster first). This also stops non-members from
+        # starting paid model calls or reading the project state.
+        if message.member_id not in self._conversation.participants():
+            await self._notice(False, MEMBERS_ONLY, request_id)
+            return
         try:
             if isinstance(message, ProposalResponseMessage):
                 await self._on_response(message)
             elif message.command == "profile":
                 await self._on_profile(message)
             elif message.command == "kickoff":
-                await self._on_kickoff(message)
+                await self._start_kickoff(message)
             else:  # "state"
                 await self._send_state(request_id)
         except Exception:
-            # Project rule: a coordinator error never breaks the chat.
-            logger.exception(
-                "%s coordinator failed on %s",
-                self._conversation.conversation_id,
-                message.event,
-            )
-            await self._notice(False, UNAVAILABLE, request_id)
+            await self._fail(message.event, request_id)
+
+    async def wait_for_background(self) -> None:
+        """Wait for a running kickoff to finish (used by tests and at shutdown)."""
+        if self._kickoff is not None:
+            await asyncio.gather(self._kickoff, return_exceptions=True)
+
+    async def _fail(self, event: str, request_id: str) -> None:
+        """Project rule: a coordinator error never breaks the chat."""
+        logger.exception(
+            "%s coordinator failed on %s",
+            self._conversation.conversation_id,
+            event,
+        )
+        await self._notice(False, UNAVAILABLE, request_id)
 
     # ------------------------------------------------------------------
     # Commands
@@ -108,9 +126,6 @@ class CoordinatorRouter:
     async def _on_profile(self, message: CoordinatorCommandMessage) -> None:
         """A member writes their own profile (their action, not the model's)."""
         participants = self._conversation.participants()
-        if message.member_id not in participants:
-            await self._notice(False, "Only members of this group can have a profile.", message.request_id)
-            return
         args = message.args
         skills = args.get("skills", [])
         if isinstance(skills, str):  # "python, react" from a slash command
@@ -130,12 +145,30 @@ class CoordinatorRouter:
         await self._notice(True, "Profile saved.", message.request_id)
         await self._send_state(message.request_id)
 
-    async def _on_kickoff(self, message: CoordinatorCommandMessage) -> None:
-        """Assignment text in, charter proposal card out."""
+    async def _start_kickoff(self, message: CoordinatorCommandMessage) -> None:
+        """
+        Start a kickoff without waiting for it. The session reads its
+        messages one at a time (session_runtime.py receive_loop): waiting
+        here for the model would freeze the group's chat and voice. One
+        kickoff at a time per group, so a retry cannot make two cards.
+        """
         text = str(message.args.get("text", "")).strip()
         if not text:
             await self._notice(False, "Paste the text of the assignment to start.", message.request_id)
             return
+        if self._kickoff is not None and not self._kickoff.done():
+            await self._notice(False, KICKOFF_RUNNING, message.request_id)
+            return
+        self._kickoff = asyncio.create_task(self._run_kickoff(message, text))
+
+    async def _run_kickoff(self, message: CoordinatorCommandMessage, text: str) -> None:
+        """Assignment text in, charter proposal card out (runs in the background)."""
+        try:
+            await self._on_kickoff(message, text)
+        except Exception:
+            await self._fail(message.event, message.request_id)
+
+    async def _on_kickoff(self, message: CoordinatorCommandMessage, text: str) -> None:
         draft = await self._writer.draft_charter(text, today=self._today())
         if draft is None:
             await self._notice(False, UNAVAILABLE, message.request_id)

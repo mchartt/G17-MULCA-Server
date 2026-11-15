@@ -159,3 +159,17 @@ async def test_two_confirms_at_once_apply_exactly_once(service, store):
     )
     assert sorted(o.ok for o in outcomes) == [False, True]
     assert len((await store.load_state()).milestones) == 2
+
+
+async def test_an_old_charter_card_cannot_overwrite_a_newer_charter(service, store, clock):
+    old = await new_proposal(service)
+    clock.now += 10
+    new = await new_proposal(service)
+    clock.now += 10
+    assert (await service.respond(new.proposal_id, action="confirm", member_id=1, participants=ROSTER)).ok
+    clock.now += 10
+    outcome = await service.respond(old.proposal_id, action="confirm", member_id=2, participants=ROSTER)
+    assert not outcome.ok
+    assert "newer charter" in outcome.message
+    assert outcome.proposal.status is ProposalStatus.EXPIRED
+    assert (await store.load_state()).charter.confirmed_by == 1

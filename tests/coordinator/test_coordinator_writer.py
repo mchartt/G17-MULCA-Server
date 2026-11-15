@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date
 
 from muca_server.cognition.coordination.writer import (
+    CALL_TIMEOUT_SECONDS,
     CHARTER_SCHEMA,
     DEFAULT_WRITER_MODEL,
     ProposalWriter,
@@ -29,6 +30,7 @@ async def test_a_good_answer_becomes_a_validated_draft():
     (call,) = client.calls
     assert call["model"] == DEFAULT_WRITER_MODEL
     assert call["response_format"] == {"type": "json_schema", "json_schema": CHARTER_SCHEMA}
+    assert call["timeout"] == CALL_TIMEOUT_SECONDS  # never the SDK's 10 minutes
     # The assignment is passed as quoted data, never as instructions.
     assert "<assignment>\nDeliver a report by 2 Dec.\n</assignment>" in call["messages"][1]["content"]
     assert "2026-11-15" in call["messages"][1]["content"]
@@ -53,3 +55,10 @@ async def test_two_failures_give_none_and_never_raise():
 async def test_an_empty_goal_is_not_accepted():
     client = FakeChatClient(dict(GOOD_CHARTER, goal=""), dict(GOOD_CHARTER, goal=""))
     assert await ProposalWriter(client).draft_charter("text", today=TODAY) is None
+
+
+async def test_a_rationale_that_is_empty_or_over_60_words_costs_a_retry():
+    too_long = dict(GOOD_CHARTER, rationale="word " * 61)
+    client = FakeChatClient(dict(GOOD_CHARTER, rationale=""), too_long)
+    assert await ProposalWriter(client).draft_charter("text", today=TODAY) is None
+    assert len(client.calls) == 2

@@ -2,7 +2,7 @@
 The Group Coordinator's on/off switch and its few settings.
 
 OFF by default. When off, run_server.py builds no coordinator at all and
-MUCA-Server behaves exactly as before (tests/coordinator/test_switch_off.py).
+MUCA-Server behaves exactly as before (tests/coordinator/test_coordinator_switch.py).
 """
 
 from __future__ import annotations

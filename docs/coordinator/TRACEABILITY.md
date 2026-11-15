@@ -15,13 +15,13 @@ Last update: 15 Nov 2026.
 
 | Rule | Status | Proof |
 |---|---|---|
-| The model never writes state; a member's confirmation applies a proposal after re-validation | PARTIAL (charter only) | `proposals.py` `respond`; tests `test_coordinator_proposals.py` (all), `test_coordinator_router.py::test_kickoff_then_confirm_saves_the_charter` |
-| First valid click wins | DONE (server) | `store.py` `resolve_proposal`; `test_coordinator_store.py::test_two_simultaneous_clicks_apply_exactly_once` |
-| Click from a non-member refused | DONE (server + Discord, not live) | `test_coordinator_proposals.py::test_a_click_from_outside_the_group_is_refused` |
-| Protocol extended, not changed | DONE | `protocol/coordinator.py`; `test_coordinator_protocol.py`; full lab suite green (475 passed, 1 pre-existing failure) |
-| Switch off = behaviour unchanged | DONE | `test_coordinator_switch.py` (4 tests off); lab suite green with the switch off |
-| Model error never breaks the chat | DONE (server) | `router.py` `route_coordinator`; `test_..._router.py::test_an_unexpected_error_never_breaks_the_chat`, `test_kickoff_when_the_model_fails_says_unavailable` |
-| Structured output validated with pydantic, one retry then silence | DONE | `writer.py`; `test_coordinator_writer.py` |
+| The model never writes state; a member's confirmation applies a proposal after re-validation | PARTIAL (charter only), tested; an old charter card cannot overwrite a newer charter (`test_an_old_charter_card_cannot_overwrite_a_newer_charter`) | `proposals.py` `respond`; tests `test_coordinator_proposals.py` (all), `test_coordinator_router.py::test_kickoff_then_confirm_saves_the_charter` |
+| First valid click wins | NOT VERIFIED (live) — tested | `store.py` `resolve_proposal`; `test_coordinator_store.py::test_two_simultaneous_clicks_apply_exactly_once` |
+| Command or click from a non-member refused | NOT VERIFIED (live) — tested | server: `test_coordinator_router.py::test_a_non_member_cannot_run_any_command`, `test_coordinator_proposals.py::test_a_click_from_outside_the_group_is_refused`; Discord: `test_coordinator_discord.py::test_kickoff_card_and_confirm_end_to_end` (outsider click) |
+| Protocol extended, not changed | NOT VERIFIED (live) — tested | `protocol/coordinator.py`; `test_coordinator_protocol.py`; full lab suite green (475 passed, 1 pre-existing failure) |
+| Switch off = behaviour unchanged | NOT VERIFIED (live) — tested | `test_coordinator_switch.py` (4 tests off); lab suite green with the switch off |
+| Model error or slow model never breaks the chat | NOT VERIFIED (live) — tested | `router.py` `route_coordinator`, kickoff in the background with a 30 s per-call limit (`test_kickoff_runs_in_the_background_and_only_once_at_a_time`); `test_..._router.py::test_an_unexpected_error_never_breaks_the_chat`, `test_kickoff_when_the_model_fails_says_unavailable` |
+| Structured output validated with pydantic, one retry then silence | NOT VERIFIED (live) — tested | `writer.py`; `test_coordinator_writer.py` |
 | Azure OpenAI through the existing client | NOT VERIFIED (live) | `client_config.py`; `test_coordinator_client_config.py`; probe not run yet |
 
 ## Demo scope

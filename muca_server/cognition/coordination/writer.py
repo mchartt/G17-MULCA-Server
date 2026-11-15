@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 # SUMMARY_MODEL). On Azure this is also the deployment name.
 DEFAULT_WRITER_MODEL = "gpt-4o"
 ATTEMPTS = 2  # first try + one retry
+# Per call: without it the SDK waits up to 10 minutes (and retries itself).
+CALL_TIMEOUT_SECONDS = 30
+# Project rule 11: an unsolicited message gives its reason in at most 60 words.
+MAX_RATIONALE_WORDS = 60
+MAX_RATIONALE_CHARS = 500  # same limit as Proposal.rationale
 
 CHARTER_SCHEMA: dict[str, Any] = {
     "name": "charter_draft",
@@ -109,7 +114,7 @@ class ProposalWriter:
         for attempt in range(1, ATTEMPTS + 1):
             try:
                 data = await self._call(CHARTER_SYSTEM, user, CHARTER_SCHEMA)
-                rationale = str(data.pop("rationale", "")).strip()
+                rationale = check_rationale(data.pop("rationale", ""))
                 return CharterDraft(CharterPayload.model_validate(data), rationale)
             except (ValidationError, ValueError, KeyError, TypeError) as exc:
                 logger.warning("Charter draft invalid (attempt %d): %s", attempt, exc)
@@ -125,6 +130,7 @@ class ProposalWriter:
                 {"role": "user", "content": user},
             ],
             response_format={"type": "json_schema", "json_schema": schema},
+            timeout=CALL_TIMEOUT_SECONDS,
         )
         usage = getattr(response, "usage", None)
         if usage is not None and self._record_cost is not None:
@@ -136,3 +142,18 @@ class ProposalWriter:
                 (usage.prompt_tokens - cached, cached, 0, 0, usage.completion_tokens, 0),
             )
         return json.loads(response.choices[0].message.content)
+
+
+def check_rationale(value: object) -> str:
+    """
+    The one-sentence reason shown in italics on a card. Checked here, inside
+    the retry loop, so a bad one costs a retry, not a failed kickoff. The
+    language is the group's, so the wording ("Stepping in because") is asked
+    for in the prompt but not enforced.
+    """
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("empty rationale")
+    if len(text.split()) > MAX_RATIONALE_WORDS or len(text) > MAX_RATIONALE_CHARS:
+        raise ValueError("rationale too long")
+    return text
