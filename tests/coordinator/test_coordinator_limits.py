@@ -260,3 +260,22 @@ async def test_timer_loop_waits_first_then_keeps_looking_even_after_an_error(sto
     except asyncio.CancelledError:
         pass
     assert waits == [FIRST_LOOK_SECONDS, POLL_SECONDS, POLL_SECONDS] and len(ticks) == 2
+
+
+def test_coordinator_model_from_the_environment_default_unchanged(tmp_path):
+    from muca_server.cognition.coordination.writer import DEFAULT_WRITER_MODEL
+
+    on = {"MUCA_COORDINATOR_ENABLED": "true"}
+    assert CoordinatorSettings.from_env(on).writer_model == DEFAULT_WRITER_MODEL == "gpt-4o"
+    settings = CoordinatorSettings.from_env({**on, "MUCA_COORDINATOR_MODEL": "gpt-6.1-sol"})
+    assert settings.writer_model == "gpt-6.1-sol"
+    router = build_coordinator_factory(settings, client=FakeChatClient(), db_dir=str(tmp_path))(FakeConversation(), asyncio.Queue())
+    assert router._writer._model == "gpt-6.1-sol"
+
+
+def test_the_configured_text_models_are_priced():
+    """An unpriced model would count as free and slip past the spending limits."""
+    from muca_server.agents.openai.main_agent import PRICES_PER_MILLION
+
+    for model in ("gpt-6.1-sol", "gpt-6-luna", "gpt-4o", "gpt-5", "gpt-realtime-2.1-mini", "text-embedding-3-small"):
+        assert model in PRICES_PER_MILLION

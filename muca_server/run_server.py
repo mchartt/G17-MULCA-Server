@@ -30,6 +30,7 @@ from .agents.openai import (
 )
 from .agents.openai.client_config import build_openai_client
 from .agents.openai.day_summarizer import DAILY_SUMMARY_MODEL
+from .agents.openai.main_agent import SUMMARY_MODEL
 from .agents.openai.model_settings import ModelSettings
 from .usage_report import UsageTracker
 from .cognition import CoalaPolicy
@@ -260,10 +261,12 @@ def build_app():
     # Long-term memory (docs/MEMORY_DESIGN.md): without it, nothing is
     # summarized and the agents only ever know today. The once-a-day
     # summaries run on a stronger model, MUCA_DAILY_SUMMARY_MODEL to
-    # override.
+    # override. MUCA_SUMMARY_MODEL overrides the everyday summary model
+    # (default unchanged); on Azure it is the deployment name.
     day_summarizer = OpenAIDaySummarizer(
         client,
         daily_model=os.environ.get("MUCA_DAILY_SUMMARY_MODEL") or DAILY_SUMMARY_MODEL,
+        model=os.environ.get("MUCA_SUMMARY_MODEL") or SUMMARY_MODEL,
         usage_tracker=usage_tracker,
     )
     web_searcher = OpenAIWebSearcher(client, usage_tracker=usage_tracker)

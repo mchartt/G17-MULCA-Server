@@ -8,7 +8,8 @@ really serve every model before we build anything on top of it.
 
 What it checks (one call each, ~0.01 USD in total):
   1. Realtime, text only       -> like the main and intervention agents
-  2. Chat Completions + schema -> like the summaries (gpt-4o, gpt-5)
+  2. Chat Completions + schema -> like the summaries and the coordinator's
+                                  cards (the models set in .env)
   3. Embeddings                -> like the "remember" strategy
   4. Responses + web_search    -> like the web searcher (optional on Azure)
 
@@ -37,7 +38,22 @@ from openai import AsyncOpenAI
 
 # The same names the code uses (docs/coordinator/INTEGRATION_MAP.md, section 6).
 REALTIME_DEPLOYMENT = "gpt-realtime-2.1-mini"
-SUMMARY_DEPLOYMENTS = ["gpt-4o", "gpt-5"]
+
+
+def text_deployments() -> list[str]:
+    """
+    The text models actually configured (the same variables run_server.py
+    and the coordinator settings read), else the code's defaults.
+    """
+    return sorted(
+        {
+            os.environ.get("MUCA_SUMMARY_MODEL") or "gpt-4o",
+            os.environ.get("MUCA_DAILY_SUMMARY_MODEL") or "gpt-5",
+            os.environ.get("MUCA_COORDINATOR_MODEL") or "gpt-4o",
+        }
+    )
+
+
 EMBEDDING_DEPLOYMENT = "text-embedding-3-small"
 WEB_SEARCH_DEPLOYMENT = "gpt-4o-mini"
 
@@ -196,7 +212,7 @@ async def main(only: str | None) -> None:
     probes = {
         "realtime": lambda: probe_realtime(client),
         "summary": lambda: asyncio.gather(
-            *(probe_summary(client, d) for d in SUMMARY_DEPLOYMENTS)
+            *(probe_summary(client, d) for d in text_deployments())
         ),
         "embedding": lambda: probe_embedding(client),
         "web_search": lambda: probe_web_search(client),

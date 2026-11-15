@@ -41,6 +41,7 @@ def build_coordinator_factory(
 
     writer = ProposalWriter(
         client,
+        model=settings.writer_model,
         record_cost=partial(record_cost, tracker=usage_tracker),
     )
 
