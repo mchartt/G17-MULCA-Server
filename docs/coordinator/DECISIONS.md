@@ -77,3 +77,49 @@ Newest first. Each entry: date, decision, alternatives, reason, status.
 - **Reason:** only region in the Global Standard table with every model the
   code uses; same names mean no code change besides the client.
 - **Status:** NOT VERIFIED (live) until the probe passes.
+
+## 2026-11-15 · M3: a proactive strategy answers with a card only
+
+- **Decision:** when CS5, CS2 or CS3 fires, the group sees one card (reason
+  "Stepping in because…", content, buttons), no separate chat message.
+  `CoalaPolicy` hands the strategy to `ProactiveBridge` after the existing
+  vetoes; the main agent is not asked to reply.
+- **Alternative:** a short agent message plus the card (two messages, one
+  more model call).
+- **Reason:** one message is cheaper, easier to control (rules R1–R7 in
+  code, rationale ≤ 60 words checked) and matches "one request per message".
+- **Status:** chosen by Matteo (15/11).
+
+## 2026-11-15 · M3: evidence by line number, copied by the server
+
+- **Decision:** the writer receives the chat as numbered quoted lines and
+  answers with numbers; the server copies those messages into the card
+  (`Evidence`). A number that is not a line, an owner that is not a member, a
+  task that already has an owner or a date in the past makes the draft invalid
+  (one retry, then silence).
+- **Reason:** "Why?" must never show a quote the model invented (rule 0).
+
+## 2026-11-15 · M3: "Not now" topic key is deterministic
+
+- **Decision:** the topic is normalised (lower case, letters and digits,
+  single spaces); a draft whose topic key is silenced for that strategy is
+  dropped, and the silenced topics are also listed to the model.
+- **Alternative:** similarity between topics (embeddings).
+- **Reason:** explainable at the oral and testable; the model avoids
+  near-duplicates because it sees the list. Limit: two different wordings of
+  the same topic are two keys.
+
+## 2026-11-15 · M3: CS2 never suggests an owner, CS5 may
+
+- **Decision:** a delegation card only has "I'll take it"; a task_owner card
+  may suggest a member (skills, free hours) that any member can confirm, or
+  anyone can take it.
+- **Reason:** spec S2 "do not assign anyone"; spec S5 "suggest based on
+  skills and load". Both apply only after a member's click.
+
+## 2026-11-15 · M3: rules R3/R4 count only cards actually posted, in memory
+
+- **Decision:** the 10-message and 5-minute gaps (NFR3) start when a card is
+  posted; a failed or dropped draft does not silence the group. The counters
+  live in the session (a server restart resets them); the strategy's own
+  cooldown is also persisted by the lab's snapshot.

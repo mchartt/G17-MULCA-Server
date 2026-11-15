@@ -15,7 +15,7 @@ Apple-like) built; **Vercel deploy prepared but not published** (see "Deploy").
 | M1 · Azure + project state on Discord | 20/11 | **CODE DONE, NOT VERIFIED (live)** — server + Discord built and tested; closing live run needs Azure and a Discord test bot |
 | M2 · web app "Cadence" | 23/11 | **CODE DONE, NOT VERIFIED (live)** — film, web adapter, landing + console v2; offline e2e, Vitest, axe pass; live run needs Azure |
 | M2b · online preview on Vercel | 16/11 | **PREPARED, NOT PUBLISHED** — static build ready, needs a Vercel token or a login from Matteo's terminal |
-| M3 · proactive strategies CS5, CS2, CS3 | 26/11 | NOT STARTED |
+| M3 · proactive strategies CS5, CS2, CS3 | 26/11 | **CODE DONE, NOT VERIFIED (live)** — server, Discord, web; Why? and Not now; offline e2e, Vitest, axe pass |
 | M4 · planning, check-in, CS7, decision questions | 29/11 | NOT STARTED |
 | M5 · calendar, demo (Slack only if ahead on 29/11) | 01/12 | NOT STARTED |
 
@@ -127,6 +127,35 @@ The shell is a Linux VM; only the connected folder survives between sessions.
   messages and cards rise in. All off with prefers-reduced-motion.
 - Icons: Font Awesome Free (CC BY 4.0, credited in the footer).
 - Screens: `webapp/docs/screens/` (film, sections, entry, console, dialog, mobile).
+
+## M3 log
+
+- 15/11 · Server: strategies `cs5_owner_and_date`, `cs2_delegate_simple_task`,
+  `cs3_close_decision` (YAML, each with "Do NOT fire for"), offered only with
+  the coordinator on. Hook in `policy.py` after the existing vetoes →
+  `ProactiveBridge` (rules R1–R7) → `ProactiveWriter` (numbered chat lines,
+  evidence copied by the server) → pending proposal → card. New kinds
+  task_owner, delegation, decision; buttons take, choose, not_now (protocol
+  additive); appliers write tasks, decisions, snoozes inside the click
+  transaction (`appliers.py`, `plan_writes.py`). Tests: 61 new; server suite
+  542 passed + the known voice failure; new modules 96–100 % covered. Cost 0.
+- 15/11 · Discord: embeds and persistent buttons per kind (I'll take it, one
+  button per option, Why? privately, Not now); 9 new tests incl. an end to end
+  "choose" against a real local server. Web: `ProposalCard` per kind with Why?
+  and Not now; plan panel shows tasks and decisions before the charter;
+  adapter forwards the new buttons. Vitest 23, Playwright 4 (charter; CS2 card
+  + Why? + I'll take it; CS3 choice; Not now), axe 0 violations (also with
+  Why? open). MULCA suite 284 passed.
+- 15/11 · Found by the new e2e and fixed: a broadcast could reach a new socket
+  before its hello, so an old member list overwrote the new one (per-group
+  lock in `web/hub.py`, regression test that fails without it).
+- Fresh-eyes review (self, section 14 list): no state written without a click
+  (Not now is a member's click); non-members refused before any button; flag
+  off = strategies not offered and policy unchanged (tests); protocol only
+  extended. Recorded limits: R3/R4 counters reset on server restart; "Why?"
+  on Discord after a bot restart shows only the reason; the "Helpful" button
+  of FR21 is not built.
+- Screens: `webapp/docs/screens/console-m3-delegation.png`, `card-m3-delegation.png`.
 
 ## M2 log
 
