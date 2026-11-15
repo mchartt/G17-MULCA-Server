@@ -2,7 +2,7 @@
 
 **Read this file first.** It says where the work really is.
 
-Last update: 15 Nov 2026, M1 code done on server and Discord; waiting for Azure + a Discord test bot for the live closing run.
+Last update: 15 Nov 2026 (evening), M2 web app built and tested offline; M1 and M2 both wait for Azure for the live closing run.
 
 ## Where we are
 
@@ -10,18 +10,16 @@ Last update: 15 Nov 2026, M1 code done on server and Discord; waiting for Azure 
 |---|---|---|
 | Phase 0 · verify, no source changes | 16/11 | **DONE except the live Azure probe** (waiting for deployments + `.env`) |
 | M1 · Azure + project state on Discord | 20/11 | **CODE DONE, NOT VERIFIED (live)** — server + Discord built and tested; closing live run needs Azure and a Discord test bot |
-| M2 · web app | 23/11 | NOT STARTED |
+| M2 · web app | 23/11 | **CODE DONE, NOT VERIFIED (live)** — adapter + landing + console built; offline e2e, Vitest, axe pass; live run needs Azure |
 | M3 · proactive strategies CS5, CS2, CS3 | 26/11 | NOT STARTED |
 | M4 · planning, check-in, CS7, decision questions | 29/11 | NOT STARTED |
 | M5 · calendar, demo (Slack only if ahead on 29/11) | 01/12 | NOT STARTED |
 
-Next exact step (resume here in a new chat): **M2, crea-sito phase 0**.
-The web app notebook exists at `mulca/prototype/webapp/docs/stato.md`
-(project "Ctrl+Alt+Design", guided mode, constraints recorded). Run the
-`cinematic-web-builder` skills in order, starting with `setup-iniziale`,
-then the design interview (`intervista-idea`, Mobbin, reference sites).
-In parallel with the design phases, the web adapter in the MULCA process
-(FastAPI + WebSocket, same `ScopeSession`) can be built test-first.
+Next exact step (resume here in a new chat): **live run of M1 and M2 as soon as
+Azure is ready** (`mulca/prototype/webapp/README.md`, section "Run it": MUCA-Server
+with the coordinator on, `npm run build`, `python -m mulca_discord.web`, two
+browsers: create, join, paste the assignment, Confirm; note the cost). Then **M3**
+(CS5, CS2, CS3 with Why? / Not now on the card).
 
 Waiting on Matteo for the M1 live run: (1) Azure deployments +
 `muca-server/.env`, then `scripts/azure_probe.py`; (2) a Discord test server
@@ -34,6 +32,31 @@ kickoff`, Confirm on the card, `/coordinator plan`; note the cost.
 Where things are: work on `group17/coordinator` in both clones on Matteo's
 PC (`WebstormProjects/group-coordinator`), mirrored to GitHub
 (`mchartt/G17-MULCA-Server`, `mchartt/G17-MULCA-Project`); GitLab untouched.
+
+## M2 log
+
+- 15/11 · Landing film (Higgsfield, free trial): v1 stylised 3D rejected by
+  Matteo ("less AI slop"), v2 photographic; 4 chained Seedance 2.0 clips, the
+  5th (close-up) cut for artefacts. Higgsfield stretches the uploaded start frame
+  by ~2 % vertically: measured with ECC and corrected on the tail of each clip
+  (`webapp/film/raccorda.py`, no dissolves); 45 repeated frames removed. Final:
+  436 frames, 18 s, 30 MB, continuity check PASS. Cost: 0. Log: `webapp/film/lavori.json`.
+- 15/11 · Web adapter `mulca_discord/web/` (store, hub, app, runner): its own
+  `SessionRegistry`, coordinator hook on the instance (Discord's class hook
+  untouched, tested), `ReplyDispatcher` reused via `WebChannel`, channel "web".
+  Tests: 15 (one end to end against a real in-process MUCA-Server), coverage 98 %.
+- 15/11 · Frontend `webapp/` (React 19 + TS + Vite): landing (scroll film, 3
+  sections, data notice, create / join), console (members, invite code, chat
+  with agent label, proposal cards Confirm / Reject, plan panel, kickoff and
+  profile dialogs, loading / disconnected / unavailable states). Vitest 15,
+  Playwright e2e 1 (two members on the offline stack `webapp/e2e/fake_stack.py`),
+  axe-core WCAG 2.1 AA: 0 violations on landing and console.
+- 15/11 · Fresh-eyes review (self, against section 14 list): 1 defect fixed —
+  chat frames handled in parallel could reach MUCA-Server out of order; now
+  sequential (test added). MULCA suite 273 passed; server 481 + the known failure.
+- Limits: web groups are their own conversations (`web:<code>`), not yet the
+  same as a Discord channel (A5/A6); deleting a group deletes only the web side
+  (no protocol event for server memory); Why? / Not now come with M3.
 
 ## M1 log
 
@@ -168,6 +191,6 @@ blocks the slice.
 | A2 | Key auth works for Realtime on Azure (not only REST) | probe `realtime` line OK | before M1 live |
 | A3 | Strict json_schema works on Azure `gpt-4o` | probe `chat+schema` line OK | before M1 writer live |
 | A4 | Adding our tables to the conversation SQLite file does not disturb `sqlite.py` | **confirmed by test** `test_shares_the_conversation_file_with_the_episodic_store` | M1 |
-| A5 | A FastAPI server can run in the same asyncio loop as discord.py | small spike in M2 | M2 |
-| A6 | Web-app members can be given stable int ids for `Participant.id` | design in M2 | M2 |
+| A5 | A FastAPI server can run in the same asyncio loop as discord.py | spike; today the web adapter runs as its own process (`python -m mulca_discord.web`) | before multichannel |
+| A6 | Web-app members can be given stable int ids for `Participant.id` | **confirmed by test**: ids in [1e8, 1e9), the server accepts them (e2e confirm by a web member) | M2 |
 | A7 | Slack app creation works in a free workspace | try it | only if Slack is kept |
