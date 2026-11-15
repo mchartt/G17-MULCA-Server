@@ -58,6 +58,7 @@ def build_coordinator_factory(
             writer=writer,
             proposal_ttl_seconds=settings.proposal_ttl_seconds,
             proactive_writer=proactive_writer,
+            checkin_interval_seconds=settings.checkin_interval_seconds,
         )
         attach_proactive(conversation, router)
         return router

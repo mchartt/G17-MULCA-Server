@@ -100,6 +100,22 @@ CREATE TABLE IF NOT EXISTS coord_snooze (
     until        REAL NOT NULL,
     PRIMARY KEY (strategy_id, topic_key)
 );
+-- When something last happened, kept so a server restart does not reset it:
+-- "proactive" = message count and time of the last proactive card (R3, R4);
+-- "checkin" = time of the last timed check-in (checkin_timer.py).
+CREATE TABLE IF NOT EXISTS coord_mark (
+    name           TEXT PRIMARY KEY,
+    message_count  INTEGER NOT NULL DEFAULT 0,
+    at             REAL NOT NULL
+);
+-- "Helpful" on a proactive card: one row per member and card. Feedback
+-- only: it never changes the project state or the card.
+CREATE TABLE IF NOT EXISTS coord_feedback (
+    proposal_id  TEXT NOT NULL,
+    member_id    INTEGER NOT NULL,
+    at           REAL NOT NULL,
+    PRIMARY KEY (proposal_id, member_id)
+);
 """
 
 
@@ -311,6 +327,40 @@ class CoordinationStore:
         finally:
             await db.close()
         return {(row[0], row[1]) for row in rows}
+
+    async def mark(self, name: str) -> tuple[int, float] | None:
+        """(message count, time) saved under `name` ("proactive", "checkin"), or None."""
+        db = await self._connect()
+        try:
+            cursor = await db.execute("SELECT message_count, at FROM coord_mark WHERE name = ?", (name,))
+            row = await cursor.fetchone()
+        finally:
+            await db.close()
+        return (row[0], row[1]) if row else None
+
+    async def save_mark(self, name: str, message_count: int, at: float) -> None:
+        db = await self._connect()
+        try:
+            await db.execute(
+                "INSERT OR REPLACE INTO coord_mark (name, message_count, at) VALUES (?, ?, ?)",
+                (name, message_count, at),
+            )
+        finally:
+            await db.close()
+
+    async def add_feedback(self, proposal_id: str, member_id: int, at: float) -> int:
+        """A member found a card helpful (once per member). Returns how many did."""
+        db = await self._connect()
+        try:
+            await db.execute(
+                "INSERT OR IGNORE INTO coord_feedback (proposal_id, member_id, at) VALUES (?, ?, ?)",
+                (proposal_id, member_id, at),
+            )
+            cursor = await db.execute("SELECT COUNT(*) FROM coord_feedback WHERE proposal_id = ?", (proposal_id,))
+            row = await cursor.fetchone()
+        finally:
+            await db.close()
+        return int(row[0])
 
     # ------------------------------------------------------------------
     # Reading the whole state

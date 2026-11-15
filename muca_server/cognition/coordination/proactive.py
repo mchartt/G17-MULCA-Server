@@ -26,7 +26,9 @@ rules 4.3 and 11, spec NFR3, GL4, GL10):
         CS7: no card for a task already marked blocked
 
 R3 and R4 count only cards actually posted: a draft that fails or is
-dropped does not silence the group. The policy's own cooldown
+dropped does not silence the group. Their marker is saved in the group's
+SQLite file (store.save_mark("proactive", ...)) and read back on the first offer of
+a new session, so a server restart does not reset them. The policy's own cooldown
 (`cooldown_messages` in the strategy YAML) still applies on top.
 """
 
@@ -82,6 +84,7 @@ class ProactiveBridge:
         # Message count and time of the last card posted (R3, R4).
         self._last_count: int | None = None
         self._last_at: float | None = None
+        self._mark_loaded = False
 
     # ------------------------------------------------------------------
     # Called by CoalaPolicy
@@ -98,6 +101,7 @@ class ProactiveBridge:
         """Decide at once (the turn is waiting); the draft runs in the background."""
         if strategy_id not in STRATEGY_KINDS:
             return Verdict.NOT_MINE
+        await self._load_mark()
         reason = self._veto(history, message_count, assistant_id)
         if reason:
             logger.info("%s coordinator vetoed %s: %s", self._conversation.conversation_id, strategy_id, reason)
@@ -114,6 +118,19 @@ class ProactiveBridge:
         """Wait for a running draft (tests, shutdown)."""
         if self._task is not None:
             await asyncio.gather(self._task, return_exceptions=True)
+
+    async def _load_mark(self) -> None:
+        """Once per session: the R3/R4 marker saved before a restart."""
+        if self._mark_loaded:
+            return
+        self._mark_loaded = True
+        try:
+            mark = await self._store().mark("proactive")
+        except Exception:
+            logger.exception("%s coordinator: could not read the R3/R4 marker", self._conversation.conversation_id)
+            return
+        if mark is not None and self._last_count is None:
+            self._last_count, self._last_at = mark
 
     # ------------------------------------------------------------------
     # Rules and drafting
@@ -168,6 +185,7 @@ class ProactiveBridge:
             )
             self._last_count = message_count
             self._last_at = self._clock()
+            await store.save_mark("proactive", self._last_count, self._last_at)
             await self._send_proposal(proposal)
         except Exception:
             # Project rule: a model or database error never breaks the chat.

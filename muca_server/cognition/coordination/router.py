@@ -14,9 +14,13 @@ Conversation, so all existing messages behave exactly as before. When the
 coordinator is OFF there is no wrapper at all.
 
 What it handles:
-  coordinator_command  profile | kickoff | state | planning | checkin | task | why
-  proposal_response    confirm | reject | take | choose | not_now
+  coordinator_command  profile | kickoff | state | planning | checkin | task | why | card
+  proposal_response    confirm | reject | take | choose | not_now | helpful
 and it answers with coordinator_proposal / coordinator_state / coordinator_notice.
+
+It is also the session's worker in place of the Conversation (start/close
+below, plugged in by session_components_factory.py), so the timed check-in
+(checkin_timer.py) starts and stops with the session.
 """
 
 from __future__ import annotations
@@ -36,6 +40,8 @@ from ...protocol.coordinator import (
     CoordinatorStateMessage,
     ProposalResponseMessage,
 )
+from .card_requests import CardRequests
+from .checkin_timer import CheckinTimer
 from .models import MemberProfile, Proposal, ProposalKind
 from .plan_commands import PlanCommands
 from .plan_writer import PlanWriter
@@ -64,6 +70,7 @@ class CoordinatorRouter:
         proposal_ttl_seconds: float,
         today: Callable[[], date] = date.today,
         proactive_writer: ProactiveWriter | None = None,
+        checkin_interval_seconds: float = 0.0,
     ) -> None:
         # Set first: __getattr__ below reads it.
         self._conversation = conversation
@@ -100,10 +107,29 @@ class CoordinatorRouter:
             unavailable=self._fail,
             today=today,
         )
+        # Helpful and "send me this card again": no model, no state change.
+        self._cards = CardRequests(store=self._store_now, notice=self._notice)
+        # FR15: the check-in on time, while the session is open (off when 0).
+        self.checkin_timer = CheckinTimer(
+            conversation,
+            interval_seconds=checkin_interval_seconds,
+            store=self._store_now,
+            run_checkin=self._plan.timed_checkin,
+        )
 
     def __getattr__(self, name: str) -> Any:
         """Everything not defined here is the Conversation's (see module docstring)."""
         return getattr(self._conversation, name)
+
+    async def start(self) -> None:
+        """Session worker: the Conversation first, then the check-in timer."""
+        await self._conversation.start()
+        self.checkin_timer.start()
+
+    async def close(self) -> None:
+        """Session worker: stop the timer, then close the Conversation as before."""
+        await self.checkin_timer.close()
+        await self._conversation.close()
 
     # ------------------------------------------------------------------
     # Entry point, called by events/dispatcher.py
@@ -124,8 +150,12 @@ class CoordinatorRouter:
             await self._notice(False, MEMBERS_ONLY, request_id)
             return
         try:
-            if isinstance(message, ProposalResponseMessage):
+            if isinstance(message, ProposalResponseMessage) and message.action == "helpful":
+                await self._cards.helpful(message)
+            elif isinstance(message, ProposalResponseMessage):
                 await self._on_response(message)
+            elif message.command == "card":
+                await self._cards.card(message)
             elif message.command == "profile":
                 await self._on_profile(message)
             elif message.command == "kickoff":
@@ -258,9 +288,9 @@ class CoordinatorRouter:
     async def _send_proposal(self, proposal: Proposal) -> None:
         await self._outbound.put(CoordinatorProposalMessage(proposal=proposal.to_wire()))
 
-    async def _notice(self, ok: bool, text: str, request_id: str) -> None:
+    async def _notice(self, ok: bool, text: str, request_id: str, proposal: dict | None = None) -> None:
         await self._outbound.put(
-            CoordinatorNoticeMessage(ok=ok, text=text, request_id=request_id)
+            CoordinatorNoticeMessage(ok=ok, text=text, request_id=request_id, proposal=proposal)
         )
 
 

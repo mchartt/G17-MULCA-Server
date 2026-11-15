@@ -51,7 +51,8 @@ class ProposalResponseMessage(CoordinatorIncomingMessage):
     proposal_id: str = Field(alias="proposalId")
     # M1: confirm, reject. M3 adds (additive): take ("I'll take it"),
     # choose (one option of a decision card, see `option`) and not_now.
-    action: Literal["confirm", "reject", "take", "choose", "not_now"]
+    # Later (additive): helpful (feedback on a proactive card, changes nothing).
+    action: Literal["confirm", "reject", "take", "choose", "not_now", "helpful"]
     # For "choose": the index of the chosen option on the card.
     option: int | None = None
     # The clicking member's participant id (Participant.id).
@@ -66,8 +67,10 @@ class CoordinatorCommandMessage(CoordinatorIncomingMessage):
 
     event: Literal["coordinator_command"]
     # M4 adds (additive): planning, checkin, task (a member updates a task's
-    # status), why (a question about a past decision).
-    command: Literal["profile", "kickoff", "state", "planning", "checkin", "task", "why"]
+    # status), why (a question about a past decision). Later (additive):
+    # card (args.proposal_id: send that card back to the asker, e.g. for
+    # "Why?" after a client restart).
+    command: Literal["profile", "kickoff", "state", "planning", "checkin", "task", "why", "card"]
     member_id: int = Field(alias="memberId")
     args: dict[str, Any] = Field(default_factory=dict)
     channel: Channel = "discord"
@@ -105,3 +108,5 @@ class CoordinatorNoticeMessage(OutgoingMessage):
     ok: bool
     text: str
     request_id: str = Field(default="", serialization_alias="requestId")
+    # Only for the "card" command (additive): the card asked for.
+    proposal: dict[str, Any] | None = None  # dropped when None (serialize_outgoing_message uses exclude_none)

@@ -11,6 +11,9 @@ PlanCommands: the M4 commands of one group session, used by router.py.
     why       args.question -> PlanWriter answers from the decision log only,
               with the decisions it rests on as the source
 
+The check-in also runs on time (spec FR15): checkin_timer.py calls
+`timed_checkin`, which posts a card only when something is late or at risk.
+
 planning, checkin and why call the model, so they run in the background (like
 the kickoff) and only one runs at a time per group: the session reads its
 messages one by one and must never wait for the model.
@@ -102,23 +105,41 @@ class PlanCommands:
         await self._notice(True, "Plan card posted: any member can confirm or reject it.", message.request_id)
 
     async def _checkin(self, message) -> None:
+        await self.run_checkin(message.channel, message.request_id, quiet=False)
+
+    async def run_checkin(self, channel: str, request_id: str, *, quiet: bool) -> bool:
+        """
+        The check-in, on command or on time. True when a card was posted.
+        `quiet` (the timed one): no notice when on track or when the model
+        fails, because nobody asked and the chat must not fill with notices.
+        """
         members = self._participants()
         state = await self._store().load_state()
         found = findings(state, members, self._today())
         report = owners_report(state, members)
         status = ("Open tasks — " + "; ".join(report)) if report else "Nobody has open tasks."
         if not found:
-            await self._notice(True, f"Check-in: on track, nothing late or at risk. {status}", message.request_id)
-            return
+            if not quiet:
+                await self._notice(True, f"Check-in: on track, nothing late or at risk. {status}", request_id)
+            return False
         draft = await self._writer.draft_checkin(found, members=members, state=state, today=self._today())
         if draft is None:
-            await self._unavailable(message.event, message.request_id)
-            return
+            if not quiet:
+                await self._unavailable("coordinator_command", request_id)
+            return False
         proposal = await self._service().create(
-            ProposalKind.CHECKIN, draft.payload, rationale=draft.rationale, origin_channel=message.channel
+            ProposalKind.CHECKIN, draft.payload, rationale=draft.rationale, origin_channel=channel
         )
         await self._send_proposal(proposal)
-        await self._notice(True, f"Check-in card posted. {status}", message.request_id)
+        if not quiet:
+            await self._notice(True, f"Check-in card posted. {status}", request_id)
+        return True
+
+    async def timed_checkin(self) -> bool:
+        """Called by checkin_timer.py; skipped while a member's command is running."""
+        if self._task is not None and not self._task.done():
+            return False
+        return await self.run_checkin("group", "", quiet=True)
 
     async def _why(self, message) -> None:
         question = str(message.args.get("question", "")).strip()[:MAX_QUESTION]

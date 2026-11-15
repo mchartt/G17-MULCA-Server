@@ -136,6 +136,29 @@ async def test_r3_r4_ten_messages_and_five_minutes_between_cards(store):
     assert len(sent) == 2
 
 
+async def test_r3_r4_survive_a_server_restart(store):
+    """A new session (new bridge, same SQLite file) reads the last card's marker."""
+    first, sent, clock = make_bridge(store, FakeWriter(deleg_draft("a")))
+    assert await offer(first, count=20) is Verdict.TAKEN and len(sent) == 1
+    assert await store.mark("proactive") == (20, clock.now)
+    second, sent2, _ = make_bridge(store, FakeWriter(deleg_draft("b")), clock=clock)
+    assert await offer(second, count=25) is Verdict.VETOED  # R3 still counts
+    clock.now += MIN_SECONDS_BETWEEN + 1
+    assert await offer(second, count=20 + MIN_MESSAGES_BETWEEN) is Verdict.TAKEN
+    assert len(sent2) == 1
+
+
+async def test_an_unreadable_marker_never_breaks_the_offer(store):
+    class Broken:
+        async def mark(self, name):
+            raise OSError("disk")
+
+    bridge, _, _ = make_bridge(store, FakeWriter(deleg_draft()))
+    bridge._store = lambda: Broken()
+    assert await bridge.offer(CS2, history=HISTORY, message_count=20, assistant_id=0) is Verdict.TAKEN
+    await bridge.wait()  # the draft fails on the broken store, logged, chat goes on
+
+
 async def test_a_failed_draft_does_not_silence_the_group(store):
     bridge, sent, _ = make_bridge(store, FakeWriter(None, deleg_draft()))
     assert await offer(bridge, count=20) is Verdict.TAKEN and sent == []

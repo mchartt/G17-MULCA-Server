@@ -69,6 +69,11 @@ class DefaultSessionComponentsFactory:
             else self.coordinator_factory(conversation, context.outbound_queue)
         )
 
+        if agent_router is not conversation:
+            # Group Coordinator: the router starts and closes the Conversation
+            # itself (plus its check-in timer), so it takes its worker slot.
+            workers = [agent_router if w is conversation else w for w in workers]
+
         return SessionComponents(
             agent_router=agent_router,
             workers=workers,

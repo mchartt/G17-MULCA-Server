@@ -54,6 +54,32 @@ async def test_off_the_session_router_is_the_plain_conversation():
         )
     )
     assert type(components.agent_router) is Conversation
+    assert components.workers == [components.agent_router]  # off: workers as before
+
+
+async def test_on_the_router_takes_the_conversations_worker_slot(tmp_path):
+    from muca_server.sessions.session_components import SessionContext
+    from muca_server.sessions.session_state import SessionState
+    import asyncio
+    from uuid import uuid4
+
+    session_id = uuid4()
+    factory = DefaultSessionComponentsFactory(
+        agent_factory=ScriptedAgentFactory(),
+        coordinator_factory=build_coordinator_factory(
+            CoordinatorSettings(enabled=True), client=FakeChatClient(), db_dir=str(tmp_path)
+        ),
+    )
+    components = await factory.create(
+        SessionContext(
+            session_id=session_id,
+            websocket=None,
+            state=SessionState(session_id=session_id),
+            outbound_queue=asyncio.Queue(),
+        )
+    )
+    assert isinstance(components.agent_router, CoordinatorRouter)
+    assert components.workers == [components.agent_router]
 
 
 async def test_off_coordinator_messages_are_ignored_without_error():
