@@ -16,24 +16,19 @@ key, which only Matteo pastes.
 | Phase 0 | DONE except the live Azure probe (needs the key) |
 | M1–M5 | CODE DONE, NOT VERIFIED (live) |
 | Known limits (R3/R4, Why? on Discord, Helpful, timed check-in, typed why on web, delete space) | CODE DONE + tests, NOT VERIFIED (live) |
-| Azure | resource `g17-coordinator` France Central + 4 deployments (AZURE_SETUP.md); key and budget: Matteo |
-| Online | Render Blueprint + `render` branch + Vercel config ready; needs Matteo's push (no GitHub credentials in Claude's shell) |
+| Azure | resource `g17-coordinator` France Central + 4 deployments; key in `.env`; **probe passed** (AZURE_SETUP.md). Budget alert: Matteo (page blocked by Cold Turkey) |
+| Live run (web, local) | 15/11: kickoff, planning, check-in, typed why, CS3 card OK, ~$0.01 (DEMO_SCRIPT.md "Live runs") |
+| Online | GitHub copies pushed (incl. branch `render`). Vercel **live**: https://cadence-group-coordinator.vercel.app. Render service `cadence-coordinator` (https://cadence-coordinator.onrender.com) builds; starts once Matteo sets `AZURE_OPENAI_API_KEY` and `MUCA_ADMIN_TOKEN` in its Environment |
 
 ## Next steps, in order (resume here)
 
-1. Matteo pastes the Azure key in `muca-server/.env`; then
-   `python scripts/azure_probe.py` (results in AZURE_SETUP.md).
-2. Local live run: `bash mulca/prototype/webapp/scripts/demo-up.sh`, then
-   DEMO_SCRIPT.md scenario by scenario; note date and cost.
-3. Matteo pushes to his GitHub copy (never GitLab):
-   `git push github group17/coordinator` in both clones and
-   `git push github render` in mulca (after `bash deploy/render/update-branch.sh`).
-4. Render: Dashboard → New → Blueprint → G17-MULCA-Project, branch `render`;
-   paste the Azure key when asked. Then Vercel: project from the same repo,
-   root `prototype/webapp`, `VITE_ADAPTER_URL=https://<render address>`; if the
-   Vercel address differs from `cadence-group-coordinator.vercel.app`, set it in
-   Render's `MULCA_WEB_ALLOWED_ORIGINS`.
-5. Discord live run (TRYING_ON_DISCORD.md); demo twice in a row; the report.
+1. Matteo: Render dashboard → service `cadence-coordinator` → Environment →
+   add `AZURE_OPENAI_API_KEY` (KEY 1) and `MUCA_ADMIN_TOKEN` (button Generate)
+   → Save, rebuild and deploy. Then open the Vercel site and run DEMO_SCRIPT.md.
+2. Live runs still missing: CS5, CS2, CS7, Not now, Helpful, Delete space, Discord.
+3. Updating online: commit, `bash deploy/render/update-branch.sh`, push
+   `group17/coordinator` (Vercel redeploys) and `render` (Render redeploys).
+4. Demo twice in a row; the report.
 
 ## Waiting on Matteo
 

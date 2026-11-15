@@ -1,7 +1,7 @@
 # Azure OpenAI setup — Group Coordinator
 
-Status (15 Nov 2026, evening): **resource and deployments created, probe
-not run yet** (it needs the key in `.env`). Everything below "Steps in the
+Status (15 Nov 2026, evening): **resource, deployments and key in place;
+probe passed** (see "Probe results"). Everything below "Steps in the
 portal" was done by Claude in Matteo's browser; what is left is in "Still to do".
 
 ## What exists on Azure
@@ -29,9 +29,8 @@ Switzerland North; of these only France Central offers the Realtime model.
 
 ## Still to do (Matteo)
 
-1. Portal → resource `g17-coordinator` → **Keys and Endpoint** → copy KEY 1 →
-   paste it after `AZURE_OPENAI_API_KEY=` in `muca-server/.env` (the file is
-   already written with every other value; never committed).
+1. ~~Key in `muca-server/.env`~~ done 15/11 (copied from the portal's copy
+   button and written by a local script, never displayed).
 2. Budget with alert: Cost Management → Budgets → Add, scope Azure for
    Students, 40 USD/month, alerts at 50 % and 80 %. Claude could not open the
    page: the browser's site blocker (Cold Turkey) blocks it.
@@ -160,5 +159,15 @@ Expected cost: under 0.02 USD for the whole run.
 
 ## Probe results
 
-_Not run yet._ Fill in: date, region, each line printed (outcome, latency,
-tokens), cost seen in Cost Management the next day.
+15 Nov 2026, 21:47 CET, France Central, key from `.env`:
+
+```
+[OK  ] realtime gpt-realtime-2.1-mini            1602 ms  in=20 out=31 reply='ok'
+[OK  ] chat+schema gpt-6-luna                    1540 ms  in=43 out=11 json='{"ok":true}'
+[OK  ] chat+schema gpt-6.1-sol                   1571 ms  in=43 out=11 json='{"ok":true}'
+[OK  ] embedding text-embedding-3-small           961 ms  in=3 dims=1536
+```
+
+Key authentication works for REST and Realtime; strict JSON schema works on
+both text models. Web search not probed (not deployed, not used).
+Cost seen in Cost Management: to be read the next day (Matteo).

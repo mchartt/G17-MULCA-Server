@@ -136,3 +136,23 @@ On the Discord test channel: `/coordinator kickoff`, `/coordinator planning`
 | Date | Scenario | Result | Cost (USD) | Notes |
 |---|---|---|---|---|
 | — | — | not run yet | — | waiting for Azure |
+
+## Live runs
+
+### 15 Nov 2026, web, local stack, Azure (gpt-6.1-sol / gpt-realtime-2.1-mini)
+
+| Scenario | Result |
+|---|---|
+| Profiles (2 members) | saved |
+| Kickoff → charter card → Confirm | goal + milestones Demo Madness 2 Dec, tutoring 14 and 16 Dec, rationale "Stepping in because…"; confirmed by the other member |
+| /planning (3 tasks) | owners chosen from the profiles with a reason each (backend → Ada, Figma and user test → Bruno); confirmed |
+| /checkin | on track, no model call, owners' report |
+| "@coordinator why…" typed in the chat | answered from the (empty) decision log: "No decision has been recorded yet." |
+| CS3 proactive card (6 chat messages, think-aloud vs SUS) | decision card with question, 2 options, Why? evidence; no reply from the lab's agent |
+
+Observed cost: about $0.01 for the whole run (card drafts $0.0027–0.0039 each,
+intervention agent ~$0.0005 per message). Observation for tuning: the CS3 card
+came after the 2nd message of the debate, so its option arguments rest on two
+messages only; consider a stricter `trigger_description` if it fires too early
+in the demo.
+Not run live yet: CS5, CS2, CS7, Not now, Helpful, Delete space, Discord.
