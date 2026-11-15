@@ -1,8 +1,11 @@
 # PROGRESS — Group Coordinator
 
-**Read this file first.** It says where the work really is.
+**Read this file first.** It says where the work really is. It is written so a
+new chat can resume without the old one.
 
-Last update: 15 Nov 2026 (evening), M2 web app built and tested offline; M1 and M2 both wait for Azure for the live closing run.
+Last update: 15 Nov 2026, late evening. M1 and M2 code done and tested offline;
+both wait for Azure for the live closing run. Cadence interface v2 (soft,
+Apple-like) built; **Vercel deploy prepared but not published** (see "Deploy").
 
 ## Where we are
 
@@ -10,28 +13,120 @@ Last update: 15 Nov 2026 (evening), M2 web app built and tested offline; M1 and 
 |---|---|---|
 | Phase 0 · verify, no source changes | 16/11 | **DONE except the live Azure probe** (waiting for deployments + `.env`) |
 | M1 · Azure + project state on Discord | 20/11 | **CODE DONE, NOT VERIFIED (live)** — server + Discord built and tested; closing live run needs Azure and a Discord test bot |
-| M2 · web app | 23/11 | **CODE DONE, NOT VERIFIED (live)** — adapter + landing + console built; offline e2e, Vitest, axe pass; live run needs Azure |
+| M2 · web app "Cadence" | 23/11 | **CODE DONE, NOT VERIFIED (live)** — film, web adapter, landing + console v2; offline e2e, Vitest, axe pass; live run needs Azure |
+| M2b · online preview on Vercel | 16/11 | **PREPARED, NOT PUBLISHED** — static build ready, needs a Vercel token or a login from Matteo's terminal |
 | M3 · proactive strategies CS5, CS2, CS3 | 26/11 | NOT STARTED |
 | M4 · planning, check-in, CS7, decision questions | 29/11 | NOT STARTED |
 | M5 · calendar, demo (Slack only if ahead on 29/11) | 01/12 | NOT STARTED |
 
-Next exact step (resume here in a new chat): **live run of M1 and M2 as soon as
-Azure is ready** (`mulca/prototype/webapp/README.md`, section "Run it": MUCA-Server
-with the coordinator on, `npm run build`, `python -m mulca_discord.web`, two
-browsers: create, join, paste the assignment, Confirm; note the cost). Then **M3**
-(CS5, CS2, CS3 with Why? / Not now on the card).
+## Next steps, in order (resume here)
 
-Waiting on Matteo for the M1 live run: (1) Azure deployments +
-`muca-server/.env`, then `scripts/azure_probe.py`; (2) a Discord test server
-and bot (mulca `prototype/TRYING_ON_DISCORD.md`), token in
-`mulca/prototype/.env`. Live run: both processes with
-`MUCA_COORDINATOR_ENABLED=true` / `MULCA_COORDINATOR_ENABLED=true`,
-`/mulca link mode:ambient`, then `/coordinator profile`, `/coordinator
-kickoff`, Confirm on the card, `/coordinator plan`; note the cost.
+1. **Publish the Vercel preview** (section "Deploy"): first thing of the next chat.
+2. **Live run of M1 and M2** as soon as Azure is ready (`mulca/prototype/webapp/README.md`,
+   "Run it"): MUCA-Server with the coordinator on, `npm run build`,
+   `python -m mulca_discord.web`, two browsers: create, join, paste the
+   assignment, Confirm; then Discord `/coordinator kickoff` + Confirm. Note date
+   and cost in TRACEABILITY.md and AZURE_SETUP.md.
+3. **M3**: YAML strategies `cs5_owner_and_date`, `cs2_delegate_simple_task`,
+   `cs3_close_decision` (each with "when NOT to fire"), vetoes in `policy.py`
+   after `:671`, new proposal kinds (owner/date, delegation, decision) drawn on
+   web cards and Discord embeds, **Why? / Not now** on every proactive card
+   (Not now = 30 min silence per strategy + topic). Web: extend
+   `ProposalCard.tsx` (KIND_TITLES, fields per kind) and `ClickFrame.action`.
+4. Multichannel: verify A5 (adapter in the Discord process loop) and decide if a
+   Discord channel and a web group share one conversation (today: `web:<code>`).
 
-Where things are: work on `group17/coordinator` in both clones on Matteo's
-PC (`WebstormProjects/group-coordinator`), mirrored to GitHub
-(`mchartt/G17-MULCA-Server`, `mchartt/G17-MULCA-Project`); GitLab untouched.
+## Waiting on Matteo
+
+- Azure deployments + `muca-server/.env`, then `scripts/azure_probe.py`.
+- Discord test server and bot (`mulca/prototype/TRYING_ON_DISCORD.md`), token in `mulca/prototype/.env`.
+- Vercel: token file `mulca/prototype/webapp/.env.vercel` (one line `VERCEL_TOKEN=...`;
+  the file was not found on 15/11, check it is not saved as `.env.vercel.txt`) — or run the deploy himself.
+- Confirm two decisions taken by Claude (webapp/docs/decisioni.md): film cut to
+  4 clips / 18 s; web groups as their own conversations until A5/A6.
+
+## Deploy (Vercel preview)
+
+What goes online: only the **static site** (landing with the film, entry,
+console UI). MUCA-Server and the web adapter are long-running processes with
+WebSockets and stay on the demo laptop; on the preview the entry asks
+`/api/health`, gets no answer and says that spaces run on the coordinator
+server (forms disabled). Vercel Hobby plan, free; requested explicitly by
+Matteo on 15/11 (exception to section 8 recorded in webapp/docs/decisioni.md).
+
+- Build: `cd mulca/prototype/webapp && npm ci && npm run build` → `dist/` (31 MB:
+  app + `film/desktop` 436 frames + `vercel.json` with SPA rewrites; `/api/*`
+  deliberately not rewritten).
+- Publish, option A (token): put `VERCEL_TOKEN=...` in `webapp/.env.vercel`, then
+  `bash scripts/deploy-vercel.sh` (reads the token, never prints it).
+- Publish, option B (from Matteo's terminal on Windows): `cd ...\webapp\dist`
+  then `npx vercel deploy --prod` (browser login).
+- Why not from the Claude shell with `vercel login`: the device-code login needs
+  the CLI to keep running while Matteo approves, and the shell stops background
+  processes at the end of each command (tried 15/11: approval lost). The Vercel
+  MCP upload passes files through the chat, impossible for 31 MB.
+- Vercel account: team "Matteo Cesandri's projects" (`team_99jBeqMuGqvTtcTgivvrX19s`);
+  suggested project name `cadence-group-coordinator`.
+- Later, to make the preview live: build with `VITE_ADAPTER_URL=https://<adapter>`
+  and start the adapter with `MULCA_WEB_ALLOWED_ORIGINS=https://<vercel url>`;
+  needs a public address for the adapter (a tunnel = new service: ask first).
+
+## Where things are
+
+- Work on branch `group17/coordinator` in both clones on Matteo's PC
+  (`C:\Users\mcesa\WebstormProjects\group-coordinator`), mirrored to GitHub
+  (`mchartt/G17-MULCA-Server`, `mchartt/G17-MULCA-Project`); GitLab untouched.
+  All commits are **local**: nothing pushed in this session.
+- Last commits: muca-server `0c606a9` (PROGRESS M2) + this update; mulca
+  `f0ae328` (Cadence v2) + this update.
+- Web app: `mulca/prototype/webapp/` (README.md first). Adapter:
+  `mulca/prototype/mulca_discord/web/` (INDICE.md first). Film:
+  `webapp/film/` (`lavori.json` = every Higgsfield job, check and decision).
+  Build notebook: `webapp/docs/stato.md`; brief, design, decisions in `webapp/docs/`;
+  screenshots `webapp/docs/screens/`.
+- Claude project docs: `claude/contesto-group-coordinator.md` (same state, in Italian).
+
+## How to rebuild the work environment (Claude app shell on Matteo's PC)
+
+The shell is a Linux VM; only the connected folder survives between sessions.
+1. Connect `WebstormProjects/group-coordinator` (device folder access); allow
+   deletions in it (git needs to delete its lock files).
+2. Python 3.11: `uv venv -p 3.11 ~/venv311`, then
+   `VIRTUAL_ENV=~/venv311 uv pip install -e "muca-server[server,openai,storage,dev]" coverage`
+   and the lines of `mulca/prototype/requirements*.txt` except `-e ../../MUCA-Server`.
+3. Node: `npm ci` is very slow on the mounted Windows folder: copy the webapp
+   (src, e2e, scripts, public, config files) to `~/build/webapp`, symlink
+   `film` to the real one, `npm ci` there, build, copy `dist/` back.
+4. Playwright Chromium needs `libXdamage.so.1`: `apt-get download libxdamage1`,
+   `dpkg -x` into `~/libs/root`, `export LD_LIBRARY_PATH=~/libs/root/usr/lib/x86_64-linux-gnu`.
+5. Never `pkill -f <pattern>` with a pattern that appears in your own command
+   (it kills the command itself): start background processes with `& SP=$!` and `kill $SP`.
+6. Copying files from the cloud workspace to the PC: give every new version a
+   new file name (the same staged name may deliver a stale copy).
+
+## Test status (15/11, late evening)
+
+| Suite | Command | Result |
+|---|---|---|
+| MUCA-Server | `python -m pytest -q` | 481 passed + the 1 known voice failure |
+| MULCA | `cd prototype && python -m pytest -q` | 274 passed (web adapter 16, coverage 98 %) |
+| Web app unit | `npm test` | 17 passed |
+| Web app end to end | `npm run e2e` (starts `e2e/fake_stack.py`) | 1 passed: two members, chat, kickoff card, Confirm, plan |
+| Accessibility | `npm run axe` (fake stack running) | 0 WCAG 2.1 AA violations on landing and console |
+
+## Cadence interface v2 (15/11, Matteo: "more premium, softer, Apple-like, no AI fonts")
+
+- Font: SF Pro through the system stack on Apple devices (legal there), Geist
+  (Google Fonts, self-hosted) elsewhere. Inter rejected: closest to SF but the
+  most common "AI" font. Atkinson Hyperlegible (v1) rejected as not premium.
+- Palette: #f5f5f7 mist, #1d1d1f ink, #636366 secondary, sage #2f6f5e actions,
+  pastel tints; radii 22 px, pill buttons, soft shadows, glass nav and dialogs.
+- Motion: Lenis smooth scroll; film titles scrubbed by the scroll (first visible
+  at the top, last stays); headline lit word by word (grey #86868b → ink, AA
+  for large text); one-time reveals with cubic-bezier(0.2, 0.8, 0.2, 1);
+  messages and cards rise in. All off with prefers-reduced-motion.
+- Icons: Font Awesome Free (CC BY 4.0, credited in the footer).
+- Screens: `webapp/docs/screens/` (film, sections, entry, console, dialog, mobile).
 
 ## M2 log
 
@@ -54,6 +149,11 @@ PC (`WebstormProjects/group-coordinator`), mirrored to GitHub
 - 15/11 · Fresh-eyes review (self, against section 14 list): 1 defect fixed —
   chat frames handled in parallel could reach MUCA-Server out of order; now
   sequential (test added). MULCA suite 273 passed; server 481 + the known failure.
+- 15/11 · Interface v2 (soft, Apple-like, see above); adapter gains
+  `/api/health` and optional CORS (`MULCA_WEB_ALLOWED_ORIGINS`); entry shows the
+  offline notice when the adapter is not there; Vercel config + deploy script.
+  Found and fixed: dialogs shared one title id (accessibility), lit headline
+  grey failed contrast (axe), first film title half-faded at the top.
 - Limits: web groups are their own conversations (`web:<code>`), not yet the
   same as a Discord channel (A5/A6); deleting a group deletes only the web side
   (no protocol event for server memory); Why? / Not now come with M3.
