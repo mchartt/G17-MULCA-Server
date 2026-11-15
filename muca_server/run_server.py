@@ -19,7 +19,6 @@ from pathlib import Path
 
 import uvicorn
 from dotenv import load_dotenv
-from openai import AsyncOpenAI
 
 from .agents import MainAgentOptions
 from .agents.conversation import DEFAULT_SILENCE_TIMEOUT_MS
@@ -29,6 +28,7 @@ from .agents.openai import (
     OpenAIEmbedder,
     OpenAIWebSearcher,
 )
+from .agents.openai.client_config import build_openai_client
 from .agents.openai.day_summarizer import DAILY_SUMMARY_MODEL
 from .agents.openai.model_settings import ModelSettings
 from .usage_report import UsageTracker
@@ -44,12 +44,16 @@ from .cognition.memory.sqlite import (
     SqliteSnapshotStore,
     db_path_for,
 )
+from .cognition.coordination.wiring import build_coordinator_factory
+from .cognition.coordination.settings import CoordinatorSettings
 from .main import create_app
 from .sessions.session_components_factory import DefaultSessionComponentsFactory
 
 logger = logging.getLogger(__name__)
 
 TASK_ID = "general_moderation"
+# Group Coordinator task, used instead when MUCA_COORDINATOR_ENABLED is on.
+COORDINATOR_TASK_ID = "group_coordinator"
 # participation_equality_voice deliberately left out: voice is mention-only
 # (respond_when_addressed/provide_summary/remember, all solicited) -- the
 # strategy and its voice-only roster/trigger-variable plumbing stay in the
@@ -128,7 +132,11 @@ def build_app():
     # between these two per conversation, from that conversation's own
     # resolved listening_mode (server default, or its own handshake
     # override) -- never from this process's own env var alone.
-    client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    # OpenAI as before, or Azure OpenAI when AZURE_OPENAI_ENDPOINT and
+    # AZURE_OPENAI_API_KEY are both set (agents/openai/client_config.py).
+    client = build_openai_client(os.environ)
+    coordinator_settings = CoordinatorSettings.from_env(os.environ)
+    logger.info("Group Coordinator: %s", "on" if coordinator_settings.enabled else "off")
     strategy_store = load_strategy_store(ACTIVE_STRATEGY_IDS)
     non_ambient_strategy_store = load_strategy_store(
         [sid for sid in ACTIVE_STRATEGY_IDS if sid not in PROACTIVE_STRATEGY_IDS]
@@ -164,7 +172,8 @@ def build_app():
         "intervention_default",
         config_dir=WAKE_V2_CONFIG_DIR,
     )
-    task_knowledge = load_task(TASK_ID)
+    task_id = COORDINATOR_TASK_ID if coordinator_settings.enabled else TASK_ID
+    task_knowledge = load_task(task_id)
     # Which prompt a reply came from, for the logs: changes with any edit to
     # the persona or the task. A client's session.update replaces both (and
     # is logged per session).
@@ -173,7 +182,7 @@ def build_app():
         hashlib.sha256(
             "\n".join([main_persona, task_knowledge]).encode()
         ).hexdigest()[:12],
-        TASK_ID,
+        task_id,
     )
 
     # One SQLite file per conversation_id, not one shared file -- e.g. each
@@ -277,6 +286,13 @@ def build_app():
             )
         ),
         listening_mode=listening_mode,
+        # None when the coordinator is off: sessions are built exactly as before.
+        coordinator_factory=build_coordinator_factory(
+            coordinator_settings,
+            client=client,
+            db_dir=db_dir,
+            usage_tracker=usage_tracker,
+        ),
     )
 
     return create_app(

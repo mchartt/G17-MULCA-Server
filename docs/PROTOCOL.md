@@ -82,3 +82,32 @@ Send `audio_stream` every 100–200 ms:
 4. **Barge-in:** if a user speaks over the assistant, the server stops the reply, cuts it at `playbackTimeMs`, and sends `clearAudioQueue: true`.
 
 Text and voice can share one session, as with a Discord text channel and its voice channel. They share its memory. Each reply comes back in the medium its turn arrived in.
+
+## Group Coordinator
+
+Added for the AUI Group Coordinator (Group 17). Nothing above changes. The
+server handles these events only when it runs with
+`MUCA_COORDINATOR_ENABLED=true`; otherwise it logs the client events and
+drops them. Clients that do not know the server events ignore them.
+Code: `muca_server/protocol/coordinator.py`.
+
+A proposal changes nothing until a member confirms it. The first valid click
+wins; every later click is refused and every channel gets the updated card.
+
+### Client → server
+
+| Event | Fields | Meaning |
+|---|---|---|
+| `proposal_response` | `proposalId`, `action` (`confirm` \| `reject`), `memberId` (a `participants` id), `channel` (`discord` \| `web` \| `slack` \| `calendar`, default `discord`) | A member clicked a card button. Refused if `memberId` is not in the session's text roster. |
+| `coordinator_command` | `command` (`profile` \| `kickoff` \| `state`), `memberId`, `args` (object), `channel`, `requestId` (echoed back) | `profile`: `args` = `display_name?`, `discipline`, `skills` (list or comma text), `weekly_hours`. `kickoff`: `args.text` = the assignment text; answered with a charter card. `state`: answered with `coordinator_state`. |
+
+### Server → client
+
+| Event | Fields | Meaning |
+|---|---|---|
+| `coordinator_proposal` | `proposal`: `proposal_id`, `kind` (`charter`), `status` (`pending` \| `applied` \| `rejected` \| `expired`), `payload`, `rationale`, `origin_channel`, `created_at`, `expires_at`, `resolved_by`, `resolved_at` | A card to draw, or a new status for one already drawn. A `charter` payload has `goal`, `deliverables` (list), `milestones` (list of `title`, `due_date` ISO date or null). |
+| `coordinator_state` | `state`: `charter`, `members`, `milestones`, `tasks`, `decisions`; `requestId` | The whole project state, after a change or when asked. |
+| `coordinator_notice` | `ok`, `text`, `requestId` | A short answer to a command or a click: done, or why not. |
+
+These events are only for group conversations: in a DM or a session without
+`conversationId` every command is answered with a refusing notice.

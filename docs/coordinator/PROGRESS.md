@@ -2,23 +2,42 @@
 
 **Read this file first.** It says where the work really is.
 
-Last update: 15 Nov 2026, end of Phase 0 (waiting for Azure).
+Last update: 15 Nov 2026, M1 server side done; next: M1 Discord side.
 
 ## Where we are
 
 | Stage | Due | Status |
 |---|---|---|
 | Phase 0 · verify, no source changes | 16/11 | **DONE except the live Azure probe** (waiting for deployments + `.env`) |
-| M1 · Azure + project state on Discord | 20/11 | NOT STARTED |
+| M1 · Azure + project state on Discord | 20/11 | **IN PROGRESS** — server side done and tested (see below); Discord side next; Azure live probe still waiting |
 | M2 · web app | 23/11 | NOT STARTED |
 | M3 · proactive strategies CS5, CS2, CS3 | 26/11 | NOT STARTED |
 | M4 · planning, check-in, CS7, decision questions | 29/11 | NOT STARTED |
 | M5 · calendar, demo (Slack only if ahead on 29/11) | 01/12 | NOT STARTED |
 
-Next exact step: Matteo creates the Azure deployments (AZURE_SETUP.md) and
-fills `.env`; then run `python scripts/azure_probe.py` and paste the output
-into AZURE_SETUP.md "Probe results". Meanwhile M1 work that does not need
-the real model (state store, proposals, protocol events, tests) can start.
+Next exact step: MULCA side of M1 — `mulca_discord/coordinator/` with
+`/coordinator profile|kickoff|plan`, the persistent charter card (Confirm /
+Reject), and the handling of `coordinator_proposal|state|notice` in
+`muca_client.py` / `sessions.py`.
+Waiting on Matteo: Azure deployments + `.env`, then `scripts/azure_probe.py`.
+
+## M1 log
+
+- 15/11 · Server side: `protocol/coordinator.py` (5 events),
+  `cognition/coordination/` (models, store, proposals, writer, router,
+  settings, wiring), `agents/openai/client_config.py`, task
+  `group_coordinator.yaml`; hooks in `run_server.py`,
+  `session_components_factory.py`, `dispatcher.py`, `incoming.py`,
+  `protocol/__init__.py`, `pyproject.toml`; docs/PROTOCOL.md section.
+  Tests: 55 new, all green; lab suite 475 passed + the 1 known failure;
+  coverage of new modules 99–100 % (`coverage run --source=muca_server -m
+  pytest tests/coordinator`). Cost: 0 (no model call). Live: NOT VERIFIED.
+
+## How to measure coverage
+
+`pytest --cov=<module>` clashes with numpy here ("cannot load module more
+than once"); use `coverage run --source=muca_server -m pytest tests/coordinator`
+then `coverage report -m`.
 
 ## Baseline tests (15 Nov 2026, before any change)
 
@@ -118,7 +137,7 @@ blocks the slice.
 | A1 | The student subscription has quota for `gpt-realtime-2.1-mini` in East US 2 | probe output | before M1 live |
 | A2 | Key auth works for Realtime on Azure (not only REST) | probe `realtime` line OK | before M1 live |
 | A3 | Strict json_schema works on Azure `gpt-4o` | probe `chat+schema` line OK | before M1 writer live |
-| A4 | Adding our tables to the conversation SQLite file does not disturb `sqlite.py` | test that opens both stores on one file | M1 |
+| A4 | Adding our tables to the conversation SQLite file does not disturb `sqlite.py` | **confirmed by test** `test_shares_the_conversation_file_with_the_episodic_store` | M1 |
 | A5 | A FastAPI server can run in the same asyncio loop as discord.py | small spike in M2 | M2 |
 | A6 | Web-app members can be given stable int ids for `Participant.id` | design in M2 | M2 |
 | A7 | Slack app creation works in a free workspace | try it | only if Slack is kept |

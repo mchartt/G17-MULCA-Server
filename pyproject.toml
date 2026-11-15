@@ -44,6 +44,7 @@ packages = [
     "muca_server.audio",
     "muca_server.cognition",
     "muca_server.cognition.memory",
+    "muca_server.cognition.coordination",
     "muca_server.events",
     "muca_server.protocol",
     "muca_server.sessions",

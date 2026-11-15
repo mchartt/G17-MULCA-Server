@@ -6,6 +6,8 @@ from enum import StrEnum
 
 from ..protocol import (
     ArmListeningMessage,
+    CoordinatorCommandMessage,
+    ProposalResponseMessage,
     AudioStreamMessage,
     ConnectAgentMessage,
     CreateAuxiliaryAgentMessage,
@@ -186,6 +188,17 @@ async def dispatch(
 
         case ArmListeningMessage():
             await agent_router.arm_listening(message)
+
+        case ProposalResponseMessage() | CoordinatorCommandMessage():
+            # Group Coordinator. Only a CoordinatorRouter (cognition/
+            # coordination/router.py) has route_coordinator; with the
+            # coordinator switched off the message is logged and dropped,
+            # as an unknown event was before.
+            route = getattr(agent_router, "route_coordinator", None)
+            if route is None:
+                logger.info("Ignoring %s: the coordinator is off", message.event)
+            else:
+                await route(message)
 
         case DisconnectMessage():
             await agent_router.disconnect_agent(message)

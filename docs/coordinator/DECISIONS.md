@@ -2,6 +2,32 @@
 
 Newest first. Each entry: date, decision, alternatives, reason, status.
 
+## 2026-11-15 · Coordinator plugged in as a wrapper of the Conversation
+
+- **Decision:** when on, `session_components_factory.py` wraps the session's
+  `Conversation` in `CoordinatorRouter` (Decorator pattern): it handles the
+  new events and forwards everything else unchanged. When off, no wrapper.
+- **Alternatives:** add methods to `agents/conversation.py` (2744 lines,
+  shared by the lab); a separate WebSocket endpoint.
+- **Reason:** smallest change to shared files (one optional argument), and
+  "off" is provably identical (the router is the plain Conversation).
+
+## 2026-11-15 · Third server event `coordinator_notice`; client events dropped when off
+
+- **Decision:** besides `coordinator_proposal` and `coordinator_state`, the
+  server sends `coordinator_notice` (ok + short text) to answer a command or
+  a click. With the coordinator off, the client events are logged and dropped.
+- **Reason:** clients need to tell the member why a click was refused; the
+  dispatcher has no access to the outbound queue, so "off" cannot answer.
+
+## 2026-11-15 · Private copy on GitHub
+
+- **Decision:** both repos mirrored to private GitHub repos of Matteo's
+  account (`mchartt/G17-MULCA-Server`, `mchartt/G17-MULCA-Project`), remote
+  `github` in the local clones; updated at the end of each stage. GitLab
+  (`origin`) still untouched.
+- **Reason:** Matteo asked for an online copy; moving to GitLab later is a push.
+
 ## 2026-11-15 · Never touch the project's GitLab
 
 - **Decision:** no push, no remote branch, no merge request, no edit on
