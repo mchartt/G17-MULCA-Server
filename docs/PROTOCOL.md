@@ -98,16 +98,29 @@ wins; every later click is refused and every channel gets the updated card.
 
 | Event | Fields | Meaning |
 |---|---|---|
-| `proposal_response` | `proposalId`, `action` (`confirm` \| `reject`), `memberId` (a `participants` id), `channel` (`discord` \| `web` \| `slack` \| `calendar`, default `discord`), `requestId` (echoed in the notice) | A member clicked a card button. Refused if `memberId` is not in the session's text roster. |
+| `proposal_response` | `proposalId`, `action` (`confirm` \| `reject` \| `take` \| `choose` \| `not_now`), `option` (integer, only for `choose`), `memberId` (a `participants` id), `channel` (`discord` \| `web` \| `slack` \| `calendar`, default `discord`), `requestId` (echoed in the notice) | A member clicked a card button. Refused if `memberId` is not in the session's text roster. |
 | `coordinator_command` | `command` (`profile` \| `kickoff` \| `state`), `memberId`, `args` (object), `channel`, `requestId` (echoed back) | `profile`: `args` = `display_name?`, `discipline`, `skills` (list or comma text), `weekly_hours`. `kickoff`: `args.text` = the assignment text; answered with a charter card. `state`: answered with `coordinator_state`. |
 
 ### Server → client
 
 | Event | Fields | Meaning |
 |---|---|---|
-| `coordinator_proposal` | `proposal`: `proposal_id`, `kind` (`charter`), `status` (`pending` \| `applied` \| `rejected` \| `expired`), `payload`, `rationale`, `origin_channel`, `created_at`, `expires_at`, `resolved_by`, `resolved_at` | A card to draw, or a new status for one already drawn. A `charter` payload has `goal`, `deliverables` (list), `milestones` (list of `title`, `due_date` ISO date or null). |
+| `coordinator_proposal` | `proposal`: `proposal_id`, `kind` (`charter` \| `task_owner` \| `delegation` \| `decision`), `status` (`pending` \| `applied` \| `rejected` \| `expired` \| `snoozed`), `payload`, `rationale`, `origin_channel` (`group` for proactive cards: show it in every channel), `created_at`, `expires_at`, `resolved_by`, `resolved_at` | A card to draw, or a new status for one already drawn. A `charter` payload has `goal`, `deliverables` (list), `milestones` (list of `title`, `due_date` ISO date or null). Proactive payloads (below) have a `context`: `strategy_id`, `topic`, `evidence` (list of `speaker`, `text`, `at_ms`), shown under "Why?". |
 | `coordinator_state` | `state`: `charter`, `members`, `milestones`, `tasks`, `decisions`; `requestId` | The whole project state, after a change or when asked. |
 | `coordinator_notice` | `ok`, `text`, `requestId` | A short answer to a command or a click: done, or why not. |
+
+Proactive cards (M3), posted by the coordinator on its own when a strategy
+fires. Buttons and the `action` they send:
+
+| `kind` | Strategy | Payload besides `context` | Buttons |
+|---|---|---|---|
+| `task_owner` | `cs5_owner_and_date` | `task_id` (existing task or null), `title`, `owner_id` (suggested member or null), `due_date` | Confirm (`confirm`, only with a suggested owner), I'll take it (`take`), Reject, Not now |
+| `delegation` | `cs2_delegate_simple_task` | `title`, `due_date`, `return_to` (topic to go back to); never an owner | I'll take it (`take`), Reject, Not now |
+| `decision` | `cs3_close_decision` | `question`, `options` (2–3 of `label`, `argument`) | one per option (`choose` + `option` index), Reject, Not now |
+
+`not_now` closes the card as `snoozed` and silences that strategy on that
+topic for 30 minutes. "Why?" needs no event: the card already carries the
+strategy, the topic and the messages behind it.
 
 These events are only for group conversations: in a DM or a session without
 `conversationId` every command is answered with a refusing notice.

@@ -113,7 +113,7 @@ class ProposalWriter:
         )
         for attempt in range(1, ATTEMPTS + 1):
             try:
-                data = await self._call(CHARTER_SYSTEM, user, CHARTER_SCHEMA)
+                data = await self.call_json(CHARTER_SYSTEM, user, CHARTER_SCHEMA)
                 rationale = check_rationale(data.pop("rationale", ""))
                 return CharterDraft(CharterPayload.model_validate(data), rationale)
             except (ValidationError, ValueError, KeyError, TypeError) as exc:
@@ -122,7 +122,12 @@ class ProposalWriter:
                 logger.exception("Charter draft call failed (attempt %d)", attempt)
         return None
 
-    async def _call(self, system: str, user: str, schema: dict[str, Any]) -> dict:
+    async def call_json(self, system: str, user: str, schema: dict[str, Any]) -> dict:
+        """
+        One Chat Completions call with a strict JSON schema; returns the parsed
+        JSON (not yet validated). Shared with proactive_writer.py, so every
+        coordinator call has the same timeout and cost recording.
+        """
         response = await self._client.chat.completions.create(
             model=self._model,
             messages=[

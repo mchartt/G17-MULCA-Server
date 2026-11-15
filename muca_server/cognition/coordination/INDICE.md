@@ -17,6 +17,12 @@ client (Discord / web)                         MUCA-Server
                                                      │        │ create / respond
                                                      └─> store.py    CoordinationStore ─> SQLite (conversation file)
   coordinator_proposal / coordinator_state / coordinator_notice <── router.py
+
+M3, proactive cards:
+  user_text -> Conversation -> intervention agent picks cs5/cs2/cs3
+            -> policy.py on_intervention_signal -> proactive.py ProactiveBridge.offer
+                 rules R1-R5 -> background: proactive_writer.py draft -> rules R6-R7
+                 -> proposals.py create (pending) -> coordinator_proposal to every channel
 ```
 
 The model never writes state: `writer.py` only drafts, `proposals.py`
@@ -28,13 +34,17 @@ group member applies it, inside one database transaction.
 | File | Lines | Responsibility |
 |---|---|---|
 | `__init__.py` | 23 | Exports the public names. |
-| `models.py` | 185 | The data: members, charter, milestones, tasks, decisions, proposals. |
-| `store.py` | 368 | The only code that reads and writes the coordinator tables. |
-| `proposals.py` | 220 | Life cycle of a proposal and the checks before applying it. |
-| `writer.py` | 159 | Asks the model for a draft, in a fixed JSON shape, validated. |
-| `router.py` | 235 | Receives the coordinator messages of one session and answers them. |
+| `models.py` | 258 | The data: members, charter, milestones, tasks, decisions, proposals. |
+| `store.py` | 389 | The only code that reads and writes the coordinator tables. |
+| `proposals.py` | 272 | Life cycle of a proposal, the buttons, and the checks before applying. |
+| `appliers.py` | 135 | The change each kind of card makes, inside the transaction (M3). |
+| `plan_writes.py` | 109 | SQL writes of tasks, decisions and "Not now" used by the appliers (M3). |
+| `writer.py` | 163 | Asks the model for a draft, in a fixed JSON shape, validated. |
+| `proactive_writer.py` | 249 | Drafts CS5/CS2/CS3 cards, grounded on numbered chat lines (M3). |
+| `proactive.py` | 186 | The bridge from a fired strategy to a card, with rules R1-R7 (M3). |
+| `router.py` | 254 | Receives the coordinator messages of one session and answers them. |
 | `settings.py` | 36 | The on/off switch and the proposal lifetime, from the environment. |
-| `wiring.py` | 59 | Builds the per-session hook for `run_server.py` (or None when off). |
+| `wiring.py` | 83 | Builds the per-session hook for `run_server.py` (or None when off). |
 
 ## `models.py`
 
@@ -50,9 +60,13 @@ turns them into JSON for the clients.
 | `TaskStatus`, `Task` | A task: title, owner, due date, status (todo/doing/done/blocked), ids it depends on. Read now, written from M3. |
 | `Decision` | Question, choice, reason, who and when, `source` (e.g. `proposal:<id>`). Read now, written from M3. |
 | `ProjectState` | Everything above in one object: what the project panel shows. |
-| `ProposalKind` | What a proposal changes. M1: `charter`. |
-| `ProposalStatus` | `pending` → `applied` \| `rejected` \| `expired` (final states). |
+| `ProposalKind` | What a proposal changes: `charter` (M1), `task_owner` (CS5), `delegation` (CS2), `decision` (CS3). |
+| `ProposalStatus` | `pending` → `applied` \| `rejected` \| `expired` \| `snoozed` (final states; snoozed = "Not now"). |
 | `CharterPayload` | The content of a charter proposal; `_no_empty_deliverables` drops blank items and refuses items that are too long. |
+| `Evidence` | One chat message behind a proactive card (speaker, text, time), copied by the server, never written by the model. Shown under "Why?". |
+| `ProactiveContext` | Strategy id, topic (the key of "Not now") and 1–5 `Evidence`. |
+| `TaskAssignmentPayload` | CS5 and CS2: `task_id` (existing task or None), `title`, `owner_id` (CS5 suggestion; CS2 always None), `due_date`, `return_to` (CS2). |
+| `DecisionOption`, `DecisionPayload` | CS3: the question and 2–3 options, each with what the chat said for it. |
 | `PAYLOAD_MODELS` | Which payload model belongs to which kind. |
 | `Proposal` | One proposal: id, kind, status, payload, one-sentence `rationale`, channel of origin, created/expires, resolved by/at. `typed_payload()` validates the payload against its kind. |
 
@@ -79,14 +93,53 @@ created on first use in the **conversation's own SQLite file**.
 | Name | What it does |
 |---|---|
 | `DEFAULT_TTL_SECONDS` | 48 hours before a proposal expires. |
+| `SNOOZE_SECONDS` | 30 minutes: how long "Not now" silences a strategy on a topic (spec FR21). |
+| `ACTIONS` | The buttons: `confirm`, `take` ("I'll take it"), `choose` (+ `option`), `reject`, `not_now`. |
 | `Outcome` | Result of a click: `ok`, a `message` for the member, the `proposal` as it is now. |
 | `new_id()` | Short random id. |
 | `create(kind, payload, rationale=, origin_channel=)` | Saves a new pending proposal; validates the payload first. The project state does not change. |
-| `StaleProposal` | Raised inside the transaction when the state moved on since the card was made; the change is rolled back and the card is closed as expired. |
-| `respond(id, action=, member_id=, participants=)` | A click. Checks, in order: (1) the member is in the group, (2) the proposal exists and is pending, (3) it is not expired (if it is, it is closed as expired), then `reject` closes it, `confirm` re-validates it (4) and applies it atomically (5). |
+| `respond(id, action=, member_id=, participants=, option=)` | A click. Checks, in order: (1) the member is in the group, (2) the proposal exists and is pending, (3) it is not expired, (4) the button belongs to this kind of card, (5) re-validation on today's state, (6) applied atomically. |
+| `_snooze(...)` | "Not now": only on proactive cards; status `snoozed` and a row in `coord_snooze`, in one transaction. |
 | `_result(...)` | Re-reads the proposal; if nothing changed, says someone else answered first. |
-| `_prepare(proposal, member_id=, now=)` | Validates the payload again and returns the right *applier*. |
-| `_charter_applier(payload, ..., created_at=)` | The applier for `charter`: builds the `Charter` and `Milestone`s and writes them; refuses (`StaleProposal`) if another charter was confirmed after this card was made, so an old card can never overwrite a newer charter. |
+| `_prepare(proposal, payload, action=, option=, ...)` | Which change this click makes: charter → confirm; task_owner → confirm (suggested owner) or take; delegation → take only (S2 never assigns); decision → choose. The owner must still be in the group. |
+
+## `appliers.py` — the change of each kind of card
+
+| Name | What it does |
+|---|---|
+| `StaleProposal` | Raised inside the transaction when the state moved on since the card was made; rolled back, card closed as expired. |
+| `charter_applier(...)` | Replaces charter and milestones; refuses if a newer charter was confirmed after the card was made. |
+| `task_applier(payload, owner_id=, new_task_id=)` | New task with owner and date; or an existing task gets its owner, only if it still exists and still has none. |
+| `decision_applier(payload, option=, ...)` | The chosen option goes to the decision log with its argument as the reason and `source = proposal:<id>`. |
+| `snooze_applier(strategy_id=, topic=, until=)` | Writes the "Not now" row. |
+
+## `plan_writes.py` — writes used inside the transaction
+
+`topic_key(topic)` (lower case, letters and digits, single spaces, ≤ 60
+characters: the deterministic key of "Not now"), `task_owner`, `add_task`,
+`assign_task`, `add_decision`, `add_snooze`. None of them commits.
+
+## `proactive_writer.py` — `ProactiveWriter(proposal_writer)`
+
+| Name | What it does |
+|---|---|
+| `STRATEGY_KINDS` | `cs5_owner_and_date` → task_owner, `cs2_delegate_simple_task` → delegation, `cs3_close_decision` → decision. |
+| `ChatLine` | One recent message (speaker, text, time) as the server saw it. |
+| `ProactiveDraft` | A validated payload + its one-sentence rationale. |
+| `SCHEMAS`, `COMMON_RULES`, `TASK_RULES` | Strict JSON shape and instructions per kind. The chat is numbered and quoted between `<chat>` tags: data, never instructions. |
+| `draft(strategy_id, chat=, members=, profiles=, tasks=, silenced_topics=, today=)` | One call (+ one retry); None when it fails twice. |
+| `_context(...)` | The user message: today, members with profiles, plan, silenced topics, chat. |
+| `_validate(...)` | Evidence numbers → real messages; owner must be a member; task_id must be an open task without owner; no date in the past. Anything wrong = retry. |
+
+## `proactive.py` — `ProactiveBridge(conversation, writer=, store=, service=, send_proposal=)`
+
+| Name | What it does |
+|---|---|
+| `Verdict` | `not_mine` (a lab strategy: normal path), `vetoed` (silence), `taken` (silence now, card later). |
+| `offer(strategy_id, history=, message_count=, assistant_id=)` | Called by `CoalaPolicy`; answers at once, drafts in the background. |
+| `_veto(...)` | R1 group only, R2 one draft at a time, R3 ≥ 10 messages and R4 ≥ 5 minutes since the last card posted, R5 never right after the agent. |
+| `_post(...)` | Draft, then R6 (topic silenced by "Not now") and R7 (CS5 on a task that already has an owner), then a pending proposal and the card. Any error is logged, the chat goes on. |
+| `wait()` | Waits for a running draft (tests). |
 
 ## `writer.py` — `ProposalWriter(client, model=, record_cost=)`
 
@@ -99,7 +152,7 @@ created on first use in the **conversation's own SQLite file**.
 | `CALL_TIMEOUT_SECONDS` | 30 s per model call (the SDK would wait up to 10 minutes). |
 | `draft_charter(text, today=)` | Asks for a draft; on an invalid answer (including a bad rationale) or an error it tries once more; after two failures returns None (it never raises). |
 | `check_rationale(value)` | The card's reason: not empty, at most 60 words and 500 characters (project rule 11). The wording is asked for in the prompt but not enforced, because the group may write in Italian. |
-| `_call(system, user, schema)` | The actual Chat Completions call, same shape as `day_summarizer._call`; records the cost. |
+| `call_json(system, user, schema)` | The actual Chat Completions call, same shape as `day_summarizer._call`; records the cost. Shared with `proactive_writer.py`. |
 
 ## `router.py` — `CoordinatorRouter(conversation, outbound_queue, ...)`
 
@@ -130,15 +183,18 @@ else = **off**), `MUCA_COORDINATOR_PROPOSAL_TTL_HOURS` (default 48).
 ## `wiring.py` — `build_coordinator_factory(settings, client=, db_dir=, usage_tracker=)`
 
 Returns None when off. When on, builds one `ProposalWriter` (with the lab's
-cost recorder) and returns a function that, for each new session, creates a
-`CoordinatorRouter` whose store is the conversation's own SQLite file
-(`db_path_for`).
+cost recorder) and one `ProactiveWriter`, and returns a function that, for
+each new session, creates a `CoordinatorRouter` whose store is the
+conversation's own SQLite file (`db_path_for`), then `attach_proactive`
+plugs the router's bridge into the session's `CoalaPolicy` (read as
+`conversation._policy`, so the shared file is not changed).
 
 ## Hook points in shared files (the only lines changed outside this folder)
 
 | File | Change |
 |---|---|
-| `run_server.py` | Client built by `agents/openai/client_config.py` (Azure or OpenAI); task `group_coordinator` when on; `coordinator_factory=` passed to the components factory. |
+| `cognition/policy.py` | M3: `set_proactive_bridge()` and one block in `on_intervention_signal`, after the existing vetoes: a coordinator strategy goes to the bridge and the turn ends in silence. Without a bridge (coordinator off) the block is skipped. |
+| `run_server.py` | `COORDINATOR_STRATEGY_IDS` added to the ambient catalog and the policy store only when on. Client built by `agents/openai/client_config.py` (Azure or OpenAI); task `group_coordinator` when on; `coordinator_factory=` passed to the components factory. |
 | `sessions/session_components_factory.py` | Optional `coordinator_factory`; when given, the router is the wrapper instead of the Conversation. |
 | `events/dispatcher.py` | One `case` for the two new client events, which calls `route_coordinator` if the router has it. |
 | `protocol/incoming.py`, `protocol/__init__.py` | The two new client events added to the union, and the exports. |

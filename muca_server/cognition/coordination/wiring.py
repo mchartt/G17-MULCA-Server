@@ -17,6 +17,7 @@ from functools import partial
 from typing import Any
 
 from ..memory.sqlite import db_path_for
+from .proactive_writer import ProactiveWriter
 from .router import CoordinatorRouter
 from .settings import CoordinatorSettings
 from .store import CoordinationStore
@@ -43,17 +44,39 @@ def build_coordinator_factory(
         record_cost=partial(record_cost, tracker=usage_tracker),
     )
 
+    proactive_writer = ProactiveWriter(writer)
+
     def store_for(conversation_id: str) -> CoordinationStore:
         # The conversation's own SQLite file (cognition/memory/sqlite.py).
         return CoordinationStore(db_path_for(conversation_id, base_dir=db_dir))
 
     def factory(conversation: Any, outbound_queue: asyncio.Queue) -> CoordinatorRouter:
-        return CoordinatorRouter(
+        router = CoordinatorRouter(
             conversation,
             outbound_queue,
             store_for=store_for,
             writer=writer,
             proposal_ttl_seconds=settings.proposal_ttl_seconds,
+            proactive_writer=proactive_writer,
         )
+        attach_proactive(conversation, router)
+        return router
 
     return factory
+
+
+def attach_proactive(conversation: Any, router: CoordinatorRouter) -> bool:
+    """
+    Plug the router's ProactiveBridge into the session's CoalaPolicy, so
+    CS5/CS2/CS3 become cards. The policy lives on the Conversation as
+    `_policy` (agents/conversation.py, set in __init__); reading it here keeps
+    the shared file unchanged. Returns False (and the coordinator works
+    without proactive cards) for a policy without the hook, e.g. NoCognition
+    in tests: test_coordinator_proactive.py checks both cases.
+    """
+    policy = getattr(conversation, "_policy", None)
+    setter = getattr(policy, "set_proactive_bridge", None)
+    if setter is None or router.proactive is None:
+        return False
+    setter(router.proactive)
+    return True

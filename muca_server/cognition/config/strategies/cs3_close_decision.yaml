@@ -1,0 +1,19 @@
+id: cs3_close_decision
+# Group Coordinator (spec S3 "Close the decision"). Answered with a card: one
+# button per option; the choice and its reason go to the decision log.
+trigger_description: >
+  The members have discussed the same question for many messages, at least
+  two concrete options are on the table (for example two evaluation
+  methods, two frameworks, two dates), and the discussion is circling
+  without anyone closing it.
+  Do NOT fire for: a discussion that is still exploring and has fewer than
+  two clear options; a question the group has just closed ("ok, let's go
+  with X"); a simple task that one person could do alone (that is a
+  delegation); disagreement about people rather than options; a choice
+  outside the project.
+cooldown_messages: 10
+trigger_variables: []
+prompt_template: |
+  A decision is going in circles. {prompt_fragment}
+  In one short sentence starting with your reason, list the options and ask
+  the group to choose one and say why.

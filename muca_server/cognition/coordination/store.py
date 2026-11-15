@@ -92,6 +92,14 @@ CREATE TABLE IF NOT EXISTS coord_proposal (
     resolved_by     INTEGER,
     resolved_at     REAL
 );
+-- "Not now" on a proactive card: that strategy stays silent on that topic
+-- until `until` (unix time). Written by plan_writes.add_snooze.
+CREATE TABLE IF NOT EXISTS coord_snooze (
+    strategy_id  TEXT NOT NULL,
+    topic_key    TEXT NOT NULL,
+    until        REAL NOT NULL,
+    PRIMARY KEY (strategy_id, topic_key)
+);
 """
 
 
@@ -281,6 +289,19 @@ class CoordinationStore:
                 for position, m in enumerate(milestones)
             ],
         )
+
+    async def active_snoozes(self, now: float) -> set[tuple[str, str]]:
+        """(strategy_id, topic_key) pairs silenced by "Not now" and not yet over."""
+        db = await self._connect()
+        try:
+            cursor = await db.execute(
+                "SELECT strategy_id, topic_key FROM coord_snooze WHERE until > ?",
+                (now,),
+            )
+            rows = await cursor.fetchall()
+        finally:
+            await db.close()
+        return {(row[0], row[1]) for row in rows}
 
     # ------------------------------------------------------------------
     # Reading the whole state

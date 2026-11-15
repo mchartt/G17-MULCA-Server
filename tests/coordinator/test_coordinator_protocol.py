@@ -75,3 +75,19 @@ def test_outgoing_events_serialize_with_their_event_names():
     assert json.loads(serialize_outgoing_message(
         CoordinatorNoticeMessage(ok=False, text="no")
     )) == {"event": "coordinator_notice", "ok": False, "text": "no", "requestId": ""}
+
+
+@pytest.mark.parametrize("action", ["take", "choose", "not_now"])
+def test_m3_buttons_parse_and_choose_carries_its_option(action):
+    message = parse_incoming_message(
+        {"event": "proposal_response", "proposalId": "p1", "action": action,
+         "memberId": 1, "option": 1, "channel": "web"}
+    )
+    assert (message.action, message.option) == (action, 1)
+
+
+def test_m1_clicks_still_parse_without_an_option():
+    message = parse_incoming_message(
+        {"event": "proposal_response", "proposalId": "p1", "action": "confirm", "memberId": 1}
+    )
+    assert message.option is None

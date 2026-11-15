@@ -82,6 +82,14 @@ PROACTIVE_STRATEGY_IDS = [
     "pleasant_conversation",
     "resolve_conflict",
 ]
+# Group Coordinator strategies (M3), added to the ambient catalog and to the
+# policy's store only when MUCA_COORDINATOR_ENABLED is on. Answered with a
+# card (cognition/coordination/proactive.py), never with a reply.
+COORDINATOR_STRATEGY_IDS = [
+    "cs5_owner_and_date",
+    "cs2_delegate_simple_task",
+    "cs3_close_decision",
+]
 ASSISTANT_NAME = "MULCA"
 
 # "ambient": every turn is judged, as above. "toggle"/
@@ -137,7 +145,8 @@ def build_app():
     client = build_openai_client(os.environ)
     coordinator_settings = CoordinatorSettings.from_env(os.environ)
     logger.info("Group Coordinator: %s", "on" if coordinator_settings.enabled else "off")
-    strategy_store = load_strategy_store(ACTIVE_STRATEGY_IDS)
+    coordinator_ids = COORDINATOR_STRATEGY_IDS if coordinator_settings.enabled else []
+    strategy_store = load_strategy_store(ACTIVE_STRATEGY_IDS + coordinator_ids)
     non_ambient_strategy_store = load_strategy_store(
         [sid for sid in ACTIVE_STRATEGY_IDS if sid not in PROACTIVE_STRATEGY_IDS]
         + ["always_reply"]
@@ -158,7 +167,7 @@ def build_app():
     # some conversations would make a legitimate strategy_id the model's
     # own (correctly filtered) catalog just gave it resolve to nothing here.
     policy_strategy_store = load_strategy_store(
-        ACTIVE_STRATEGY_IDS + ["always_reply"]
+        ACTIVE_STRATEGY_IDS + coordinator_ids + ["always_reply"]
     )
     main_persona = load_persona("main_default")
     intervention_persona = load_persona("intervention_default")

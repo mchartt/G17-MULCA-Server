@@ -48,8 +48,11 @@ class ProposalResponseMessage(CoordinatorIncomingMessage):
 
     event: Literal["proposal_response"]
     proposal_id: str = Field(alias="proposalId")
-    # M1 knows confirm and reject. Later stages add actions (additive).
-    action: Literal["confirm", "reject"]
+    # M1: confirm, reject. M3 adds (additive): take ("I'll take it"),
+    # choose (one option of a decision card, see `option`) and not_now.
+    action: Literal["confirm", "reject", "take", "choose", "not_now"]
+    # For "choose": the index of the chosen option on the card.
+    option: int | None = None
     # The clicking member's participant id (Participant.id).
     member_id: int = Field(alias="memberId")
     channel: Channel = "discord"

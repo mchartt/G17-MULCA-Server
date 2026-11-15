@@ -122,21 +122,26 @@ class ProjectState(_Model):
 
 
 class ProposalKind(StrEnum):
-    """What a proposal would change once confirmed. M1 has the charter only."""
+    """What a proposal would change once confirmed."""
 
-    CHARTER = "charter"
+    CHARTER = "charter"  # M1: kickoff (UC2)
+    TASK_OWNER = "task_owner"  # M3: CS5, an agreed action gets an owner and a date
+    DELEGATION = "delegation"  # M3: CS2, one member takes a simple task
+    DECISION = "decision"  # M3: CS3, the group picks one option, with its reason
 
 
 class ProposalStatus(StrEnum):
     """
-    Life cycle: PENDING -> APPLIED | REJECTED | EXPIRED. The last three are
-    final: a proposal never goes back to PENDING (proposals.py enforces it).
+    Life cycle: PENDING -> APPLIED | REJECTED | EXPIRED | SNOOZED. The last
+    four are final: a proposal never goes back to PENDING (proposals.py
+    enforces it). SNOOZED = a member pressed "Not now" on a proactive card.
     """
 
     PENDING = "pending"
     APPLIED = "applied"
     REJECTED = "rejected"
     EXPIRED = "expired"
+    SNOOZED = "snoozed"
 
 
 class CharterPayload(_Model):
@@ -155,10 +160,78 @@ class CharterPayload(_Model):
         return cleaned
 
 
+# ----------------------------------------------------------------------
+# Proactive proposals (M3): cards the coordinator posts on its own
+# ----------------------------------------------------------------------
+
+MAX_TOPIC = 120
+MAX_QUOTE = 300
+
+
+class Evidence(_Model):
+    """
+    One chat message that made a strategy fire, copied from the session's
+    own history by the server (proactive.py), never written by the model:
+    the model only points at message numbers. Shown under "Why?".
+    """
+
+    speaker: str = Field(min_length=1, max_length=100)
+    text: str = Field(min_length=1, max_length=MAX_QUOTE)
+    at_ms: int = 0
+
+
+class ProactiveContext(_Model):
+    """
+    Why a proactive card exists: which strategy fired, about what topic
+    (the key of "Not now"), and the messages behind it.
+    """
+
+    strategy_id: str = Field(min_length=1, max_length=60)
+    topic: str = Field(min_length=1, max_length=MAX_TOPIC)
+    evidence: list[Evidence] = Field(min_length=1, max_length=5)
+
+
+class TaskAssignmentPayload(_Model):
+    """
+    CS5 (task_owner) and CS2 (delegation): a task and who takes it.
+
+    task_id: an existing task without an owner (CS5), or None for a new task.
+    owner_id: the member the coordinator suggests (CS5 only; CS2 never
+    suggests anyone, spec S2 "do not assign"). Any member can still press
+    "I'll take it" and become the owner instead.
+    return_to: CS2 only, the complex topic the group should go back to.
+    """
+
+    context: ProactiveContext
+    task_id: str | None = None
+    title: str = Field(min_length=1, max_length=MAX_TITLE)
+    owner_id: int | None = None
+    due_date: date | None = None
+    return_to: str = Field(default="", max_length=MAX_TITLE)
+
+
+class DecisionOption(_Model):
+    """One option of a decision card, with what was said for it in the chat."""
+
+    label: str = Field(min_length=1, max_length=MAX_TITLE)
+    argument: str = Field(default="", max_length=MAX_QUOTE)
+
+
+class DecisionPayload(_Model):
+    """CS3: the open question and its 2 or 3 options (one button each)."""
+
+    context: ProactiveContext
+    question: str = Field(min_length=1, max_length=MAX_TITLE)
+    options: list[DecisionOption] = Field(min_length=2, max_length=3)
+
+
 # Which payload model belongs to which kind. A new kind = one new line here,
-# one payload model above and one applier in proposals.py.
+# one payload model above and one applier in appliers.py.
 PAYLOAD_MODELS: dict[ProposalKind, type[_Model]] = {
     ProposalKind.CHARTER: CharterPayload,
+    ProposalKind.TASK_OWNER: TaskAssignmentPayload,
+    ProposalKind.DELEGATION: TaskAssignmentPayload,
+    ProposalKind.DECISION: DecisionPayload,
 }
 
 

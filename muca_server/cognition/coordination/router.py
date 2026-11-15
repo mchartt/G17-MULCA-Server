@@ -15,7 +15,7 @@ coordinator is OFF there is no wrapper at all.
 
 What it handles:
   coordinator_command  profile | kickoff | state
-  proposal_response    confirm | reject
+  proposal_response    confirm | reject | take | choose | not_now
 and it answers with coordinator_proposal / coordinator_state / coordinator_notice.
 """
 
@@ -37,6 +37,8 @@ from ...protocol.coordinator import (
     ProposalResponseMessage,
 )
 from .models import MemberProfile, Proposal, ProposalKind
+from .proactive import ProactiveBridge
+from .proactive_writer import ProactiveWriter
 from .proposals import ProposalService
 from .store import CoordinationStore
 from .writer import ProposalWriter
@@ -59,6 +61,7 @@ class CoordinatorRouter:
         writer: ProposalWriter,
         proposal_ttl_seconds: float,
         today: Callable[[], date] = date.today,
+        proactive_writer: ProactiveWriter | None = None,
     ) -> None:
         # Set first: __getattr__ below reads it.
         self._conversation = conversation
@@ -70,6 +73,19 @@ class CoordinatorRouter:
         self._store: CoordinationStore | None = None
         # The kickoff running in the background, if any (one per group).
         self._kickoff: asyncio.Task | None = None
+        # M3: proactive cards (CS5, CS2, CS3), plugged into the policy by wiring.py.
+        self.proactive = (
+            ProactiveBridge(
+                conversation,
+                writer=proactive_writer,
+                store=self._store_now,
+                service=self._service,
+                send_proposal=self._send_proposal,
+                today=today,
+            )
+            if proactive_writer is not None
+            else None
+        )
 
     def __getattr__(self, name: str) -> Any:
         """Everything not defined here is the Conversation's (see module docstring)."""
@@ -106,9 +122,11 @@ class CoordinatorRouter:
             await self._fail(message.event, request_id)
 
     async def wait_for_background(self) -> None:
-        """Wait for a running kickoff to finish (used by tests and at shutdown)."""
+        """Wait for a running kickoff or proactive draft (used by tests and at shutdown)."""
         if self._kickoff is not None:
             await asyncio.gather(self._kickoff, return_exceptions=True)
+        if self.proactive is not None:
+            await self.proactive.wait()
 
     async def _fail(self, event: str, request_id: str) -> None:
         """Project rule: a coordinator error never breaks the chat."""
@@ -192,6 +210,7 @@ class CoordinatorRouter:
             action=message.action,
             member_id=message.member_id,
             participants=self._conversation.participants(),
+            option=message.option,
         )
         if outcome.proposal is not None:
             # Every channel redraws the card (applied, rejected, expired...).

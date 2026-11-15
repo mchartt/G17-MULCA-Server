@@ -1,0 +1,18 @@
+id: cs5_owner_and_date
+# Group Coordinator (spec S5 "Owner and date"). Answered with a card, not a
+# reply: cognition/coordination/proactive.py drafts it, a member confirms it.
+trigger_description: >
+  The members have just agreed that a concrete piece of work must be done
+  for the project (for example "someone has to write the evaluation
+  protocol", "we need the slides by Friday"), but nobody has said they will
+  do it, or nobody has said by when. Look for an action the group clearly
+  wants done, followed by messages that move on without an owner or a date.
+  Do NOT fire for: an idea that is still being discussed and not yet agreed;
+  an action someone already took ("I'll do it", "I can handle that");
+  vague wishes with no concrete result; jokes; work outside the project;
+  a task the project plan already shows with an owner.
+cooldown_messages: 10
+trigger_variables: []
+prompt_template: |
+  An agreed action has no owner or no date. {prompt_fragment}
+  In one short sentence starting with your reason, ask who takes it and by when.
