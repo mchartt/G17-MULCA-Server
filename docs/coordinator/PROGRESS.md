@@ -15,14 +15,25 @@ Last update: 15 Nov 2026, M1 code done on server and Discord; waiting for Azure 
 | M4 · planning, check-in, CS7, decision questions | 29/11 | NOT STARTED |
 | M5 · calendar, demo (Slack only if ahead on 29/11) | 01/12 | NOT STARTED |
 
-Next exact step: fresh-eyes review of M1 (sub-agent), then start M2 (design
-interview, web adapter). Waiting on Matteo for the M1 live run: (1) Azure
-deployments + `muca-server/.env`, then `scripts/azure_probe.py`; (2) a Discord
-test server and bot (mulca `prototype/TRYING_ON_DISCORD.md`), token in
+Next exact step (resume here in a new chat): **M2, crea-sito phase 0**.
+The web app notebook exists at `mulca/prototype/webapp/docs/stato.md`
+(project "Ctrl+Alt+Design", guided mode, constraints recorded). Run the
+`cinematic-web-builder` skills in order, starting with `setup-iniziale`,
+then the design interview (`intervista-idea`, Mobbin, reference sites).
+In parallel with the design phases, the web adapter in the MULCA process
+(FastAPI + WebSocket, same `ScopeSession`) can be built test-first.
+
+Waiting on Matteo for the M1 live run: (1) Azure deployments +
+`muca-server/.env`, then `scripts/azure_probe.py`; (2) a Discord test server
+and bot (mulca `prototype/TRYING_ON_DISCORD.md`), token in
 `mulca/prototype/.env`. Live run: both processes with
 `MUCA_COORDINATOR_ENABLED=true` / `MULCA_COORDINATOR_ENABLED=true`,
-`/mulca link mode:ambient`, then `/coordinator profile`, `/coordinator kickoff`,
-Confirm on the card, `/coordinator plan`; note cost.
+`/mulca link mode:ambient`, then `/coordinator profile`, `/coordinator
+kickoff`, Confirm on the card, `/coordinator plan`; note the cost.
+
+Where things are: work on `group17/coordinator` in both clones on Matteo's
+PC (`WebstormProjects/group-coordinator`), mirrored to GitHub
+(`mchartt/G17-MULCA-Server`, `mchartt/G17-MULCA-Project`); GitLab untouched.
 
 ## M1 log
 
