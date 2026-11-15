@@ -68,6 +68,37 @@ async def assign_task(
         )
 
 
+async def update_task(
+    db: aiosqlite.Connection,
+    *,
+    task_id: str,
+    due_date: date | None = None,
+    owner_id: int | None = None,
+    status: TaskStatus | None = None,
+) -> None:
+    """Change only the given fields of a task (check-in options, blockers, status)."""
+    if due_date is not None:
+        await db.execute("UPDATE coord_task SET due_date = ? WHERE task_id = ?", (due_date.isoformat(), task_id))
+    if owner_id is not None:
+        await db.execute("UPDATE coord_task SET owner_id = ? WHERE task_id = ?", (owner_id, task_id))
+    if status is not None:
+        await db.execute("UPDATE coord_task SET status = ? WHERE task_id = ?", (status.value, task_id))
+
+
+async def delete_task(db: aiosqlite.Connection, task_id: str) -> None:
+    """Drop a task and its dependencies (a check-in option the group chose)."""
+    await db.execute("DELETE FROM coord_task_dependency WHERE task_id = ? OR depends_on = ?", (task_id, task_id))
+    await db.execute("DELETE FROM coord_task WHERE task_id = ?", (task_id,))
+
+
+async def add_dependency(db: aiosqlite.Connection, *, task_id: str, depends_on: str) -> None:
+    """`task_id` waits on `depends_on`."""
+    await db.execute(
+        "INSERT OR IGNORE INTO coord_task_dependency (task_id, depends_on) VALUES (?, ?)",
+        (task_id, depends_on),
+    )
+
+
 async def add_decision(db: aiosqlite.Connection, decision: Decision) -> None:
     """One closed decision in the decision log (FR10)."""
     await db.execute(

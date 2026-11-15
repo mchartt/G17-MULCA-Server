@@ -13,9 +13,9 @@ can change the project state.
                     6. APPLIED / REJECTED / SNOOZED and the change, in one transaction
 
 Buttons (the `action` of proposal_response):
-    confirm   charter, or a task_owner card with a suggested owner
+    confirm   charter, plan, blocker, or a task_owner card with a suggested owner
     take      "I'll take it": task_owner and delegation, the clicker becomes owner
-    choose    decision: `option` is the index of the chosen option
+    choose    decision and checkin: `option` is the index of the chosen option
     reject    any card: closed, nothing changes
     not_now   proactive cards only: closed as SNOOZED, and that strategy stays
               silent on that topic for SNOOZE_SECONDS (spec FR21, GL10)
@@ -36,14 +36,20 @@ from pydantic import BaseModel
 
 from .appliers import (
     StaleProposal,
+    blocker_applier,
     charter_applier,
+    checkin_applier,
     decision_applier,
+    plan_applier,
     snooze_applier,
     task_applier,
 )
 from .models import (
+    BlockerPayload,
     CharterPayload,
+    CheckinPayload,
     DecisionPayload,
+    PlanPayload,
     Proposal,
     ProposalKind,
     ProposalStatus,
@@ -268,5 +274,25 @@ class ProposalService:
                 decision_id=new_id(),
                 proposal_id=proposal.proposal_id,
             ), f"Decision saved: {payload.options[option].label}."
+
+        if kind is ProposalKind.PLAN and action == "confirm":
+            assert isinstance(payload, PlanPayload)
+            gone = [i.title for i in payload.items if i.owner_id is not None and i.owner_id not in participants]
+            if gone:
+                return f"A suggested owner is not in this group any more ({gone[0]}).", None, ""
+            return "", plan_applier(payload, new_id=new_id), f"Plan saved: {len(payload.items)} task(s)."
+
+        if kind is ProposalKind.CHECKIN and action == "choose":
+            assert isinstance(payload, CheckinPayload)
+            if option is None or not 0 <= option < len(payload.options):
+                return "Choose one of the options on the card.", None, ""
+            chosen = payload.options[option]
+            if chosen.new_owner_id is not None and chosen.new_owner_id not in participants:
+                return "That member is not in this group any more.", None, ""
+            return "", checkin_applier(chosen), f"Plan updated: {chosen.label}."
+
+        if kind is ProposalKind.BLOCKER and action == "confirm":
+            assert isinstance(payload, BlockerPayload)
+            return "", blocker_applier(payload, new_task_id=new_id()), f"Marked as blocked: \u201c{payload.title}\u201d."
 
         return f"This button does not apply to a {kind.value} card.", None, ""

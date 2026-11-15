@@ -14,7 +14,7 @@ Conversation, so all existing messages behave exactly as before. When the
 coordinator is OFF there is no wrapper at all.
 
 What it handles:
-  coordinator_command  profile | kickoff | state
+  coordinator_command  profile | kickoff | state | planning | checkin | task | why
   proposal_response    confirm | reject | take | choose | not_now
 and it answers with coordinator_proposal / coordinator_state / coordinator_notice.
 """
@@ -37,6 +37,8 @@ from ...protocol.coordinator import (
     ProposalResponseMessage,
 )
 from .models import MemberProfile, Proposal, ProposalKind
+from .plan_commands import PlanCommands
+from .plan_writer import PlanWriter
 from .proactive import ProactiveBridge
 from .proactive_writer import ProactiveWriter
 from .proposals import ProposalService
@@ -86,6 +88,18 @@ class CoordinatorRouter:
             if proactive_writer is not None
             else None
         )
+        # M4: planning, checkin, task, why (plan_commands.py).
+        self._plan = PlanCommands(
+            participants=lambda: self._conversation.participants(),
+            store=self._store_now,
+            service=self._service,
+            writer=PlanWriter(writer),
+            send_proposal=self._send_proposal,
+            notice=self._notice,
+            send_state=self._send_state,
+            unavailable=self._fail,
+            today=today,
+        )
 
     def __getattr__(self, name: str) -> Any:
         """Everything not defined here is the Conversation's (see module docstring)."""
@@ -116,6 +130,8 @@ class CoordinatorRouter:
                 await self._on_profile(message)
             elif message.command == "kickoff":
                 await self._start_kickoff(message)
+            elif message.command in ("planning", "checkin", "task", "why"):
+                await self._plan.handle(message)
             else:  # "state"
                 await self._send_state(request_id)
         except Exception:
@@ -127,6 +143,7 @@ class CoordinatorRouter:
             await asyncio.gather(self._kickoff, return_exceptions=True)
         if self.proactive is not None:
             await self.proactive.wait()
+        await self._plan.wait()
 
     async def _fail(self, event: str, request_id: str) -> None:
         """Project rule: a coordinator error never breaks the chat."""

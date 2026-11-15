@@ -290,6 +290,15 @@ class CoordinationStore:
             ],
         )
 
+    async def set_task_status(self, task_id: str, status: str) -> bool:
+        """A member updates a task's status (their own action, M4). False if no such task."""
+        db = await self._connect()
+        try:
+            cursor = await db.execute("UPDATE coord_task SET status = ? WHERE task_id = ?", (status, task_id))
+            return cursor.rowcount > 0
+        finally:
+            await db.close()
+
     async def active_snoozes(self, now: float) -> set[tuple[str, str]]:
         """(strategy_id, topic_key) pairs silenced by "Not now" and not yet over."""
         db = await self._connect()

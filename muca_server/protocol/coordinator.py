@@ -4,7 +4,8 @@ existing message.
 
 Client -> server:
   proposal_response    a member clicked a button on a proposal card
-  coordinator_command  a member ran a coordinator command (profile, kickoff, state)
+  coordinator_command  a member ran a coordinator command (profile, kickoff, state,
+                       planning, checkin, task, why)
 
 Server -> client:
   coordinator_proposal  a proposal card to show, or an update of one
@@ -64,7 +65,9 @@ class CoordinatorCommandMessage(CoordinatorIncomingMessage):
     """A coordinator command typed by a member, with its arguments."""
 
     event: Literal["coordinator_command"]
-    command: Literal["profile", "kickoff", "state"]
+    # M4 adds (additive): planning, checkin, task (a member updates a task's
+    # status), why (a question about a past decision).
+    command: Literal["profile", "kickoff", "state", "planning", "checkin", "task", "why"]
     member_id: int = Field(alias="memberId")
     args: dict[str, Any] = Field(default_factory=dict)
     channel: Channel = "discord"

@@ -14,19 +14,35 @@ One builder per kind (Strategy-like table in proposals.py chooses it):
                          DELEGATION  add the task with the member who took it
     decision_applier     DECISION    write the chosen option to the decision log
     snooze_applier       any proactive card, "Not now"
+    plan_applier         PLAN        add every task of the /planning list
+    checkin_applier      CHECKIN     change one task (date, owner) or drop it
+    blocker_applier      BLOCKER     mark a task blocked, record what it waits on
 """
 
 from __future__ import annotations
 
 from .models import (
+    BlockerPayload,
     Charter,
     CharterPayload,
+    CheckinOption,
     Decision,
     DecisionPayload,
     Milestone,
+    PlanPayload,
     TaskAssignmentPayload,
+    TaskStatus,
 )
-from .plan_writes import add_decision, add_snooze, add_task, assign_task, task_owner
+from .plan_writes import (
+    add_decision,
+    add_dependency,
+    add_snooze,
+    add_task,
+    assign_task,
+    delete_task,
+    task_owner,
+    update_task,
+)
 from .store import Applier, CoordinationStore
 
 
@@ -131,5 +147,59 @@ def snooze_applier(*, strategy_id: str, topic: str, until: float) -> Applier:
 
     async def apply(db) -> None:
         await add_snooze(db, strategy_id=strategy_id, topic=topic, until=until)
+
+    return apply
+
+
+# ----------------------------------------------------------------------
+# M4
+# ----------------------------------------------------------------------
+
+
+def plan_applier(payload: PlanPayload, *, new_id) -> Applier:
+    """/planning confirmed: every task of the list enters the plan."""
+
+    async def apply(db) -> None:
+        for item in payload.items:
+            await add_task(db, task_id=new_id(), title=item.title, owner_id=item.owner_id, due_date=item.due_date)
+
+    return apply
+
+
+def checkin_applier(option: CheckinOption) -> Applier:
+    """The check-in option the group chose: change one task, or drop it."""
+
+    async def apply(db) -> None:
+        exists, _ = await task_owner(db, option.task_id)
+        if not exists:
+            raise StaleProposal("This task is no longer in the plan.")
+        if option.drop:
+            await delete_task(db, option.task_id)
+            return
+        await update_task(db, task_id=option.task_id, due_date=option.new_due_date, owner_id=option.new_owner_id)
+
+    return apply
+
+
+def blocker_applier(payload: BlockerPayload, *, new_task_id: str) -> Applier:
+    """
+    CS7 confirmed: the task is marked blocked (added if the plan did not have
+    it) and, if the card names one, the task it waits on is recorded.
+    """
+
+    async def apply(db) -> None:
+        task_id = payload.task_id
+        if task_id is None:
+            task_id = new_task_id
+            await add_task(db, task_id=task_id, title=payload.title, owner_id=None, due_date=None)
+        else:
+            exists, _ = await task_owner(db, task_id)
+            if not exists:
+                raise StaleProposal("This task is no longer in the plan.")
+        await update_task(db, task_id=task_id, status=TaskStatus.BLOCKED)
+        if payload.depends_on_task_id:
+            exists, _ = await task_owner(db, payload.depends_on_task_id)
+            if exists:
+                await add_dependency(db, task_id=task_id, depends_on=payload.depends_on_task_id)
 
     return apply

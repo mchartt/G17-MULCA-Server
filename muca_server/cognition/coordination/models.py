@@ -16,7 +16,7 @@ from datetime import date
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Short limits keep cards readable on Discord and Slack (one card, no wall
 # of text) and stop a runaway model answer from filling the database.
@@ -128,6 +128,9 @@ class ProposalKind(StrEnum):
     TASK_OWNER = "task_owner"  # M3: CS5, an agreed action gets an owner and a date
     DELEGATION = "delegation"  # M3: CS2, one member takes a simple task
     DECISION = "decision"  # M3: CS3, the group picks one option, with its reason
+    PLAN = "plan"  # M4: /planning, the tasks the members wrote with suggested owners
+    CHECKIN = "checkin"  # M4: /checkin, up to three ways to fix what is late or at risk
+    BLOCKER = "blocker"  # M4: CS7, a task is blocked or waits on another
 
 
 class ProposalStatus(StrEnum):
@@ -225,6 +228,69 @@ class DecisionPayload(_Model):
     options: list[DecisionOption] = Field(min_length=2, max_length=3)
 
 
+# ----------------------------------------------------------------------
+# M4: planning, check-in, blockers
+# ----------------------------------------------------------------------
+
+
+class PlanItem(_Model):
+    """One task the members wrote, with the owner the coordinator suggests and why."""
+
+    title: str = Field(min_length=1, max_length=MAX_TITLE)
+    owner_id: int | None = None
+    reason: str = Field(default="", max_length=MAX_QUOTE)
+    due_date: date | None = None
+
+
+class PlanPayload(_Model):
+    """/planning: the whole list is confirmed (or rejected) with one click."""
+
+    items: list[PlanItem] = Field(min_length=1, max_length=15)
+
+
+class CheckinOption(_Model):
+    """
+    One way to fix a risk found by the check-in: change one task (new date,
+    new owner, or drop it). At least one change is required.
+    """
+
+    label: str = Field(min_length=1, max_length=MAX_TITLE)
+    task_id: str = Field(min_length=1, max_length=40)
+    new_due_date: date | None = None
+    new_owner_id: int | None = None
+    drop: bool = False
+
+    @model_validator(mode="after")
+    def _one_change(self) -> "CheckinOption":
+        if not self.drop and self.new_due_date is None and self.new_owner_id is None:
+            raise ValueError("an option must change the date, the owner, or drop the task")
+        return self
+
+
+class CheckinPayload(_Model):
+    """
+    /checkin: what the server found comparing plan and dates (`findings`,
+    computed in code by checkin.py, never by the model) and up to 3 options.
+    """
+
+    findings: list[str] = Field(min_length=1, max_length=10)
+    options: list[CheckinOption] = Field(min_length=1, max_length=3)
+
+
+class BlockerPayload(_Model):
+    """
+    CS7: a task is blocked, or waits on another one. Confirming marks the task
+    blocked and records the dependency; `helper_id` is who could help.
+    """
+
+    context: ProactiveContext
+    task_id: str | None = None
+    title: str = Field(min_length=1, max_length=MAX_TITLE)
+    depends_on_task_id: str | None = None
+    helper_id: int | None = None
+    question: str = Field(default="", max_length=MAX_QUOTE)
+
+
 # Which payload model belongs to which kind. A new kind = one new line here,
 # one payload model above and one applier in appliers.py.
 PAYLOAD_MODELS: dict[ProposalKind, type[_Model]] = {
@@ -232,6 +298,9 @@ PAYLOAD_MODELS: dict[ProposalKind, type[_Model]] = {
     ProposalKind.TASK_OWNER: TaskAssignmentPayload,
     ProposalKind.DELEGATION: TaskAssignmentPayload,
     ProposalKind.DECISION: DecisionPayload,
+    ProposalKind.PLAN: PlanPayload,
+    ProposalKind.CHECKIN: CheckinPayload,
+    ProposalKind.BLOCKER: BlockerPayload,
 }
 
 

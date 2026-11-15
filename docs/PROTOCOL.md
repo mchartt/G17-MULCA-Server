@@ -99,7 +99,7 @@ wins; every later click is refused and every channel gets the updated card.
 | Event | Fields | Meaning |
 |---|---|---|
 | `proposal_response` | `proposalId`, `action` (`confirm` \| `reject` \| `take` \| `choose` \| `not_now`), `option` (integer, only for `choose`), `memberId` (a `participants` id), `channel` (`discord` \| `web` \| `slack` \| `calendar`, default `discord`), `requestId` (echoed in the notice) | A member clicked a card button. Refused if `memberId` is not in the session's text roster. |
-| `coordinator_command` | `command` (`profile` \| `kickoff` \| `state`), `memberId`, `args` (object), `channel`, `requestId` (echoed back) | `profile`: `args` = `display_name?`, `discipline`, `skills` (list or comma text), `weekly_hours`. `kickoff`: `args.text` = the assignment text; answered with a charter card. `state`: answered with `coordinator_state`. |
+| `coordinator_command` | `command` (`profile` \| `kickoff` \| `state` \| `planning` \| `checkin` \| `task` \| `why`), `memberId`, `args` (object), `channel`, `requestId` (echoed back) | `profile`: `args` = `display_name?`, `discipline`, `skills` (list or comma text), `weekly_hours`. `kickoff`: `args.text` = the assignment text; answered with a charter card. `state`: answered with `coordinator_state`. M4: `planning`: `args.text` = tasks, one per line → a `plan` card. `checkin`: no args → a notice "on track", or a `checkin` card. `task`: `args.task` (task id or its number in the plan), `args.status` (`todo` \| `doing` \| `done` \| `blocked`) → applied at once (a member's own action), new state. `why`: `args.question` → a notice with the answer and its source (the decisions it rests on). |
 
 ### Server → client
 
@@ -117,6 +117,14 @@ fires. Buttons and the `action` they send:
 | `task_owner` | `cs5_owner_and_date` | `task_id` (existing task or null), `title`, `owner_id` (suggested member or null), `due_date` | Confirm (`confirm`, only with a suggested owner), I'll take it (`take`), Reject, Not now |
 | `delegation` | `cs2_delegate_simple_task` | `title`, `due_date`, `return_to` (topic to go back to); never an owner | I'll take it (`take`), Reject, Not now |
 | `decision` | `cs3_close_decision` | `question`, `options` (2–3 of `label`, `argument`) | one per option (`choose` + `option` index), Reject, Not now |
+| `blocker` (M4) | `cs7_blockers_dependencies` | `task_id` (plan task or null), `title`, `depends_on_task_id`, `helper_id`, `question` | Confirm (marks it blocked, records the dependency), Reject, Not now |
+
+Cards answering a command (M4), no Why?/Not now:
+
+| `kind` | Payload | Buttons |
+|---|---|---|
+| `plan` | `items` (1–15 of `title`, `owner_id` suggested or null, `reason`, `due_date`) | Confirm (adds every task), Reject |
+| `checkin` | `findings` (computed by the server, not the model), `options` (1–3 of `label`, `task_id`, `new_due_date`, `new_owner_id`, `drop`) | one per option (`choose` + `option`), Reject |
 
 `not_now` closes the card as `snoozed` and silences that strategy on that
 topic for 30 minutes. "Why?" needs no event: the card already carries the

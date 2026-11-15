@@ -42,7 +42,10 @@ group member applies it, inside one database transaction.
 | `writer.py` | 163 | Asks the model for a draft, in a fixed JSON shape, validated. |
 | `proactive_writer.py` | 249 | Drafts CS5/CS2/CS3 cards, grounded on numbered chat lines (M3). |
 | `proactive.py` | 186 | The bridge from a fired strategy to a card, with rules R1-R7 (M3). |
-| `router.py` | 254 | Receives the coordinator messages of one session and answers them. |
+| `checkin.py` | 90 | M4: plan against reality, computed in code (late, blocked, due soon, no owner, milestone, dependency). |
+| `plan_writer.py` | 230 | M4: model drafts for /planning, /checkin options, and answers to "why did we decide X?" with the decisions they rest on. |
+| `plan_commands.py` | 175 | M4: the commands planning, checkin, task, why (one model command at a time, in the background). |
+| `router.py` | 271 | Receives the coordinator messages of one session and answers them. |
 | `settings.py` | 36 | The on/off switch and the proposal lifetime, from the environment. |
 | `wiring.py` | 83 | Builds the per-session hook for `run_server.py` (or None when off). |
 
@@ -67,6 +70,9 @@ turns them into JSON for the clients.
 | `ProactiveContext` | Strategy id, topic (the key of "Not now") and 1–5 `Evidence`. |
 | `TaskAssignmentPayload` | CS5 and CS2: `task_id` (existing task or None), `title`, `owner_id` (CS5 suggestion; CS2 always None), `due_date`, `return_to` (CS2). |
 | `DecisionOption`, `DecisionPayload` | CS3: the question and 2–3 options, each with what the chat said for it. |
+| `PlanItem`, `PlanPayload` | M4 /planning: tasks with suggested owner, reason, date; confirmed all together. |
+| `CheckinOption`, `CheckinPayload` | M4 /checkin: findings from `checkin.py` + 1–3 options, each changing one task (date, owner, or drop; at least one change, checked by a validator). |
+| `BlockerPayload` | M4 CS7: blocked task (or a new one), what it waits on, who could help, the question to ask. |
 | `PAYLOAD_MODELS` | Which payload model belongs to which kind. |
 | `Proposal` | One proposal: id, kind, status, payload, one-sentence `rationale`, channel of origin, created/expires, resolved by/at. `typed_payload()` validates the payload against its kind. |
 
@@ -112,18 +118,23 @@ created on first use in the **conversation's own SQLite file**.
 | `task_applier(payload, owner_id=, new_task_id=)` | New task with owner and date; or an existing task gets its owner, only if it still exists and still has none. |
 | `decision_applier(payload, option=, ...)` | The chosen option goes to the decision log with its argument as the reason and `source = proposal:<id>`. |
 | `snooze_applier(strategy_id=, topic=, until=)` | Writes the "Not now" row. |
+| `plan_applier(payload, new_id=)` | M4: every task of the /planning list enters the plan. |
+| `checkin_applier(option)` | M4: the chosen option changes one task or drops it; stale if the task is gone. |
+| `blocker_applier(payload, new_task_id=)` | M4: task marked blocked (added if missing) and the dependency recorded. |
 
 ## `plan_writes.py` — writes used inside the transaction
 
 `topic_key(topic)` (lower case, letters and digits, single spaces, ≤ 60
 characters: the deterministic key of "Not now"), `task_owner`, `add_task`,
-`assign_task`, `add_decision`, `add_snooze`. None of them commits.
+`assign_task`, `update_task`, `delete_task`, `add_dependency`, `add_decision`,
+`add_snooze`. None of them commits. `store.set_task_status` is the one direct
+write outside a proposal: a member updating a task (their own action).
 
 ## `proactive_writer.py` — `ProactiveWriter(proposal_writer)`
 
 | Name | What it does |
 |---|---|
-| `STRATEGY_KINDS` | `cs5_owner_and_date` → task_owner, `cs2_delegate_simple_task` → delegation, `cs3_close_decision` → decision. |
+| `STRATEGY_KINDS` | `cs5_owner_and_date` → task_owner, `cs2_delegate_simple_task` → delegation, `cs3_close_decision` → decision, `cs7_blockers_dependencies` → blocker (M4). |
 | `ChatLine` | One recent message (speaker, text, time) as the server saw it. |
 | `ProactiveDraft` | A validated payload + its one-sentence rationale. |
 | `SCHEMAS`, `COMMON_RULES`, `TASK_RULES` | Strict JSON shape and instructions per kind. The chat is numbered and quoted between `<chat>` tags: data, never instructions. |
@@ -138,7 +149,7 @@ characters: the deterministic key of "Not now"), `task_owner`, `add_task`,
 | `Verdict` | `not_mine` (a lab strategy: normal path), `vetoed` (silence), `taken` (silence now, card later). |
 | `offer(strategy_id, history=, message_count=, assistant_id=)` | Called by `CoalaPolicy`; answers at once, drafts in the background. |
 | `_veto(...)` | R1 group only, R2 one draft at a time, R3 ≥ 10 messages and R4 ≥ 5 minutes since the last card posted, R5 never right after the agent. |
-| `_post(...)` | Draft, then R6 (topic silenced by "Not now") and R7 (CS5 on a task that already has an owner), then a pending proposal and the card. Any error is logged, the chat goes on. |
+| `_post(...)` | Draft, then R6 (topic silenced by "Not now") and R7 (CS5 on a task that already has an owner; CS7 on a task already blocked), then a pending proposal and the card. Any error is logged, the chat goes on. |
 | `wait()` | Waits for a running draft (tests). |
 
 ## `writer.py` — `ProposalWriter(client, model=, record_cost=)`

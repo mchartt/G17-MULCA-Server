@@ -22,7 +22,8 @@ rules 4.3 and 11, spec NFR3, GL4, GL10):
     R5  never right after the agent's own message (no two in a row)
     R6  "Not now": a silenced (strategy, topic) never gets a card (checked
         after the draft, when the topic is known)
-    R7  CS5: no card for a task the plan already shows with an owner
+    R7  CS5: no card for a task the plan already shows with an owner;
+        CS7: no card for a task already marked blocked
 
 R3 and R4 count only cards actually posted: a draft that fails or is
 dropped does not silence the group. The policy's own cooldown
@@ -39,7 +40,7 @@ from datetime import date
 from enum import StrEnum
 from typing import Any
 
-from .models import Proposal, ProposalKind, TaskAssignmentPayload
+from .models import BlockerPayload, Proposal, ProposalKind, TaskAssignmentPayload, TaskStatus
 from .plan_writes import topic_key
 from .proactive_writer import STRATEGY_KINDS, ChatLine, ProactiveDraft, ProactiveWriter
 from .proposals import ProposalService
@@ -183,4 +184,8 @@ def _dropped(draft: ProactiveDraft, silenced: list[str], tasks) -> str:
         title = topic_key(draft.payload.title)
         if any(t.owner_id is not None and topic_key(t.title) == title for t in tasks):
             return "R7 the plan already has this task with an owner"
+    if draft.kind is ProposalKind.BLOCKER:
+        assert isinstance(draft.payload, BlockerPayload)
+        if any(t.task_id == draft.payload.task_id and t.status is TaskStatus.BLOCKED for t in tasks):
+            return "R7 the task is already marked blocked"
     return ""

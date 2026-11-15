@@ -24,6 +24,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from .models import (
+    BlockerPayload,
     DecisionPayload,
     Evidence,
     MemberProfile,
@@ -41,6 +42,7 @@ STRATEGY_KINDS: dict[str, ProposalKind] = {
     "cs5_owner_and_date": ProposalKind.TASK_OWNER,
     "cs2_delegate_simple_task": ProposalKind.DELEGATION,
     "cs3_close_decision": ProposalKind.DECISION,
+    "cs7_blockers_dependencies": ProposalKind.BLOCKER,  # M4
 }
 MAX_EVIDENCE = 5
 
@@ -57,7 +59,7 @@ class ChatLine:
 @dataclass(frozen=True, slots=True)
 class ProactiveDraft:
     kind: ProposalKind
-    payload: TaskAssignmentPayload | DecisionPayload
+    payload: TaskAssignmentPayload | DecisionPayload | BlockerPayload
     rationale: str
 
 
@@ -115,6 +117,16 @@ SCHEMAS: dict[ProposalKind, dict[str, Any]] = {
             },
         },
     ),
+    ProposalKind.BLOCKER: _schema(
+        "blocker",
+        {
+            "task_id": NULLABLE_STRING,
+            "title": {"type": "string"},
+            "depends_on_task_id": NULLABLE_STRING,
+            "helper_id": {"type": ["integer", "null"]},
+            "question": {"type": "string"},
+        },
+    ),
 }
 
 COMMON_RULES = """\
@@ -152,6 +164,15 @@ does not close it.
 - options: 2 or 3 options actually proposed in the chat; for each, `label`
   (a few words) and `argument` (one sentence: what was said for it, in the
   members' terms, with its main drawback if one was said).""",
+    ProposalKind.BLOCKER: """\
+Situation: a member is blocked or waiting on someone else's work, or a task is
+past its date with no update, and a deadline is at risk.
+- task_id: the plan task that is blocked, or null if it is not in the plan.
+- title: that task, short.
+- depends_on_task_id: the plan task it waits on, or null if none is named.
+- helper_id: the member who can unblock it (the owner of the task it waits on,
+  or the member whose skills fit), only ids from the member list, or null.
+- question: one short question to the blocked member about what blocks them.""",
 }
 
 
@@ -233,6 +254,14 @@ def _validate(kind, strategy_id, data, chat, members, tasks, today) -> Proactive
 
     if kind is ProposalKind.DECISION:
         return ProactiveDraft(kind, DecisionPayload(context=context, **data), rationale)
+    if kind is ProposalKind.BLOCKER:
+        ids = {t.task_id for t in tasks}
+        for key in ("task_id", "depends_on_task_id"):
+            if data[key] is not None and data[key] not in ids:
+                raise ValueError(f"{key} is not a plan task")
+        if data["helper_id"] is not None and data["helper_id"] not in members:
+            raise ValueError("helper is not a member")
+        return ProactiveDraft(kind, BlockerPayload(context=context, **data), rationale)
 
     due = data.get("due_date")
     if due is not None and date.fromisoformat(due) < today:

@@ -89,6 +89,7 @@ COORDINATOR_STRATEGY_IDS = [
     "cs5_owner_and_date",
     "cs2_delegate_simple_task",
     "cs3_close_decision",
+    "cs7_blockers_dependencies",
 ]
 ASSISTANT_NAME = "MULCA"
 
