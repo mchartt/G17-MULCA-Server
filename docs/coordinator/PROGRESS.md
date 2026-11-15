@@ -16,7 +16,7 @@ Apple-like) built; **Vercel deploy prepared but not published** (see "Deploy").
 | M2 · web app "Cadence" | 23/11 | **CODE DONE, NOT VERIFIED (live)** — film, web adapter, landing + console v2; offline e2e, Vitest, axe pass; live run needs Azure |
 | M2b · online preview on Vercel | 16/11 | **PREPARED, NOT PUBLISHED** — static build ready, needs a Vercel token or a login from Matteo's terminal |
 | M3 · proactive strategies CS5, CS2, CS3 | 26/11 | **CODE DONE, NOT VERIFIED (live)** — server, Discord, web; Why? and Not now; offline e2e, Vitest, axe pass |
-| M4 · planning, check-in, CS7, decision questions | 29/11 | NOT STARTED |
+| M4 · planning, check-in, CS7, decision questions | 29/11 | **CODE DONE, NOT VERIFIED (live)** — server, Discord, web; offline e2e, Vitest, axe pass |
 | M5 · calendar, demo (Slack only if ahead on 29/11) | 01/12 | NOT STARTED |
 
 ## Next steps, in order (resume here)
@@ -127,6 +127,24 @@ The shell is a Linux VM; only the connected folder survives between sessions.
   messages and cards rise in. All off with prefers-reduced-motion.
 - Icons: Font Awesome Free (CC BY 4.0, credited in the footer).
 - Screens: `webapp/docs/screens/` (film, sections, entry, console, dialog, mobile).
+
+## M4 log
+
+- 15/11 · Server: commands `planning`, `checkin`, `task`, `why` (protocol
+  extended), `plan_commands.py` (one model command at a time, in the
+  background), `plan_writer.py` (plan, check-in options, answers with the
+  decisions they rest on), `checkin.py` (findings in code), kinds plan,
+  checkin, blocker; strategy `cs7_blockers_dependencies` through the M3 bridge
+  (R7: no card for a task already blocked). Tests: 30 new; server suite 571
+  passed + the known voice failure; new modules 94–100 % covered. Cost 0.
+- 15/11 · Discord: `/coordinator planning` (tasks separated by `;`), `checkin`,
+  `task` (number from `/coordinator plan`), `why`; plan, checkin, blocker
+  cards. Web: Plan tasks dialog, Check-in button, status select per task and
+  "Ask why" in the panel; cards plan, checkin, blocker. MULCA 290 passed,
+  Vitest 27, Playwright 5, axe 0 violations (also planning dialog and status selects).
+- 15/11 · Found and fixed: a web frame that did not validate (e.g. an unknown
+  command) left the button waiting forever; now its request is answered with
+  a refusing notice (test).
 
 ## M3 log
 

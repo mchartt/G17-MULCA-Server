@@ -123,3 +123,38 @@ Newest first. Each entry: date, decision, alternatives, reason, status.
   posted; a failed or dropped draft does not silence the group. The counters
   live in the session (a server restart resets them); the strategy's own
   cooldown is also persisted by the lab's snapshot.
+
+## 2026-11-15 · M4: what the check-in finds is computed in code
+
+- **Decision:** `checkin.py` lists late, blocked, due-soon, ownerless tasks,
+  milestones within 48 h with open tasks and dependencies due later than the
+  task that waits on them. The model only proposes ≤ 3 options, each changing
+  one real task (new date, new owner, or drop). Nothing to fix = a notice and
+  no model call.
+- **Reason:** the facts on the card must never be invented (rule 0); cheaper.
+
+## 2026-11-15 · M4: a task's status is a member's own action
+
+- **Decision:** `task` (status todo/doing/done/blocked) is written at once by
+  `CoordinationStore.set_task_status`, without a card, like the profile.
+- **Reason:** a member reporting their own progress is not a change proposed
+  by the model (rule "the model never writes state" still holds).
+
+## 2026-11-15 · M4: /planning from a written list
+
+- **Decision:** the members write the tasks (web dialog, one per line;
+  Discord, separated by `;`), the coordinator suggests owners with a reason and
+  dates, the group confirms the whole list with one click (or rejects and
+  sends a new list).
+- **Alternative:** the agent asks each member in turn and collects answers
+  over several messages (Matteo's first idea, open to a simpler way).
+- **Reason:** one round trip, works the same on every channel, explainable;
+  the "ask the members" part is the group writing the list together.
+
+## 2026-11-15 · M4: "why did we decide X?" answers only from the log
+
+- **Decision:** a dedicated command (`why`: web panel, Discord
+  `/coordinator why`); the answer names the decisions it rests on, checked
+  against the log, and the server writes the source line (who, when, card).
+- **Limit:** "@coordinator why…" typed in the chat goes to the lab's main
+  agent, which does not read the decision log.
