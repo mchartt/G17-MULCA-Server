@@ -53,6 +53,8 @@ class ProposalResponseMessage(CoordinatorIncomingMessage):
     # The clicking member's participant id (Participant.id).
     member_id: int = Field(alias="memberId")
     channel: Channel = "discord"
+    # Echoed back in the notice, so the client can answer the right click.
+    request_id: str = Field(default="", alias="requestId")
 
 
 class CoordinatorCommandMessage(CoordinatorIncomingMessage):

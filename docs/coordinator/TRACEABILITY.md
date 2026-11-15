@@ -17,7 +17,7 @@ Last update: 15 Nov 2026.
 |---|---|---|
 | The model never writes state; a member's confirmation applies a proposal after re-validation | PARTIAL (charter only) | `proposals.py` `respond`; tests `test_coordinator_proposals.py` (all), `test_coordinator_router.py::test_kickoff_then_confirm_saves_the_charter` |
 | First valid click wins | DONE (server) | `store.py` `resolve_proposal`; `test_coordinator_store.py::test_two_simultaneous_clicks_apply_exactly_once` |
-| Click from a non-member refused | DONE (server) | `test_coordinator_proposals.py::test_a_click_from_outside_the_group_is_refused` |
+| Click from a non-member refused | DONE (server + Discord, not live) | `test_coordinator_proposals.py::test_a_click_from_outside_the_group_is_refused` |
 | Protocol extended, not changed | DONE | `protocol/coordinator.py`; `test_coordinator_protocol.py`; full lab suite green (475 passed, 1 pre-existing failure) |
 | Switch off = behaviour unchanged | DONE | `test_coordinator_switch.py` (4 tests off); lab suite green with the switch off |
 | Model error never breaks the chat | DONE (server) | `router.py` `route_coordinator`; `test_..._router.py::test_an_unexpected_error_never_breaks_the_chat`, `test_kickoff_when_the_model_fails_says_unavailable` |
@@ -28,8 +28,8 @@ Last update: 15 Nov 2026.
 
 | Item | Status | Proof / what is missing |
 |---|---|---|
-| UC1 create/join space, data notice, profile | PARTIAL | server: `coordinator_command profile` (tests). Missing: Discord `/coordinator profile`, web app (M2) |
-| UC2 kickoff: assignment → deliverables and deadlines → charter card | PARTIAL | server: `kickoff` → charter proposal → confirm (tests, WebSocket test). Missing: Discord command and card, "at most two questions", live run |
+| UC1 create/join space, data notice, profile | PARTIAL | `/coordinator profile` on Discord → server → `coord_member` (tests `test_coordinator_router.py`, `test_coordinator_discord.py`). Missing: web app (M2), live run |
+| UC2 kickoff: assignment → deliverables and deadlines → charter card | PARTIAL | `/coordinator kickoff` → charter card in the channel → Confirm → saved; card redrawn as Confirmed (`test_coordinator_discord.py::test_kickoff_card_and_confirm_end_to_end`). Missing: "at most two questions", web app, live run with Azure |
 | CS5 owner and date | NOT DONE | M3 |
 | CS2 delegate a simple task | NOT DONE | M3 |
 | CS3 close a decision | NOT DONE | M3 |
@@ -38,7 +38,7 @@ Last update: 15 Nov 2026.
 | CS7 blockers and dependencies | NOT DONE | M4 |
 | UC9 "why did we decide X?" with source | NOT DONE | decisions table exists (`coord_decision.source`); M4 |
 | G5 Why? and Not now on every proactive card | NOT DONE | M3 |
-| UC9 project panel always visible | PARTIAL | server: `coordinator_state`. Missing: web app (M2) |
+| UC9 project panel always visible | PARTIAL | server: `coordinator_state`; Discord `/coordinator plan` (private embed). Missing: web app panel (M2) |
 | N3 calendar feed | NOT DONE | M5 |
 
 ## Out of the demo (shown with the clickable prototype)

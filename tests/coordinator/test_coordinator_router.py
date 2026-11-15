@@ -46,7 +46,7 @@ def command(name, member=1, **args):
 def click(proposal_id, action="confirm", member=1, channel="web"):
     return parse_incoming_message(
         {"event": "proposal_response", "proposalId": proposal_id,
-         "action": action, "memberId": member, "channel": channel}
+         "action": action, "memberId": member, "channel": channel, "requestId": "c1"}
     )
 
 
@@ -64,7 +64,10 @@ async def test_kickoff_then_confirm_saves_the_charter(store):
     router, queue = make_router(store, GOOD_CHARTER)
 
     await router.route_coordinator(command("kickoff", text="Assignment text"))
-    (card,) = of_type(await drain(queue), CoordinatorProposalMessage)
+    sent = await drain(queue)
+    (card,) = of_type(sent, CoordinatorProposalMessage)
+    (posted,) = of_type(sent, CoordinatorNoticeMessage)
+    assert posted.ok and posted.request_id == "r1"  # the command gets its answer
     assert card.proposal["status"] == "pending"
     assert card.proposal["kind"] == "charter"
     assert card.proposal["origin_channel"] == "discord"
@@ -88,6 +91,7 @@ async def test_a_click_from_a_non_member_is_refused(store):
     sent = await drain(queue)
     (notice,) = of_type(sent, CoordinatorNoticeMessage)
     assert not notice.ok
+    assert notice.request_id == "c1"  # answers the right click
     assert not of_type(sent, CoordinatorStateMessage)
     assert (await store.load_state()).charter is None
 

@@ -147,6 +147,11 @@ class CoordinatorRouter:
             origin_channel=message.channel,
         )
         await self._send_proposal(proposal)
+        await self._notice(
+            True,
+            "Charter card posted: any member can confirm or reject it.",
+            message.request_id,
+        )
 
     async def _on_response(self, message: ProposalResponseMessage) -> None:
         outcome = await self._service().respond(
@@ -158,7 +163,7 @@ class CoordinatorRouter:
         if outcome.proposal is not None:
             # Every channel redraws the card (applied, rejected, expired...).
             await self._send_proposal(outcome.proposal)
-        await self._notice(outcome.ok, outcome.message, "")
+        await self._notice(outcome.ok, outcome.message, message.request_id)
         if outcome.ok:
             await self._send_state("")
 

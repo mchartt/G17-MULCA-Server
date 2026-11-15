@@ -2,24 +2,27 @@
 
 **Read this file first.** It says where the work really is.
 
-Last update: 15 Nov 2026, M1 server side done; next: M1 Discord side.
+Last update: 15 Nov 2026, M1 code done on server and Discord; waiting for Azure + a Discord test bot for the live closing run.
 
 ## Where we are
 
 | Stage | Due | Status |
 |---|---|---|
 | Phase 0 · verify, no source changes | 16/11 | **DONE except the live Azure probe** (waiting for deployments + `.env`) |
-| M1 · Azure + project state on Discord | 20/11 | **IN PROGRESS** — server side done and tested (see below); Discord side next; Azure live probe still waiting |
+| M1 · Azure + project state on Discord | 20/11 | **CODE DONE, NOT VERIFIED (live)** — server + Discord built and tested; closing live run needs Azure and a Discord test bot |
 | M2 · web app | 23/11 | NOT STARTED |
 | M3 · proactive strategies CS5, CS2, CS3 | 26/11 | NOT STARTED |
 | M4 · planning, check-in, CS7, decision questions | 29/11 | NOT STARTED |
 | M5 · calendar, demo (Slack only if ahead on 29/11) | 01/12 | NOT STARTED |
 
-Next exact step: MULCA side of M1 — `mulca_discord/coordinator/` with
-`/coordinator profile|kickoff|plan`, the persistent charter card (Confirm /
-Reject), and the handling of `coordinator_proposal|state|notice` in
-`muca_client.py` / `sessions.py`.
-Waiting on Matteo: Azure deployments + `.env`, then `scripts/azure_probe.py`.
+Next exact step: fresh-eyes review of M1 (sub-agent), then start M2 (design
+interview, web adapter). Waiting on Matteo for the M1 live run: (1) Azure
+deployments + `muca-server/.env`, then `scripts/azure_probe.py`; (2) a Discord
+test server and bot (mulca `prototype/TRYING_ON_DISCORD.md`), token in
+`mulca/prototype/.env`. Live run: both processes with
+`MUCA_COORDINATOR_ENABLED=true` / `MULCA_COORDINATOR_ENABLED=true`,
+`/mulca link mode:ambient`, then `/coordinator profile`, `/coordinator kickoff`,
+Confirm on the card, `/coordinator plan`; note cost.
 
 ## M1 log
 
@@ -32,6 +35,12 @@ Waiting on Matteo: Azure deployments + `.env`, then `scripts/azure_probe.py`.
   Tests: 55 new, all green; lab suite 475 passed + the 1 known failure;
   coverage of new modules 99–100 % (`coverage run --source=muca_server -m
   pytest tests/coordinator`). Cost: 0 (no model call). Live: NOT VERIFIED.
+- 15/11 · `proposal_response` gains `requestId`; kickoff also answers with a
+  notice (Discord needs an answer to every command).
+- 15/11 · Discord side: `mulca_discord/coordinator/` (commands, bridge,
+  cards); hooks in `muca_client.py`, `sessions.py`, `__main__.py`.
+  Tests: 21 new (one end to end against a real local MUCA-Server with the
+  coordinator on); MULCA suite 257 passed; coverage 98–100 %.
 
 ## How to measure coverage
 

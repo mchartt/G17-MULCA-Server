@@ -98,7 +98,7 @@ wins; every later click is refused and every channel gets the updated card.
 
 | Event | Fields | Meaning |
 |---|---|---|
-| `proposal_response` | `proposalId`, `action` (`confirm` \| `reject`), `memberId` (a `participants` id), `channel` (`discord` \| `web` \| `slack` \| `calendar`, default `discord`) | A member clicked a card button. Refused if `memberId` is not in the session's text roster. |
+| `proposal_response` | `proposalId`, `action` (`confirm` \| `reject`), `memberId` (a `participants` id), `channel` (`discord` \| `web` \| `slack` \| `calendar`, default `discord`), `requestId` (echoed in the notice) | A member clicked a card button. Refused if `memberId` is not in the session's text roster. |
 | `coordinator_command` | `command` (`profile` \| `kickoff` \| `state`), `memberId`, `args` (object), `channel`, `requestId` (echoed back) | `profile`: `args` = `display_name?`, `discipline`, `skills` (list or comma text), `weekly_hours`. `kickoff`: `args.text` = the assignment text; answered with a charter card. `state`: answered with `coordinator_state`. |
 
 ### Server → client
