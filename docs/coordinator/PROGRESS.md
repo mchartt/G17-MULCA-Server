@@ -3,47 +3,62 @@
 **Read this file first.** It says where the work really is. It is written so a
 new chat can resume without the old one.
 
-Last update: 15 Nov 2026, late evening. M1 and M2 code done and tested offline;
-both wait for Azure for the live closing run. Cadence interface v2 (soft,
-Apple-like) built; **Vercel deploy prepared but not published** (see "Deploy").
+Last update: 15 Nov 2026, night. **All stages M1–M5 built and tested
+offline.** What is left needs Matteo: Azure (credits not activated yet), the
+live runs, the Discord test bot, the Vercel publish. Nothing is DONE in the
+TRACEABILITY sense until its live run is noted.
 
 ## Where we are
 
 | Stage | Due | Status |
 |---|---|---|
-| Phase 0 · verify, no source changes | 16/11 | **DONE except the live Azure probe** (waiting for deployments + `.env`) |
-| M1 · Azure + project state on Discord | 20/11 | **CODE DONE, NOT VERIFIED (live)** — server + Discord built and tested; closing live run needs Azure and a Discord test bot |
-| M2 · web app "Cadence" | 23/11 | **CODE DONE, NOT VERIFIED (live)** — film, web adapter, landing + console v2; offline e2e, Vitest, axe pass; live run needs Azure |
-| M2b · online preview on Vercel | 16/11 | **PREPARED, NOT PUBLISHED** — static build ready, needs a Vercel token or a login from Matteo's terminal |
-| M3 · proactive strategies CS5, CS2, CS3 | 26/11 | **CODE DONE, NOT VERIFIED (live)** — server, Discord, web; Why? and Not now; offline e2e, Vitest, axe pass |
-| M4 · planning, check-in, CS7, decision questions | 29/11 | **CODE DONE, NOT VERIFIED (live)** — server, Discord, web; offline e2e, Vitest, axe pass |
-| M5 · calendar, demo (Slack only if ahead on 29/11) | 01/12 | NOT STARTED |
+| Phase 0 · verify, no source changes | 16/11 | **DONE except the live Azure probe** |
+| M1 · Azure + project state on Discord | 20/11 | **CODE DONE, NOT VERIFIED (live)** |
+| M2 · web app "Cadence" | 23/11 | **CODE DONE, NOT VERIFIED (live)** |
+| M2b · online preview on Vercel | 16/11 | **PREPARED, NOT PUBLISHED** (needs Matteo's token or login) |
+| M3 · proactive strategies CS5, CS2, CS3 + Why?/Not now | 26/11 | **CODE DONE, NOT VERIFIED (live)** |
+| M4 · planning, check-in, CS7, "why did we decide X?" | 29/11 | **CODE DONE, NOT VERIFIED (live)** |
+| M5 · calendar feed, demo script, launcher | 01/12 | **CODE DONE, NOT VERIFIED (live)**; multichannel dropped by decision (web and Discord stay separate); Slack not built (only if ahead, see DECISIONS) |
 
 ## Next steps, in order (resume here)
 
-1. **Publish the Vercel preview** (section "Deploy"): first thing of the next chat.
-2. **Live run of M1 and M2** as soon as Azure is ready (`mulca/prototype/webapp/README.md`,
-   "Run it"): MUCA-Server with the coordinator on, `npm run build`,
-   `python -m mulca_discord.web`, two browsers: create, join, paste the
-   assignment, Confirm; then Discord `/coordinator kickoff` + Confirm. Note date
-   and cost in TRACEABILITY.md and AZURE_SETUP.md.
-3. **M3**: YAML strategies `cs5_owner_and_date`, `cs2_delegate_simple_task`,
-   `cs3_close_decision` (each with "when NOT to fire"), vetoes in `policy.py`
-   after `:671`, new proposal kinds (owner/date, delegation, decision) drawn on
-   web cards and Discord embeds, **Why? / Not now** on every proactive card
-   (Not now = 30 min silence per strategy + topic). Web: extend
-   `ProposalCard.tsx` (KIND_TITLES, fields per kind) and `ClickFrame.action`.
-4. Multichannel: verify A5 (adapter in the Discord process loop) and decide if a
-   Discord channel and a web group share one conversation (today: `web:<code>`).
+1. **Azure** (Matteo): activate Azure for Students, create the resource and the
+   deployments, write `muca-server/.env` (AZURE_SETUP.md, steps 1–7), then
+   `python scripts/azure_probe.py` and paste the output in AZURE_SETUP.md.
+2. **Live runs** with `bash mulca/prototype/webapp/scripts/demo-up.sh` following
+   DEMO_SCRIPT.md, scenario by scenario; note date and cost in DEMO_SCRIPT.md,
+   TRACEABILITY.md (status → DONE only after the live run) and AZURE_SETUP.md.
+   Tune the YAML triggers if a strategy fires too often or never (annotated
+   conversations in `tests/coordinator/`, live quality measured apart).
+3. **Discord live run** (test server and bot, `mulca/prototype/TRYING_ON_DISCORD.md`):
+   `/coordinator kickoff`, `planning`, `plan`, `checkin`, `why`, one proactive card.
+4. **Vercel preview** (section "Deploy").
+5. Demo twice in a row without manual fixes (M5 closing proof), then the
+   report: UNG model and scenarios from the spec, the limits listed below,
+   future work (web–Discord merge, Slack, time-triggered check-in, Helpful button).
 
 ## Waiting on Matteo
 
-- Azure deployments + `muca-server/.env`, then `scripts/azure_probe.py`.
-- Discord test server and bot (`mulca/prototype/TRYING_ON_DISCORD.md`), token in `mulca/prototype/.env`.
-- Vercel: token file `mulca/prototype/webapp/.env.vercel` (one line `VERCEL_TOKEN=...`;
-  the file was not found on 15/11, check it is not saved as `.env.vercel.txt`) — or run the deploy himself.
-- Confirm two decisions taken by Claude (webapp/docs/decisioni.md): film cut to
-  4 clips / 18 s; web groups as their own conversations until A5/A6.
+- Azure for Students activation, deployments and `muca-server/.env`.
+- Discord test server and bot, token in `mulca/prototype/.env`.
+- Vercel token (`mulca/prototype/webapp/.env.vercel`, one line `VERCEL_TOKEN=...`)
+  or `npx vercel deploy --prod` from his terminal in `webapp/dist`.
+- Confirm two decisions taken by Claude: film cut to 4 clips / 18 s (webapp/docs/decisioni.md);
+  /planning from a written list instead of the agent asking each member (DECISIONS.md, M4).
+
+## Known limits (for the report)
+
+- Proactive rules R3/R4 counters live in the session: a server restart resets them.
+- "Why?" on Discord after a bot restart shows only the reason in italics.
+- The "Helpful" button of FR21 and the time-triggered check-in (FR15) are not built:
+  the check-in runs on command.
+- "@coordinator why…" typed in the chat goes to the lab's main agent, which does
+  not read the decision log: use "Ask why" (web) or `/coordinator why` (Discord).
+- The text of a "why" answer is the model's, grounded on the log; the source line is the server's.
+- Any member can change any task's status (peer group, no owner-only rule).
+- Deleting a web group deletes only the web side (no protocol event for server memory).
+- Web and Discord are separate groups by decision.
+- Voice on Azure is not verified (AZURE_SETUP.md); our groups use text only.
 
 ## Deploy (Vercel preview)
 
@@ -76,9 +91,10 @@ Matteo on 15/11 (exception to section 8 recorded in webapp/docs/decisioni.md).
 - Work on branch `group17/coordinator` in both clones on Matteo's PC
   (`C:\Users\mcesa\WebstormProjects\group-coordinator`), mirrored to GitHub
   (`mchartt/G17-MULCA-Server`, `mchartt/G17-MULCA-Project`); GitLab untouched.
-  All commits are **local**: nothing pushed in this session.
-- Last commits: muca-server `0c606a9` (PROGRESS M2) + this update; mulca
-  `f0ae328` (Cadence v2) + this update.
+  Commits of 15/11 night are local; the GitHub mirror is updated with
+  `git push github group17/coordinator` in each clone (GitLab never).
+- M3–M5 commits: muca-server `4ddaec3`, `5bfb579`, `f4974dc`, `76d5516` + this
+  update; mulca `6dbad2c`, `484519a`, `b481a5e`, `b71ebb2`.
 - Web app: `mulca/prototype/webapp/` (README.md first). Adapter:
   `mulca/prototype/mulca_discord/web/` (INDICE.md first). Film:
   `webapp/film/` (`lavori.json` = every Higgsfield job, check and decision).
@@ -104,15 +120,15 @@ The shell is a Linux VM; only the connected folder survives between sessions.
 6. Copying files from the cloud workspace to the PC: give every new version a
    new file name (the same staged name may deliver a stale copy).
 
-## Test status (15/11, late evening)
+## Test status (15/11, night, after M5)
 
 | Suite | Command | Result |
 |---|---|---|
-| MUCA-Server | `python -m pytest -q` | 481 passed + the 1 known voice failure |
-| MULCA | `cd prototype && python -m pytest -q` | 274 passed (web adapter 16, coverage 98 %) |
-| Web app unit | `npm test` | 17 passed |
-| Web app end to end | `npm run e2e` (starts `e2e/fake_stack.py`) | 1 passed: two members, chat, kickoff card, Confirm, plan |
-| Accessibility | `npm run axe` (fake stack running) | 0 WCAG 2.1 AA violations on landing and console |
+| MUCA-Server | `python -m pytest -q` | 571 passed + the 1 known voice failure; coordinator modules 94–100 % covered |
+| MULCA | `cd prototype && python -m pytest -q` | 294 passed; coordinator + web modules 96–100 % covered |
+| Web app unit | `npm test` | 28 passed |
+| Web app end to end | `npm run e2e` (starts `e2e/fake_stack.py`) | 6 passed: charter; CS2 + Why? + I'll take it; CS3; Not now; planning + status + check-in + why; calendar |
+| Accessibility | `npm run axe` (fake stack running) | 0 WCAG 2.1 AA violations on landing, console with card, proactive card with Why? open, planning dialog, plan with status selects |
 
 ## Cadence interface v2 (15/11, Matteo: "more premium, softer, Apple-like, no AI fonts")
 
@@ -127,6 +143,24 @@ The shell is a Linux VM; only the connected folder survives between sessions.
   messages and cards rise in. All off with prefers-reduced-motion.
 - Icons: Font Awesome Free (CC BY 4.0, credited in the footer).
 - Screens: `webapp/docs/screens/` (film, sections, entry, console, dialog, mobile).
+
+## M5 log
+
+- 15/11 · Multichannel: Claude reported the risk of a full web–Discord merge
+  (lab `runtime.py`, account linking, no live check possible); Matteo decided
+  web and Discord stay separate groups (DECISIONS.md). Nothing built for it.
+- 15/11 · Calendar feed in the web adapter (`web/calendar.py`, routes
+  `/api/calendar`), "Add to my calendar" in the plan panel; access log off so
+  feed secrets never reach a log. Tests: 4 pytest, 1 Vitest, 1 Playwright.
+- 15/11 · `DEMO_SCRIPT.md` (exact messages per scenario, three spaces because
+  of NFR3), `webapp/scripts/demo-up.sh` (MUCA-Server + adapter, checks `.env`
+  and the build), README run command fixed (`python -m muca_server.run_server`).
+- Fresh-eyes review (self, section 14 list) of M4–M5: no state written by the
+  model (plan, check-in, blocker only after a click; task status and calendar
+  link are members' own actions); every command and click checked against the
+  roster first; flag off unchanged (switch tests green); protocol only
+  extended (`planning`, `checkin`, `task`, `why`, new kinds, new actions).
+  Fixed during the review: feed secret in the access log.
 
 ## M4 log
 

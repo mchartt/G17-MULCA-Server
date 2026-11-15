@@ -9,7 +9,7 @@ Requirement ids (N1–N4, G1–G6, FR, UC, CS) come from the technical spec v3
 (Claude artifact "Documentazione tecnica v3"). Only items of the demo scope
 (project instructions, section 7) are listed.
 
-Last update: 15 Nov 2026 (M4).
+Last update: 15 Nov 2026 (M5).
 
 ## Platform rules (project instructions, section 4.3)
 
@@ -39,7 +39,8 @@ Last update: 15 Nov 2026 (M4).
 | UC9 "why did we decide X?" with source | NOT VERIFIED (live) — tested | `why` command: answer only from the decision log, ids checked, source line with who/when/card (`test_why_*`); web "Ask why" in the panel, Discord `/coordinator why`; Playwright. Missing: live run; a question typed in chat with @coordinator goes to the lab's main agent, which does not read the log |
 | G5 Why? and Not now on every proactive card | NOT VERIFIED (live) — tested | Why? from the card's `context` (strategy, topic, evidence copied by the server); Not now = status `snoozed` + `coord_snooze` 30 min (`test_not_now_snoozes_*`, `test_r6_*`, Playwright "Not now", axe 0 violations with Why? open). Helpful button (FR21) not built |
 | UC9 project panel always visible | NOT VERIFIED (live) — tested | web panel (goal, milestones, tasks with owner and status select, decisions, Ask why), shown also before the charter; Discord `/coordinator plan` (private, numbered tasks). Vitest, Playwright |
-| N3 calendar feed | NOT DONE | M5 |
+| N3 calendar feed | NOT VERIFIED (live) — tested | `mulca_discord/web/calendar.py`: private revocable link, one all-day event per dated milestone and open task, RFC 5545 escaping/folding (`tests/test_web_calendar.py`); Playwright "calendar" (feed read by the browser, old link 404). Missing: subscription tried in Google Calendar / Outlook |
+| Multichannel (one group across web and Discord) | OUT OF SCOPE (decision 15/11) | web and Discord are separate groups by Matteo's decision (DECISIONS.md); future work in the report |
 
 ## M3 deterministic rules (proactive.py)
 

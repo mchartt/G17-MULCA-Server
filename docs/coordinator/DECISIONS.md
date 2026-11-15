@@ -158,3 +158,27 @@ Newest first. Each entry: date, decision, alternatives, reason, status.
   against the log, and the server writes the source line (who, when, card).
 - **Limit:** "@coordinator why…" typed in the chat goes to the lab's main
   agent, which does not read the decision log.
+
+## 2026-11-15 · Web app and Discord stay two separate groups
+
+- **Decision:** the web app and Discord are two different uses on two
+  platforms and are **not** linked: a web space is its own conversation
+  (`web:<code>`), a Discord channel its own (`channel:<id>`). No shared
+  memory, no mirrored chat, no account linking between them.
+- **Supersedes:** the project instructions' section 6 "one group, one
+  conversation across channels" and the 15/11 decision "all channels of a
+  group share the hub's one session" (still true *within* Discord: text and
+  voice of one link share a session).
+- **Reason:** Matteo's decision (15/11), after Claude reported that a full
+  merge would touch the lab's `runtime.py`, need account linking and could not
+  be verified live before the demo.
+- **Consequence:** A5/A6 no longer needed; the merge goes in the report as
+  future work.
+
+## 2026-11-15 · M5: calendar feed served by the web adapter
+
+- **Decision:** read-only iCalendar feed per web group, private link
+  (32 random bytes, stored hashed), a new link revokes the old one; built
+  from the last state the adapter received; no external calendar API.
+  The adapter's access log is off so feed secrets never reach a log.
+- **Reason:** project instructions section 6 (Calendar row); no new service.
