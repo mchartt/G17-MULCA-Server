@@ -182,3 +182,56 @@ Newest first. Each entry: date, decision, alternatives, reason, status.
   from the last state the adapter received; no external calendar API.
   The adapter's access log is off so feed secrets never reach a log.
 - **Reason:** project instructions section 6 (Calendar row); no new service.
+
+## 2026-11-15 · Azure region: France Central, not East US 2
+
+- **Decision:** resource `g17-coordinator` in France Central (resource group `rg-group17-coordinator`, Standard S0).
+- **Reason:** the Azure for Students subscription has a policy "Allowed resource
+  deployment regions" with five regions only: Austria East, France Central,
+  Poland Central, Spain Central, Switzerland North (read in the portal 15/11;
+  East US 2 refused with RequestDisallowedByAzure). In the Microsoft table of
+  Global Standard deployments (Europe tab, read 15/11) France Central is the only
+  one of the five with `gpt-realtime-2.1-mini`.
+- **Superseded:** "East US 2" in the first version of AZURE_SETUP.md.
+
+## 2026-11-15 · Text models: gpt-6.1-sol for the coordinator, gpt-6-luna for summaries
+
+- **Decision (Matteo, after Claude's comparison):** the cards, planning,
+  check-in and "why" answers use `gpt-6.1-sol`; the lab's background summaries
+  (everyday and daily) use `gpt-6-luna`; the Realtime agents keep
+  `gpt-realtime-2.1-mini`; embeddings `text-embedding-3-small`.
+- **Reason:** gpt-4o (the code's default) costs $2.50/$10 per million tokens;
+  gpt-6.1-sol is a newer generation at $2/$10, gpt-6-luna $0.10/$0.50 (OpenAI
+  list prices read 15/11; Azure prices assumed equal, NOT VERIFIED). A card is
+  about 3,000 tokens in and 500 out: ~1 cent with Sol, so quality where the
+  group reads the text costs a few dollars over the whole project.
+- **How:** the models are chosen with environment variables
+  (`MUCA_COORDINATOR_MODEL`, `MUCA_SUMMARY_MODEL`, `MUCA_DAILY_SUMMARY_MODEL`);
+  without them the code behaves exactly as before. Both models priced in
+  `PRICES_PER_MILLION`, so the spending limits see their cost.
+- **Not verified:** strict JSON schema on Azure for the two models (probe).
+
+## 2026-11-15 · Online: Render (server + adapter) and Vercel (site)
+
+- **Decision (Matteo):** the web adapter and MUCA-Server run together in one
+  free Render container (`deploy/render/`, branch `render` of the GitHub copy
+  of mulca, with a snapshot of muca-server in `vendor/`); the site stays on
+  Vercel and calls it with `VITE_ADAPTER_URL`.
+- **Reason:** Vercel cannot host long-running WebSocket processes.
+- **Limits:** the free plan sleeps after 15 minutes without requests (first
+  request then takes about a minute) and has no persistent disk: spaces and
+  memory are lost at each restart or redeploy. Fine for testing, not for data
+  the group must keep. Memory 512 MB with two Python processes: NOT VERIFIED.
+
+## 2026-11-15 · Limits closed after M5
+
+- R3/R4 and the timed check-in remember their last time in `coord_mark`.
+- Helpful = feedback only (`coord_feedback`), never a state change.
+- `card` command: a client gets a card back (Discord "Why?" after a restart).
+- Timed check-in: off unless `MUCA_COORDINATOR_CHECKIN_HOURS`; the router is
+  the session worker so the timer stops with the session.
+- Deleting a space: `DELETE /conversation` on MUCA-Server (gated on
+  `MUCA_ADMIN_TOKEN`, like `/export`); the adapter closes the session first,
+  and deletes the web side only if the server part succeeded.
+- "@coordinator why" typed in the web chat goes to the decision log; on
+  Discord it stays `/coordinator why` (the lab's `runtime.py` is not touched).

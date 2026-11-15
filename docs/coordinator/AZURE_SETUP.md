@@ -1,8 +1,41 @@
 # Azure OpenAI setup — Group Coordinator
 
-Status: **NOT VERIFIED (live)**. Nothing below has been tried on our
-subscription yet. The probe script (`scripts/azure_probe.py`) is the proof;
-its output goes in "Probe results" at the bottom.
+Status (15 Nov 2026, evening): **resource and deployments created, probe
+not run yet** (it needs the key in `.env`). Everything below "Steps in the
+portal" was done by Claude in Matteo's browser; what is left is in "Still to do".
+
+## What exists on Azure
+
+| Item | Value |
+|---|---|
+| Subscription | Azure for Students (Matteo, Owner, credit 100 USD) |
+| Resource group | `rg-group17-coordinator` |
+| Resource | `g17-coordinator`, Azure OpenAI, **France Central**, Standard S0, all networks |
+| Endpoint | `https://g17-coordinator.openai.azure.com` (answers 401 without a key: it exists) |
+
+| Deployment (= name used by the code) | Model, version | Type | Used for |
+|---|---|---|---|
+| `gpt-realtime-2.1-mini` | 2026-07-07 | Global Standard | main and intervention agents (Realtime) |
+| `gpt-6.1-sol` | 2026-09-29 | Global Standard | coordinator cards, planning, check-in, "why" (`MUCA_COORDINATOR_MODEL`) |
+| `gpt-6-luna` | 2026-09-22 | Global Standard | lab summaries, everyday and daily (`MUCA_SUMMARY_MODEL`, `MUCA_DAILY_SUMMARY_MODEL`) |
+| `text-embedding-3-small` | 1 | Global Standard | `remember`, search in the log |
+
+Not deployed on purpose: `gpt-4o`, `gpt-5` (replaced by the variables above),
+`gpt-4o-mini` (web search, not used), `gpt-4o-transcribe` (voice).
+
+**Why France Central** (DECISIONS.md, 15/11): the student subscription allows
+only Austria East, France Central, Poland Central, Spain Central and
+Switzerland North; of these only France Central offers the Realtime model.
+
+## Still to do (Matteo)
+
+1. Portal → resource `g17-coordinator` → **Keys and Endpoint** → copy KEY 1 →
+   paste it after `AZURE_OPENAI_API_KEY=` in `muca-server/.env` (the file is
+   already written with every other value; never committed).
+2. Budget with alert: Cost Management → Budgets → Add, scope Azure for
+   Students, 40 USD/month, alerts at 50 % and 80 %. Claude could not open the
+   page: the browser's site blocker (Cold Turkey) blocks it.
+3. Run the probe (below) and paste its lines in "Probe results".
 
 ## Why Azure and what it costs
 
@@ -13,9 +46,9 @@ its output goes in "Probe results" at the bottom.
 - The tutor asked to be told if the credits run out. If a model is missing
   or the credit is about to end: stop and tell Matteo. No other providers.
 
-## Region
+## Region (superseded: see "What exists on Azure")
 
-**Recommended: East US 2 (`eastus2`).** In the Microsoft table of Global
+~~Recommended: East US 2 (`eastus2`).~~ Refused by the student subscription's region policy. In the Microsoft table of Global
 Standard deployments it is the only region listed with every model the code
 uses: `gpt-realtime-2.1-mini`, `gpt-4o`, `gpt-5`, `gpt-4o-mini`,
 `text-embedding-3-small` (read 15 Nov 2026, page "Foundry Models sold
@@ -27,7 +60,7 @@ directly by Azure — region availability", Global Standard, Americas tab).
 - "Global Standard" means Microsoft may process the request in any region.
   The data notice in the web app must say messages go to Azure OpenAI.
 
-## Deployments to create (names = model names)
+## Deployments to create (first plan, superseded by "What exists on Azure")
 
 The code passes the model name as `model=...`. On Azure, `model` is the
 **deployment name**. Giving each deployment exactly the model's name means
@@ -94,7 +127,10 @@ Do not paste the key in chat.
 
 | Variable | Read by | Meaning |
 |---|---|---|
-| `AZURE_OPENAI_ENDPOINT` | probe now, `run_server.py` from M1 | resource URL, no path |
+| `AZURE_OPENAI_ENDPOINT` | probe, `run_server.py` | resource URL, no path |
+| `MUCA_COORDINATOR_MODEL` | coordinator settings | text model of the cards (default `gpt-4o`) |
+| `MUCA_SUMMARY_MODEL` | `run_server.py` | everyday summaries (default `gpt-4o`) |
+| `MUCA_DAILY_SUMMARY_MODEL` | `run_server.py` | daily summary (default `gpt-5`) |
 | `AZURE_OPENAI_API_KEY` | probe now, `run_server.py` from M1 | resource key |
 | `OPENAI_API_KEY` | `run_server.py:131` today | unchanged default: if the Azure pair is not set, the server behaves exactly as today |
 

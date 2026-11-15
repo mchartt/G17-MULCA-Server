@@ -3,39 +3,37 @@
 **Read this file first.** It says where the work really is. It is written so a
 new chat can resume without the old one.
 
-Last update: 15 Nov 2026, night. **All stages M1–M5 built and tested
-offline.** What is left needs Matteo: Azure (credits not activated yet), the
-live runs, the Discord test bot, the Vercel publish. Nothing is DONE in the
-TRACEABILITY sense until its live run is noted.
+Last update: 15 Nov 2026, late evening. **M1–M5 built and tested offline;
+the known limits closed (tested); Azure resource and deployments created;
+online deploy prepared (Render + Vercel).** Nothing is DONE in the
+TRACEABILITY sense until its live run is noted: the live runs need the Azure
+key, which only Matteo pastes.
 
 ## Where we are
 
-| Stage | Due | Status |
-|---|---|---|
-| Phase 0 · verify, no source changes | 16/11 | **DONE except the live Azure probe** |
-| M1 · Azure + project state on Discord | 20/11 | **CODE DONE, NOT VERIFIED (live)** |
-| M2 · web app "Cadence" | 23/11 | **CODE DONE, NOT VERIFIED (live)** |
-| M2b · online preview on Vercel | 16/11 | **PREPARED, NOT PUBLISHED** (needs Matteo's token or login) |
-| M3 · proactive strategies CS5, CS2, CS3 + Why?/Not now | 26/11 | **CODE DONE, NOT VERIFIED (live)** |
-| M4 · planning, check-in, CS7, "why did we decide X?" | 29/11 | **CODE DONE, NOT VERIFIED (live)** |
-| M5 · calendar feed, demo script, launcher | 01/12 | **CODE DONE, NOT VERIFIED (live)**; multichannel dropped by decision (web and Discord stay separate); Slack not built (only if ahead, see DECISIONS) |
+| Stage | Status |
+|---|---|
+| Phase 0 | DONE except the live Azure probe (needs the key) |
+| M1–M5 | CODE DONE, NOT VERIFIED (live) |
+| Known limits (R3/R4, Why? on Discord, Helpful, timed check-in, typed why on web, delete space) | CODE DONE + tests, NOT VERIFIED (live) |
+| Azure | resource `g17-coordinator` France Central + 4 deployments (AZURE_SETUP.md); key and budget: Matteo |
+| Online | Render Blueprint + `render` branch + Vercel config ready; needs Matteo's push (no GitHub credentials in Claude's shell) |
 
 ## Next steps, in order (resume here)
 
-1. **Azure** (Matteo): activate Azure for Students, create the resource and the
-   deployments, write `muca-server/.env` (AZURE_SETUP.md, steps 1–7), then
-   `python scripts/azure_probe.py` and paste the output in AZURE_SETUP.md.
-2. **Live runs** with `bash mulca/prototype/webapp/scripts/demo-up.sh` following
-   DEMO_SCRIPT.md, scenario by scenario; note date and cost in DEMO_SCRIPT.md,
-   TRACEABILITY.md (status → DONE only after the live run) and AZURE_SETUP.md.
-   Tune the YAML triggers if a strategy fires too often or never (annotated
-   conversations in `tests/coordinator/`, live quality measured apart).
-3. **Discord live run** (test server and bot, `mulca/prototype/TRYING_ON_DISCORD.md`):
-   `/coordinator kickoff`, `planning`, `plan`, `checkin`, `why`, one proactive card.
-4. **Vercel preview** (section "Deploy").
-5. Demo twice in a row without manual fixes (M5 closing proof), then the
-   report: UNG model and scenarios from the spec, the limits listed below,
-   future work (web–Discord merge, Slack, time-triggered check-in, Helpful button).
+1. Matteo pastes the Azure key in `muca-server/.env`; then
+   `python scripts/azure_probe.py` (results in AZURE_SETUP.md).
+2. Local live run: `bash mulca/prototype/webapp/scripts/demo-up.sh`, then
+   DEMO_SCRIPT.md scenario by scenario; note date and cost.
+3. Matteo pushes to his GitHub copy (never GitLab):
+   `git push github group17/coordinator` in both clones and
+   `git push github render` in mulca (after `bash deploy/render/update-branch.sh`).
+4. Render: Dashboard → New → Blueprint → G17-MULCA-Project, branch `render`;
+   paste the Azure key when asked. Then Vercel: project from the same repo,
+   root `prototype/webapp`, `VITE_ADAPTER_URL=https://<render address>`; if the
+   Vercel address differs from `cadence-group-coordinator.vercel.app`, set it in
+   Render's `MULCA_WEB_ALLOWED_ORIGINS`.
+5. Discord live run (TRYING_ON_DISCORD.md); demo twice in a row; the report.
 
 ## Waiting on Matteo
 
@@ -48,15 +46,16 @@ TRACEABILITY sense until its live run is noted.
 
 ## Known limits (for the report)
 
-- Proactive rules R3/R4 counters live in the session: a server restart resets them.
-- "Why?" on Discord after a bot restart shows only the reason in italics.
-- The "Helpful" button of FR21 and the time-triggered check-in (FR15) are not built:
-  the check-in runs on command.
-- "@coordinator why…" typed in the chat goes to the lab's main agent, which does
-  not read the decision log: use "Ask why" (web) or `/coordinator why` (Discord).
+- Closed on 15/11 evening (tested offline): R3/R4 across restarts, Why? on
+  Discord after a restart, Helpful, timed check-in, "@coordinator why" typed in
+  the web chat, Delete space on MUCA-Server too (TRACEABILITY.md).
+- "@coordinator why…" typed on **Discord** still goes to the lab's agent: use
+  `/coordinator why` there (changing the lab's `runtime.py` was not worth it).
+- If Azure is unreachable, a session cannot start (the lab's main agent connects
+  at session start), so every coordinator command answers "not available".
+- Online (Render free): sleeps after 15 minutes idle, no persistent disk.
 - The text of a "why" answer is the model's, grounded on the log; the source line is the server's.
 - Any member can change any task's status (peer group, no owner-only rule).
-- Deleting a web group deletes only the web side (no protocol event for server memory).
 - Web and Discord are separate groups by decision.
 - Voice on Azure is not verified (AZURE_SETUP.md); our groups use text only.
 
@@ -120,14 +119,15 @@ The shell is a Linux VM; only the connected folder survives between sessions.
 6. Copying files from the cloud workspace to the PC: give every new version a
    new file name (the same staged name may deliver a stale copy).
 
-## Test status (15/11, night, after M5)
+## Test status (15/11, late evening, after the limits)
 
 | Suite | Command | Result |
 |---|---|---|
-| MUCA-Server | `python -m pytest -q` | 571 passed + the 1 known voice failure; coordinator modules 94–100 % covered |
-| MULCA | `cd prototype && python -m pytest -q` | 294 passed; coordinator + web modules 96–100 % covered |
-| Web app unit | `npm test` | 28 passed |
-| Web app end to end | `npm run e2e` (starts `e2e/fake_stack.py`) | 6 passed: charter; CS2 + Why? + I'll take it; CS3; Not now; planning + status + check-in + why; calendar |
+| MUCA-Server | `python -m pytest -q` | 590 passed + the 1 known voice failure; coordinator modules 98 % covered (new ones 100 %) |
+| MULCA | `cd prototype && python -m pytest -q` | 303 passed |
+| Web app unit | `npm test` | 31 passed |
+| Web app end to end | `npm run e2e` (starts `e2e/fake_stack.py`) | 8 passed: + typed why, Delete space; CS2 now also clicks Helpful |
+| Render start script | `deploy/render/start.sh` run locally | both processes up, `/api/health`, CORS for the Vercel origin, WebSocket hello, Delete space; agent connection fails with a fake endpoint, as expected |
 | Accessibility | `npm run axe` (fake stack running) | 0 WCAG 2.1 AA violations on landing, console with card, proactive card with Why? open, planning dialog, plan with status selects |
 
 ## Cadence interface v2 (15/11, Matteo: "more premium, softer, Apple-like, no AI fonts")

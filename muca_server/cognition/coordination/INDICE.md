@@ -46,7 +46,9 @@ group member applies it, inside one database transaction.
 | `plan_writer.py` | 230 | M4: model drafts for /planning, /checkin options, and answers to "why did we decide X?" with the decisions they rest on. |
 | `plan_commands.py` | 175 | M4: the commands planning, checkin, task, why (one model command at a time, in the background). |
 | `router.py` | 271 | Receives the coordinator messages of one session and answers them. |
-| `settings.py` | 36 | The on/off switch and the proposal lifetime, from the environment. |
+| `settings.py` | 50 | The on/off switch, the proposal lifetime, the timed check-in interval and the text model, from the environment. |
+| `card_requests.py` | 60 | Helpful (feedback on a proactive card, FR21) and the `card` command (a card sent back to the asker). No model, no state change. |
+| `checkin_timer.py` | 90 | The check-in on time (FR15): every `MUCA_COORDINATOR_CHECKIN_HOURS`, card only when something is late or at risk. |
 | `wiring.py` | 83 | Builds the per-session hook for `run_server.py` (or None when off). |
 
 ## `models.py`
@@ -80,6 +82,8 @@ turns them into JSON for the clients.
 
 Tables `coord_member`, `coord_charter` (one row), `coord_milestone`,
 `coord_task`, `coord_task_dependency`, `coord_decision`, `coord_proposal`,
+`coord_snooze`, `coord_mark` (last proactive card and last timed check-in,
+`mark` / `save_mark`), `coord_feedback` (Helpful, `add_feedback`),
 created on first use in the **conversation's own SQLite file**.
 
 | Method | What it does |
@@ -189,7 +193,9 @@ A *decorator* (GoF pattern) around the session's `Conversation`: it adds
 ## `settings.py` — `CoordinatorSettings`
 
 `from_env(env)`: `MUCA_COORDINATOR_ENABLED` (`1/true/yes/on` = on, anything
-else = **off**), `MUCA_COORDINATOR_PROPOSAL_TTL_HOURS` (default 48).
+else = **off**), `MUCA_COORDINATOR_PROPOSAL_TTL_HOURS` (default 48),
+`MUCA_COORDINATOR_CHECKIN_HOURS` (default 0 = check-in only on command),
+`MUCA_COORDINATOR_MODEL` (default `gpt-4o`; on Azure the deployment name).
 
 ## `wiring.py` — `build_coordinator_factory(settings, client=, db_dir=, usage_tracker=)`
 
@@ -206,7 +212,9 @@ plugs the router's bridge into the session's `CoalaPolicy` (read as
 |---|---|
 | `cognition/policy.py` | M3: `set_proactive_bridge()` and one block in `on_intervention_signal`, after the existing vetoes: a coordinator strategy goes to the bridge and the turn ends in silence. Without a bridge (coordinator off) the block is skipped. |
 | `run_server.py` | `COORDINATOR_STRATEGY_IDS` added to the ambient catalog and the policy store only when on. Client built by `agents/openai/client_config.py` (Azure or OpenAI); task `group_coordinator` when on; `coordinator_factory=` passed to the components factory. |
-| `sessions/session_components_factory.py` | Optional `coordinator_factory`; when given, the router is the wrapper instead of the Conversation. |
+| `sessions/session_components_factory.py` | Optional `coordinator_factory`; when given, the router is the wrapper instead of the Conversation, and takes its worker slot (start/close, so the check-in timer stops with the session). |
+| `main.py` | `DELETE /conversation` (gated on `MUCA_ADMIN_TOKEN`, like `/export`): removes a conversation's SQLite file. |
+| `agents/openai/main_agent.py` | Prices of `gpt-6.1-sol` and `gpt-6-luna` added. |
 | `events/dispatcher.py` | One `case` for the two new client events, which calls `route_coordinator` if the router has it. |
 | `protocol/incoming.py`, `protocol/__init__.py` | The two new client events added to the union, and the exports. |
 | `pyproject.toml` | The package listed. |

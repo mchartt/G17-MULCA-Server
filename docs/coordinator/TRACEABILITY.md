@@ -34,10 +34,10 @@ Last update: 15 Nov 2026 (M5).
 | CS2 delegate a simple task | NOT VERIFIED (live) — built and tested | `cs2_delegate_simple_task.yaml`; Playwright `proactive.spec.ts` CS2 (card for two members, Why?, I'll take it, plan updated; trigger scripted on the offline stack); Discord `test_delegation_card_*`. Missing: live run |
 | CS3 close a decision | NOT VERIFIED (live) — built and tested | `cs3_close_decision.yaml`; `appliers.decision_applier` (reason + `source`); Playwright CS3; Discord e2e `test_choose_on_discord_records_the_decision_end_to_end` (real local server). Missing: live run |
 | UC4 /planning | NOT VERIFIED (live) — tested | members write tasks (web dialog, Discord `;`-separated) → `plan_writer.draft_plan` (owners only members, no past dates) → plan card → Confirm adds every task. Tests `test_coordinator_m4.py::test_planning_*`, Discord `test_the_four_m4_commands_*`, Playwright `plan.spec.ts`. Missing: live run |
-| CS6 / UC6 /checkin | NOT VERIFIED (live) — tested | findings computed in code (`checkin.py`: late, blocked, due soon, no owner, milestone ≤ 48 h, dependency) + owners' report; ≤ 3 options from the model, each changing one real task; on track = notice without a model call. Tests `test_findings_*`, `test_checkin_*`, Playwright. Missing: live run; time-based trigger (FR15) not built, check-in is on command |
+| CS6 / UC6 /checkin | NOT VERIFIED (live) — tested | findings computed in code (`checkin.py`: late, blocked, due soon, no owner, milestone ≤ 48 h, dependency) + owners' report; ≤ 3 options from the model, each changing one real task; on track = notice without a model call. Tests `test_findings_*`, `test_checkin_*`, Playwright. Timed check-in (FR15): `checkin_timer.py`, every `MUCA_COORDINATOR_CHECKIN_HOURS`, card only when something is late or at risk, silent otherwise, mark kept across restarts (`test_timer_*`, `test_timed_checkin_*`). Missing: live run |
 | CS7 blockers and dependencies | NOT VERIFIED (live) — tested | `cs7_blockers_dependencies.yaml` through the M3 bridge; blocker card → task blocked + dependency (`test_cs7_*`, `test_confirming_a_blocker_*`, R7 for an already blocked task). Missing: live run |
 | UC9 "why did we decide X?" with source | NOT VERIFIED (live) — tested | `why` command: answer only from the decision log, ids checked, source line with who/when/card (`test_why_*`); web "Ask why" in the panel, Discord `/coordinator why`; Playwright. Missing: live run; a question typed in chat with @coordinator goes to the lab's main agent, which does not read the log |
-| G5 Why? and Not now on every proactive card | NOT VERIFIED (live) — tested | Why? from the card's `context` (strategy, topic, evidence copied by the server); Not now = status `snoozed` + `coord_snooze` 30 min (`test_not_now_snoozes_*`, `test_r6_*`, Playwright "Not now", axe 0 violations with Why? open). Helpful button (FR21) not built |
+| G5 Why? and Not now on every proactive card | NOT VERIFIED (live) — tested | Why? from the card's `context` (strategy, topic, evidence copied by the server); Not now = status `snoozed` + `coord_snooze` 30 min (`test_not_now_snoozes_*`, `test_r6_*`, Playwright "Not now", axe 0 violations with Why? open). Helpful (FR21): feedback only, once per member, `coord_feedback`, on web and Discord (`test_helpful_*`, Playwright CS2). Missing: live run |
 | UC9 project panel always visible | NOT VERIFIED (live) — tested | web panel (goal, milestones, tasks with owner and status select, decisions, Ask why), shown also before the charter; Discord `/coordinator plan` (private, numbered tasks). Vitest, Playwright |
 | N3 calendar feed | NOT VERIFIED (live) — tested | `mulca_discord/web/calendar.py`: private revocable link, one all-day event per dated milestone and open task, RFC 5545 escaping/folding (`tests/test_web_calendar.py`); Playwright "calendar" (feed read by the browser, old link 404). Missing: subscription tried in Google Calendar / Outlook |
 | Multichannel (one group across web and Discord) | OUT OF SCOPE (decision 15/11) | web and Discord are separate groups by Matteo's decision (DECISIONS.md); future work in the report |
@@ -59,3 +59,16 @@ Last update: 15 Nov 2026 (M5).
 Majority vote on the charter, reflection report, CS1, CS4, CS8–CS11: OUT OF
 SCOPE (project instructions, section 7). Slack: deferred, only if M4 is closed
 by 29/11 (DECISIONS.md, 15/11).
+
+## Limits closed on 15/11 (evening)
+
+| Limit | Status | Proof |
+|---|---|---|
+| R3/R4 counters reset on restart | NOT VERIFIED (live) — tested | `coord_mark` "proactive"; `test_r3_r4_survive_a_server_restart` |
+| Why? on Discord after a bot restart | NOT VERIFIED (live) — tested | command `card`; `test_why_after_a_restart_asks_the_server_for_the_card` |
+| Helpful (FR21) | NOT VERIFIED (live) — tested | see G5 |
+| Timed check-in (FR15) | NOT VERIFIED (live) — tested | see CS6 |
+| "@coordinator why" typed in the web chat | NOT VERIFIED (live) — tested | `web/hub.py` TYPED_WHY; `test_typed_why_*`, Playwright `limits.spec.ts` |
+| Delete space deletes only the web side | NOT VERIFIED (live) — tested | `DELETE /conversation` (admin token) + `POST /api/groups/delete`; `test_delete_*`, Playwright `limits.spec.ts` |
+| "@coordinator why" typed on Discord | NOT DONE — by choice | would need the lab's `runtime.py`; `/coordinator why` covers it |
+| Voice on Azure | OUT OF SCOPE | project rule "voice untouched"; our groups use text |
