@@ -91,6 +91,13 @@ def create_app(
             if candidate.is_file():
                 await run_in_threadpool(candidate.unlink)
                 removed.append(candidate.name)
+        # A deleted web space takes its links with it, and a deleted channel
+        # its own link (coordination/links.py): no stale "this group" left.
+        from .cognition.coordination.links import GroupLinks
+
+        links = GroupLinks(db_dir)
+        await run_in_threadpool(links.forget_home, conversation_id)
+        await run_in_threadpool(links.unlink, conversation_id)
         return {"deleted": bool(removed)}
 
     @app.websocket("/")

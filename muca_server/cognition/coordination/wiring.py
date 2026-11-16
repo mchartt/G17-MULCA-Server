@@ -16,7 +16,9 @@ import asyncio
 from functools import partial
 from typing import Any
 
-from ..memory.sqlite import db_path_for
+from ..memory.sqlite import SqliteEpisodicStore, db_path_for
+from .catchup import CatchUp
+from .links import GroupLinks, LiveGroups
 from .proactive_writer import ProactiveWriter
 from .router import CoordinatorRouter
 from .settings import CoordinatorSettings
@@ -51,6 +53,11 @@ def build_coordinator_factory(
         # The conversation's own SQLite file (cognition/memory/sqlite.py).
         return CoordinationStore(db_path_for(conversation_id, base_dir=db_dir))
 
+    # Linked groups (links.py): one table on disk, the open sessions in memory.
+    links = GroupLinks(db_dir)
+    live = LiveGroups()
+    catchup = CatchUp(lambda conversation_id: SqliteEpisodicStore(db_path_for(conversation_id, base_dir=db_dir)))
+
     def factory(conversation: Any, outbound_queue: asyncio.Queue) -> CoordinatorRouter:
         router = CoordinatorRouter(
             conversation,
@@ -60,6 +67,9 @@ def build_coordinator_factory(
             proposal_ttl_seconds=settings.proposal_ttl_seconds,
             proactive_writer=proactive_writer,
             checkin_interval_seconds=settings.checkin_interval_seconds,
+            links=links,
+            live=live,
+            catchup=catchup,
         )
         attach_proactive(conversation, router)
         return router

@@ -70,7 +70,13 @@ class CoordinatorCommandMessage(CoordinatorIncomingMessage):
     # status), why (a question about a past decision). Later (additive):
     # card (args.proposal_id: send that card back to the asker, e.g. for
     # "Why?" after a client restart).
-    command: Literal["profile", "kickoff", "state", "planning", "checkin", "task", "why", "card"]
+    # Linked groups (additive): link (args.code: the web space's invite code,
+    # run in a Discord channel), unlink, catchup (args.since: optional unix
+    # time; what the member missed in the group's other channels).
+    command: Literal[
+        "profile", "kickoff", "state", "planning", "checkin", "task", "why", "card",
+        "link", "unlink", "catchup",
+    ]
     member_id: int = Field(alias="memberId")
     args: dict[str, Any] = Field(default_factory=dict)
     channel: Channel = "discord"
@@ -110,3 +116,6 @@ class CoordinatorNoticeMessage(OutgoingMessage):
     request_id: str = Field(default="", serialization_alias="requestId")
     # Only for the "card" command (additive): the card asked for.
     proposal: dict[str, Any] | None = None  # dropped when None (serialize_outgoing_message uses exclude_none)
+    # Only for the "catchup" command (additive): decisions and messages from
+    # the group's other channels since the member's last catch-up (catchup.py).
+    catchup: dict[str, Any] | None = None
