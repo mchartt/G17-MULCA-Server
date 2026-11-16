@@ -104,10 +104,8 @@ class CatchUp:
 def summary_line(catchup: dict[str, Any]) -> str:
     """The notice's one line: what is in the catch-up, in plain words."""
     if not catchup["linked"]:
-        return (
-            "This group is not linked to another channel yet. In Discord, run "
-            "/coordinator link with this space's invite code."
-        )
+        # How to link is told by each channel in its own words (it knows the code).
+        return "This group is not linked to another channel yet."
     parts = []
     n = len(catchup["decisions"])
     if n:

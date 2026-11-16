@@ -318,7 +318,7 @@ async def test_catch_up_works_from_discord_too_and_without_a_link(tmp_path):
     await discord.route_coordinator(command("catchup", 9001))
     (notice,) = await drain(discord_q)
     assert notice.ok and not notice.catchup["linked"]
-    assert "/coordinator link" in summary_line(notice.catchup)
+    assert "not linked" in summary_line(notice.catchup)
 
 
 # ----------------------------------------------------------------------
