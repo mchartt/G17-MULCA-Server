@@ -15,8 +15,14 @@ coordinator is OFF there is no wrapper at all.
 
 What it handles:
   coordinator_command  profile | kickoff | state | planning | checkin | task | why | card
+                       | link | unlink | catchup   (linked groups, links.py and catchup.py)
   proposal_response    confirm | reject | take | choose | not_now | helpful
 and it answers with coordinator_proposal / coordinator_state / coordinator_notice.
+
+Linked groups (links.py): when a Discord channel is linked to a web space,
+the store is the web space's (the group's "home") and every card and state
+goes to all the group's open sessions, not only this one. Without `links`
+(tests, or the feature not wired) everything is exactly as before.
 
 It is also the session's worker in place of the Conversation (start/close
 below, plugged in by session_components_factory.py), so the timed check-in
@@ -27,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 from datetime import date
 from typing import Any
@@ -35,13 +42,16 @@ from pydantic import ValidationError
 
 from ...protocol.coordinator import (
     CoordinatorCommandMessage,
+    CoordinatorMirrorMessage,
     CoordinatorNoticeMessage,
     CoordinatorProposalMessage,
     CoordinatorStateMessage,
     ProposalResponseMessage,
 )
 from .card_requests import CardRequests
+from .catchup import CatchUp, channel_of, summary_line
 from .checkin_timer import CheckinTimer
+from .links import GroupLinks, LinkError, LiveGroups
 from .models import MemberProfile, Proposal, ProposalKind
 from .plan_commands import PlanCommands
 from .plan_writer import PlanWriter
@@ -71,6 +81,9 @@ class CoordinatorRouter:
         today: Callable[[], date] = date.today,
         proactive_writer: ProactiveWriter | None = None,
         checkin_interval_seconds: float = 0.0,
+        links: GroupLinks | None = None,
+        live: LiveGroups | None = None,
+        catchup: CatchUp | None = None,
     ) -> None:
         # Set first: __getattr__ below reads it.
         self._conversation = conversation
@@ -80,6 +93,11 @@ class CoordinatorRouter:
         self._ttl = proposal_ttl_seconds
         self._today = today
         self._store: CoordinationStore | None = None
+        # Linked groups (links.py). None: this session is its own group.
+        self._links = links
+        self._live = live
+        self._catchup = catchup
+        self._home_id: str | None = None
         # The kickoff running in the background, if any (one per group).
         self._kickoff: asyncio.Task | None = None
         # M3: proactive cards (CS5, CS2, CS3), plugged into the policy by wiring.py.
@@ -97,7 +115,7 @@ class CoordinatorRouter:
         )
         # M4: planning, checkin, task, why (plan_commands.py).
         self._plan = PlanCommands(
-            participants=lambda: self._conversation.participants(),
+            participants=self._roster,
             store=self._store_now,
             service=self._service,
             writer=PlanWriter(writer),
@@ -124,12 +142,42 @@ class CoordinatorRouter:
     async def start(self) -> None:
         """Session worker: the Conversation first, then the check-in timer."""
         await self._conversation.start()
+        self._join_live()
         self.checkin_timer.start()
 
     async def close(self) -> None:
         """Session worker: stop the timer, then close the Conversation as before."""
         await self.checkin_timer.close()
+        self._leave_live()
         await self._conversation.close()
+
+    async def route_user_text(self, message: Any) -> None:
+        """
+        A chat message: the Conversation handles it as always, then the
+        group's other channels get a copy to show (linked groups only).
+        """
+        await self._conversation.route_user_text(message)
+        try:
+            await self._mirror(message)
+        except Exception:  # showing a copy elsewhere must never break the chat
+            logger.exception("%s could not mirror a message", self._conversation.conversation_id)
+
+    async def _mirror(self, message: Any) -> None:
+        if self._conversation.is_private or self._conversation.is_ephemeral:
+            return  # a direct message never leaves its own channel
+        peers = self._peers()
+        text = (getattr(message, "text", "") or "").strip()
+        if not peers or not text:
+            return
+        copy = CoordinatorMirrorMessage(
+            channel=channel_of(self._conversation.conversation_id),
+            speaker=message.speaker,
+            speaker_name=message.speaker_name or self._conversation.participants().get(message.speaker, "member"),
+            text=text,
+            at=time.time(),
+        )
+        for peer in peers:
+            await peer._outbound.put(copy)
 
     # ------------------------------------------------------------------
     # Entry point, called by events/dispatcher.py
@@ -162,6 +210,12 @@ class CoordinatorRouter:
                 await self._start_kickoff(message)
             elif message.command in ("planning", "checkin", "task", "why"):
                 await self._plan.handle(message)
+            elif message.command == "link":
+                await self._on_link(message)
+            elif message.command == "unlink":
+                await self._on_unlink(message)
+            elif message.command == "catchup":
+                await self._on_catchup(message)
             else:  # "state"
                 await self._send_state(request_id)
         except Exception:
@@ -256,7 +310,7 @@ class CoordinatorRouter:
             message.proposal_id,
             action=message.action,
             member_id=message.member_id,
-            participants=self._conversation.participants(),
+            participants=self._roster(),
             option=message.option,
         )
         if outcome.proposal is not None:
@@ -271,22 +325,131 @@ class CoordinatorRouter:
     # ------------------------------------------------------------------
 
     def _store_now(self) -> CoordinationStore:
-        """The store for this conversation, opened on first use."""
+        """The store of this group (its home's file), opened on first use."""
         if self._store is None:
-            self._store = self._store_for(self._conversation.conversation_id)
+            self._store = self._store_for(self._home())
+            self._join_live()
         return self._store
+
+    def _home(self) -> str:
+        """The conversation that holds the project state: the web space if linked."""
+        if self._home_id is None:
+            cid = self._conversation.conversation_id
+            self._home_id = self._links.home(cid) if self._links is not None else cid
+        return self._home_id
+
+    def _join_live(self) -> None:
+        if self._live is not None:
+            self._live.join(self._home(), self)
+
+    def _leave_live(self) -> None:
+        if self._live is not None and self._home_id is not None:
+            self._live.leave(self._home_id, self)
+
+    def _rehome(self) -> None:
+        """After link/unlink: forget the old home, pick up the new one."""
+        self._leave_live()
+        self._home_id = None
+        self._store = None
+        self._store_now()
+
+    def _peers(self) -> list["CoordinatorRouter"]:
+        """The other open sessions of this group (linked channels), not this one."""
+        if self._live is None:
+            return []
+        return [r for r in self._live.of(self._home()) if r is not self]
+
+    def _roster(self) -> dict[int, str]:
+        """Everyone in the group's open sessions: this channel's members first."""
+        roster: dict[int, str] = {}
+        for peer in self._peers():
+            roster.update(peer._conversation.participants())
+        roster.update(self._conversation.participants())
+        return roster
+
+    def _names(self) -> dict[str, str]:
+        """
+        Member id -> name for the whole group, sent with every card and state
+        (additive). A channel cannot mention a member of another channel, so
+        it writes this name instead.
+        """
+        return {str(member_id): name for member_id, name in self._roster().items()}
+
+    # ------------------------------------------------------------------
+    # Linked groups
+    # ------------------------------------------------------------------
+
+    async def _on_link(self, message: CoordinatorCommandMessage) -> None:
+        if self._links is None:
+            await self._notice(False, "Linking channels is not available on this server.", message.request_id)
+            return
+        try:
+            home = self._links.link(
+                self._conversation.conversation_id,
+                str(message.args.get("code", "")),
+                member_id=message.member_id,
+            )
+        except LinkError as exc:
+            await self._notice(False, str(exc), message.request_id)
+            return
+        self._rehome()
+        logger.info("%s linked to %s", self._conversation.conversation_id, home)
+        await self._notice(
+            True,
+            "Linked to the web space: plan, tasks, decisions and cards are now shared. "
+            "Each channel keeps its own chat.",
+            message.request_id,
+        )
+        await self._send_state(message.request_id)
+
+    async def _on_unlink(self, message: CoordinatorCommandMessage) -> None:
+        if self._links is None or self._links.unlink(self._conversation.conversation_id) is None:
+            await self._notice(False, "This channel is not linked to a web space.", message.request_id)
+            return
+        self._rehome()
+        await self._notice(
+            True,
+            "Unlinked: this channel has its own plan again. The web space keeps the shared one.",
+            message.request_id,
+        )
+        await self._send_state(message.request_id)
+
+    async def _on_catchup(self, message: CoordinatorCommandMessage) -> None:
+        if self._catchup is None:
+            await self._notice(False, "Catch up is not available on this server.", message.request_id)
+            return
+        since = message.args.get("since")
+        group = self._links.group(self._home()) if self._links is not None else [self._home()]
+        result = await self._catchup.build(
+            store=self._store_now(),
+            conversation_id=self._conversation.conversation_id,
+            group=group,
+            member_id=message.member_id,
+            since=float(since) if isinstance(since, (int, float)) else None,
+        )
+        await self._outbound.put(
+            CoordinatorNoticeMessage(
+                ok=True, text=summary_line(result), request_id=message.request_id, catchup=result
+            )
+        )
 
     def _service(self) -> ProposalService:
         return ProposalService(self._store_now(), ttl_seconds=self._ttl)
 
     async def _send_state(self, request_id: str) -> None:
-        state = await self._store_now().load_state()
-        await self._outbound.put(
-            CoordinatorStateMessage(state=state.to_wire(), request_id=request_id)
-        )
+        state = (await self._store_now().load_state()).to_wire()
+        state["names"] = self._names()
+        await self._outbound.put(CoordinatorStateMessage(state=state, request_id=request_id))
+        # Linked channels follow the same state (they did not ask: no request id).
+        for peer in self._peers():
+            await peer._outbound.put(CoordinatorStateMessage(state=state))
 
     async def _send_proposal(self, proposal: Proposal) -> None:
-        await self._outbound.put(CoordinatorProposalMessage(proposal=proposal.to_wire()))
+        wire = proposal.to_wire()
+        wire["names"] = self._names()
+        await self._outbound.put(CoordinatorProposalMessage(proposal=wire))
+        for peer in self._peers():
+            await peer._outbound.put(CoordinatorProposalMessage(proposal=wire))
 
     async def _notice(self, ok: bool, text: str, request_id: str, proposal: dict | None = None) -> None:
         await self._outbound.put(

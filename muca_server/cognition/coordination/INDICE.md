@@ -37,6 +37,8 @@ group member applies it, inside one database transaction.
 | `models.py` | 258 | The data: members, charter, milestones, tasks, decisions, proposals. |
 | `store.py` | 389 | The only code that reads and writes the coordinator tables. |
 | `proposals.py` | 272 | Life cycle of a proposal, the buttons, and the checks before applying. |
+| `links.py` | 155 | Linked groups: which channels belong to a web space, and their open sessions. |
+| `catchup.py` | 125 | "What did I miss?": decisions and the other channels' messages, from disk. |
 | `appliers.py` | 135 | The change each kind of card makes, inside the transaction (M3). |
 | `plan_writes.py` | 109 | SQL writes of tasks, decisions and "Not now" used by the appliers (M3). |
 | `writer.py` | 163 | Asks the model for a draft, in a fixed JSON shape, validated. |
