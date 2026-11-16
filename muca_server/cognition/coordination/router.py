@@ -367,6 +367,14 @@ class CoordinatorRouter:
         roster.update(self._conversation.participants())
         return roster
 
+    def _names(self) -> dict[str, str]:
+        """
+        Member id -> name for the whole group, sent with every card and state
+        (additive). A channel cannot mention a member of another channel, so
+        it writes this name instead.
+        """
+        return {str(member_id): name for member_id, name in self._roster().items()}
+
     # ------------------------------------------------------------------
     # Linked groups
     # ------------------------------------------------------------------
@@ -430,6 +438,7 @@ class CoordinatorRouter:
 
     async def _send_state(self, request_id: str) -> None:
         state = (await self._store_now().load_state()).to_wire()
+        state["names"] = self._names()
         await self._outbound.put(CoordinatorStateMessage(state=state, request_id=request_id))
         # Linked channels follow the same state (they did not ask: no request id).
         for peer in self._peers():
@@ -437,6 +446,7 @@ class CoordinatorRouter:
 
     async def _send_proposal(self, proposal: Proposal) -> None:
         wire = proposal.to_wire()
+        wire["names"] = self._names()
         await self._outbound.put(CoordinatorProposalMessage(proposal=wire))
         for peer in self._peers():
             await peer._outbound.put(CoordinatorProposalMessage(proposal=wire))
