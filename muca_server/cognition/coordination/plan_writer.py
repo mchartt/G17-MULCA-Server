@@ -5,6 +5,8 @@ PlanWriter: the model calls of M4 commands, same rules as writer.py
     draft_plan      /planning  members' task list -> owners suggested with a reason
     draft_checkin   /checkin   findings computed in code -> up to 3 fixes
     answer_why      "why did we decide X?" -> answer + the decision ids it rests on
+    answer_question "@coordinator ...?" -> answer from the saved tasks, milestones
+                    and decisions + the ids it rests on, or "nothing saved"
 
 Every id the model returns is checked against the lists it was given; an
 unknown id, an owner who is not a member or a date in the past means one
@@ -28,6 +30,7 @@ from .models import (
     Milestone,
     PlanPayload,
     ProjectState,
+    Task,
 )
 from .writer import ATTEMPTS, ProposalWriter, check_rationale
 
@@ -81,6 +84,10 @@ CHECKIN_SCHEMA = _strict(
     },
 )
 WHY_SCHEMA = _strict("decision_answer", {"answer": {"type": "string"}, "decision_ids": {"type": "array", "items": {"type": "string"}}})
+_IDS = {"type": "array", "items": {"type": "string"}}
+ASK_SCHEMA = _strict(
+    "saved_answer", {"answer": {"type": "string"}, "task_ids": _IDS, "milestone_ids": _IDS, "decision_ids": _IDS}
+)
 
 COMMON = """\
 You are the coordinator of a group of peer university students. You never
@@ -117,6 +124,15 @@ from the log: which decision, what was chosen, why. decision_ids: the ids your
 answer rests on. If no decision in the log answers the question, answer that
 there is no recorded decision about it and return an empty list."""
 
+ASK_SYSTEM = COMMON + """
+
+A member asks the coordinator a question, between <question> tags. What the
+group has saved is between <saved> tags: the plan (tasks, each with a task_id),
+the milestones (each with a milestone_id) and the decision log (each with an
+id). Answer only from it, in at most three sentences. task_ids, milestone_ids
+and decision_ids: the ids your answer rests on. If nothing saved answers the
+question, return three empty lists: the server then says so itself."""
+
 
 @dataclass(frozen=True, slots=True)
 class Drafted:
@@ -128,6 +144,20 @@ class Drafted:
 class WhyAnswer:
     answer: str
     decisions: list[Decision]
+
+
+@dataclass(frozen=True, slots=True)
+class AskAnswer:
+    """An answer and what it rests on. With no source there is no answer (found is False)."""
+
+    answer: str
+    tasks: list[Task]
+    milestones: list[Milestone]
+    decisions: list[Decision]
+
+    @property
+    def found(self) -> bool:
+        return bool(self.tasks or self.milestones or self.decisions)
 
 
 class PlanWriter:
@@ -195,6 +225,35 @@ class PlanWriter:
 
         return await self._run("why", WHY_SYSTEM, user, WHY_SCHEMA, check)
 
+    async def answer_question(self, question: str, *, members: dict[int, str], state: ProjectState) -> AskAnswer | None:
+        """Answer from the saved plan, milestones and decisions, or with no source at all."""
+        tasks = {t.task_id: t for t in state.tasks}
+        milestones = {m.milestone_id: m for m in state.milestones}
+        decisions = {d.decision_id: d for d in state.decisions}
+        user = (
+            f"<saved>\n{_plan_only(state, members)}\n{_milestones_with_ids(state.milestones)}\n"
+            f"{_decision_log(state.decisions)}\n</saved>\n<question>\n{question}\n</question>"
+        )
+
+        def pick(ids: Any, known: dict[str, Any], what: str) -> list[Any]:
+            unique = list(dict.fromkeys(ids))
+            if any(i not in known for i in unique):
+                raise ValueError(f"unknown {what} id")
+            return [known[i] for i in unique]
+
+        def check(data: dict) -> AskAnswer:
+            found = AskAnswer(
+                str(data["answer"]).strip()[:1000],
+                pick(data["task_ids"], tasks, "task"),
+                pick(data["milestone_ids"], milestones, "milestone"),
+                pick(data["decision_ids"], decisions, "decision"),
+            )
+            if found.found and not found.answer:
+                raise ValueError("empty answer")
+            return found
+
+        return await self._run("ask", ASK_SYSTEM, user, ASK_SCHEMA, check)
+
     async def _run(self, name, system, user, schema, check):
         for attempt in range(1, ATTEMPTS + 1):
             try:
@@ -219,6 +278,20 @@ def _members(members: dict[int, str], profiles: list[MemberProfile]) -> str:
 def _milestones(milestones: list[Milestone]) -> str:
     lines = [f"- {m.title}: {m.due_date or 'no date'}" for m in milestones] or ["- (none)"]
     return "Milestones:\n" + "\n".join(lines)
+
+
+def _milestones_with_ids(milestones: list[Milestone]) -> str:
+    lines = [f"- milestone_id {m.milestone_id}: {m.title}: {m.due_date or 'no date'}" for m in milestones] or ["- (none)"]
+    return "Milestones:\n" + "\n".join(lines)
+
+
+def _decision_log(decisions: list[Decision]) -> str:
+    lines = [f"- id {d.decision_id}: {d.question} -> {d.choice}. Reason: {d.reason or '-'}" for d in decisions]
+    return "Decisions:\n" + "\n".join(lines or ["- (no decisions recorded)"])
+
+
+def _plan_only(state: ProjectState, members: dict[int, str]) -> str:
+    return _plan(state, members).split("\nMilestones:", 1)[0]
 
 
 def _plan(state: ProjectState, members: dict[int, str]) -> str:

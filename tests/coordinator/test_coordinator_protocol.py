@@ -93,7 +93,7 @@ def test_m1_clicks_still_parse_without_an_option():
     assert message.option is None
 
 
-@pytest.mark.parametrize("command", ["planning", "checkin", "task", "why"])
+@pytest.mark.parametrize("command", ["planning", "checkin", "task", "why", "ask"])
 def test_m4_commands_parse(command):
     message = parse_incoming_message({"event": "coordinator_command", "command": command, "memberId": 1})
     assert message.command == command
