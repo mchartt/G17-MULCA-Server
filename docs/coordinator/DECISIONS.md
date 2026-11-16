@@ -235,3 +235,24 @@ Newest first. Each entry: date, decision, alternatives, reason, status.
   and deletes the web side only if the server part succeeded.
 - "@coordinator why" typed in the web chat goes to the decision log; on
   Discord it stays `/coordinator why` (the lab's `runtime.py` is not touched).
+
+## 2026-11-16 · Linked groups: a web space shares its project with Discord / Slack channels
+
+- **Decision (proposed by Gabriele, to confirm with Matteo):** a Discord or
+  Slack channel can be linked to a web space with the space's invite code
+  (`/coordinator link CODE`). Linked channels share **the project**: plan,
+  tasks, decisions and proposal cards live in the web space's SQLite file,
+  every open session of the group gets each card and state, and a message
+  written in one channel is shown in the others (`coordinator_mirror`).
+  `catchup` answers "what did I miss?" from the decision log and the other
+  channels' episodic logs, with no model call.
+- **What stays as on 15/11:** each channel keeps its own conversation,
+  session, agent memory and member ids. The lab's `runtime.py` and
+  `conversation.py` are not touched, no accounts are linked.
+- **Supersedes in part:** "Web app and Discord stay two separate groups"
+  (15/11). The three reasons given there do not apply to this design: no
+  lab file changes, no account linking, and everything is tested offline
+  (`tests/coordinator/test_coordinator_links.py`).
+- **Limits:** the mirror and the shared cards reach sessions open in the same
+  server process; a channel whose session is closed sees them through
+  `catchup` and the next state it asks for. NOT VERIFIED live on Render.

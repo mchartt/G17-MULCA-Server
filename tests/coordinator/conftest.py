@@ -63,6 +63,9 @@ class FakeConversation:
     def participants(self) -> dict[int, str]:
         return dict(self.roster)
 
+    async def route_user_text(self, message) -> None:
+        self.texts = [*getattr(self, "texts", []), message.text]
+
 
 @pytest.fixture
 def store(tmp_path) -> CoordinationStore:

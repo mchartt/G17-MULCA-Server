@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 from datetime import date
 from typing import Any
@@ -41,13 +42,14 @@ from pydantic import ValidationError
 
 from ...protocol.coordinator import (
     CoordinatorCommandMessage,
+    CoordinatorMirrorMessage,
     CoordinatorNoticeMessage,
     CoordinatorProposalMessage,
     CoordinatorStateMessage,
     ProposalResponseMessage,
 )
 from .card_requests import CardRequests
-from .catchup import CatchUp, summary_line
+from .catchup import CatchUp, channel_of, summary_line
 from .checkin_timer import CheckinTimer
 from .links import GroupLinks, LinkError, LiveGroups
 from .models import MemberProfile, Proposal, ProposalKind
@@ -148,6 +150,34 @@ class CoordinatorRouter:
         await self.checkin_timer.close()
         self._leave_live()
         await self._conversation.close()
+
+    async def route_user_text(self, message: Any) -> None:
+        """
+        A chat message: the Conversation handles it as always, then the
+        group's other channels get a copy to show (linked groups only).
+        """
+        await self._conversation.route_user_text(message)
+        try:
+            await self._mirror(message)
+        except Exception:  # showing a copy elsewhere must never break the chat
+            logger.exception("%s could not mirror a message", self._conversation.conversation_id)
+
+    async def _mirror(self, message: Any) -> None:
+        if self._conversation.is_private or self._conversation.is_ephemeral:
+            return  # a direct message never leaves its own channel
+        peers = self._peers()
+        text = (getattr(message, "text", "") or "").strip()
+        if not peers or not text:
+            return
+        copy = CoordinatorMirrorMessage(
+            channel=channel_of(self._conversation.conversation_id),
+            speaker=message.speaker,
+            speaker_name=message.speaker_name or self._conversation.participants().get(message.speaker, "member"),
+            text=text,
+            at=time.time(),
+        )
+        for peer in peers:
+            await peer._outbound.put(copy)
 
     # ------------------------------------------------------------------
     # Entry point, called by events/dispatcher.py

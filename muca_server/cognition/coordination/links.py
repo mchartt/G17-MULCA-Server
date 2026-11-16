@@ -1,5 +1,5 @@
 """
-Linked groups: one project shared by a web space and a Discord channel.
+Linked groups: one project shared by a web space and its Discord / Slack channels.
 
 Why this exists (DECISIONS.md, 16/11): web and Discord stay two conversations,
 each with its own chat, its own session and its own episodic memory. What a
@@ -39,6 +39,9 @@ from ..memory.sqlite import db_path_for
 LINKS_FILE = "coord_links.sqlite3"
 WEB_PREFIX = "web:"
 DISCORD_PREFIX = "channel:"
+SLACK_PREFIX = "slack:"
+# The channels that can be linked to a web space.
+LINKABLE = (DISCORD_PREFIX, SLACK_PREFIX)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS coord_link (
@@ -85,13 +88,13 @@ class GroupLinks:
 
     def link(self, conversation_id: str, code: str, *, member_id: int) -> str:
         """
-        Link a Discord channel to the web space with this invite code and
+        Link a Discord or Slack channel to the web space with this invite code and
         return the web space's conversation id. The invite code is the same
         secret that lets someone join the web space, so knowing it gives no
         more than joining would.
         """
-        if not conversation_id.startswith(DISCORD_PREFIX):
-            raise LinkError("Run this in the Discord channel you want to link to the web space.")
+        if not conversation_id.startswith(LINKABLE):
+            raise LinkError("Run this in the Discord or Slack channel you want to link to the web space.")
         code = code.strip()
         if not code or len(code) > 20:
             raise LinkError("Write the invite code of the web space (you find it in the web app).")

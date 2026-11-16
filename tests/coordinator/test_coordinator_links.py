@@ -21,6 +21,7 @@ from muca_server.cognition.coordination.writer import ProposalWriter
 from muca_server.cognition.memory.records import EpisodicRecord
 from muca_server.cognition.memory.sqlite import SqliteEpisodicStore, db_path_for
 from muca_server.protocol import (
+    CoordinatorMirrorMessage,
     CoordinatorNoticeMessage,
     CoordinatorProposalMessage,
     CoordinatorStateMessage,
@@ -121,6 +122,9 @@ def test_link_unlink_and_a_deleted_space(tmp_path):
     assert links.link(DISCORD, " AB12CD ", member_id=9001) == WEB
     assert links.home(DISCORD) == WEB
     assert links.group(WEB) == [WEB, DISCORD]
+    assert links.link("slack:C123", "AB12CD", member_id=7) == WEB
+    assert links.group(WEB) == [WEB, DISCORD, "slack:C123"]
+    assert links.unlink("slack:C123") == WEB
     assert links.unlink(DISCORD) == WEB
     assert links.unlink(DISCORD) is None
     links.link(DISCORD, "AB12CD", member_id=9001)
@@ -315,3 +319,46 @@ async def test_catch_up_works_from_discord_too_and_without_a_link(tmp_path):
     (notice,) = await drain(discord_q)
     assert notice.ok and not notice.catchup["linked"]
     assert "/coordinator link" in summary_line(notice.catchup)
+
+
+# ----------------------------------------------------------------------
+# The chat, mirrored
+# ----------------------------------------------------------------------
+
+
+def text(speaker, name, content):
+    return parse_incoming_message(
+        {"event": "user_text", "speaker": speaker, "speakerName": name, "text": content}
+    )
+
+
+async def test_a_message_is_shown_in_the_linked_channel_and_handled_once(tmp_path):
+    group = Group(tmp_path)
+    web, web_q = await open_web_space(group)
+    discord, discord_q = group.router(DISCORD, DISCORD_ROSTER)
+    await discord.route_coordinator(command("link", 9001, code="AB12CD"))
+    await drain(discord_q)
+    await drain(web_q)
+
+    await discord.route_user_text(text(9001, "Chiara", "Lab on Tuesday?"))
+    assert discord._conversation.texts == ["Lab on Tuesday?"]  # its own agent hears it
+    assert not hasattr(web._conversation, "texts")  # the web agent does not
+    (copy,) = await drain(web_q)
+    assert isinstance(copy, CoordinatorMirrorMessage)
+    assert (copy.channel, copy.speaker_name, copy.text) == ("discord", "Chiara", "Lab on Tuesday?")
+    assert json.loads(serialize_outgoing_message(copy))["speakerName"] == "Chiara"
+    assert not await drain(discord_q)  # no echo to the sender's channel
+
+
+async def test_nothing_is_mirrored_without_a_link_or_from_a_dm(tmp_path):
+    group = Group(tmp_path)
+    web, web_q = await open_web_space(group)
+    discord, discord_q = group.router(DISCORD, DISCORD_ROSTER)
+    await discord.route_user_text(text(9001, "Chiara", "hello"))
+    assert not await drain(web_q)
+
+    await discord.route_coordinator(command("link", 9001, code="AB12CD"))
+    await drain(web_q)
+    discord._conversation.is_private = True
+    await discord.route_user_text(text(9001, "Chiara", "secret"))
+    assert not await drain(web_q)

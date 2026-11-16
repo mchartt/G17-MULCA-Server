@@ -119,3 +119,19 @@ class CoordinatorNoticeMessage(OutgoingMessage):
     # Only for the "catchup" command (additive): decisions and messages from
     # the group's other channels since the member's last catch-up (catchup.py).
     catchup: dict[str, Any] | None = None
+
+
+class CoordinatorMirrorMessage(OutgoingMessage):
+    """
+    Linked groups: a message a member wrote in another channel of the group
+    (e.g. on Discord, shown on the web). The client shows it with the channel's
+    name; it is not sent to this session's agent.
+    """
+
+    event: Literal["coordinator_mirror"] = "coordinator_mirror"
+    channel: str  # "web" | "discord" | "slack"
+    speaker: int
+    speaker_name: str = Field(serialization_alias="speakerName")
+    text: str
+    at: float  # unix time
+
