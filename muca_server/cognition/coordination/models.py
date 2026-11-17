@@ -114,6 +114,9 @@ class ProjectState(_Model):
     milestones: list[Milestone] = Field(default_factory=list)
     tasks: list[Task] = Field(default_factory=list)
     decisions: list[Decision] = Field(default_factory=list)
+    # The language the group chose for the coordinator's texts: "en", "it",
+    # or "" (not chosen: it follows the chat). Command "language".
+    language: str = ""
 
 
 # ----------------------------------------------------------------------

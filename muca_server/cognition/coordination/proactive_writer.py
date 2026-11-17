@@ -180,6 +180,10 @@ class ProactiveWriter:
     def __init__(self, writer: ProposalWriter) -> None:
         self._writer = writer
 
+    def for_group(self, language) -> ProactiveWriter:
+        """The same writer for one group: its cards follow that group's language."""
+        return ProactiveWriter(self._writer.for_group(language))
+
     async def draft(
         self,
         strategy_id: str,

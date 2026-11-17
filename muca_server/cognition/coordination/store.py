@@ -108,6 +108,12 @@ CREATE TABLE IF NOT EXISTS coord_mark (
     message_count  INTEGER NOT NULL DEFAULT 0,
     at             REAL NOT NULL
 );
+-- Choices of the group that are not project state: "language" = the language
+-- of the coordinator's texts ("en" or "it"; no row = it follows the chat).
+CREATE TABLE IF NOT EXISTS coord_setting (
+    name   TEXT PRIMARY KEY,
+    value  TEXT NOT NULL
+);
 -- "Helpful" on a proactive card: one row per member and card. Feedback
 -- only: it never changes the project state or the card.
 CREATE TABLE IF NOT EXISTS coord_feedback (
@@ -348,6 +354,27 @@ class CoordinationStore:
         finally:
             await db.close()
 
+    async def setting(self, name: str) -> str:
+        """A choice of the group ("language"), or "" if it never made one."""
+        db = await self._connect()
+        try:
+            cursor = await db.execute("SELECT value FROM coord_setting WHERE name = ?", (name,))
+            row = await cursor.fetchone()
+        finally:
+            await db.close()
+        return row[0] if row else ""
+
+    async def save_setting(self, name: str, value: str) -> None:
+        """Save a choice of the group; "" removes it."""
+        db = await self._connect()
+        try:
+            if value:
+                await db.execute("INSERT OR REPLACE INTO coord_setting (name, value) VALUES (?, ?)", (name, value))
+            else:
+                await db.execute("DELETE FROM coord_setting WHERE name = ?", (name,))
+        finally:
+            await db.close()
+
     async def add_feedback(self, proposal_id: str, member_id: int, at: float) -> int:
         """A member found a card helpful (once per member). Returns how many did."""
         db = await self._connect()
@@ -417,6 +444,7 @@ class CoordinationStore:
                 Decision(**dict(row))
                 for row in await _all(db, "SELECT * FROM coord_decision ORDER BY decided_at")
             ]
+            language_rows = await _all(db, "SELECT value FROM coord_setting WHERE name = 'language'")
         finally:
             await db.close()
         return ProjectState(
@@ -425,6 +453,7 @@ class CoordinationStore:
             milestones=milestones,
             tasks=tasks,
             decisions=decisions,
+            language=language_rows[0]["value"] if language_rows else "",
         )
 
 

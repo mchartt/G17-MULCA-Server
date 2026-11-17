@@ -86,6 +86,7 @@ Tables `coord_member`, `coord_charter` (one row), `coord_milestone`,
 `coord_task`, `coord_task_dependency`, `coord_decision`, `coord_proposal`,
 `coord_snooze`, `coord_mark` (last proactive card and last timed check-in,
 `mark` / `save_mark`), `coord_feedback` (Helpful, `add_feedback`),
+`coord_setting` (the group's language, `setting` / `save_setting`),
 created on first use in the **conversation's own SQLite file**.
 
 | Method | What it does |
