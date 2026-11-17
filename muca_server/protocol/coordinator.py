@@ -73,9 +73,11 @@ class CoordinatorCommandMessage(CoordinatorIncomingMessage):
     # Linked groups (additive): link (args.code: the web space's invite code,
     # run in a Discord channel), unlink, catchup (args.since: optional unix
     # time; what the member missed in the group's other channels).
+    # ask (additive): args.question, any question about the saved tasks,
+    # milestones and decisions; answered with a notice that names its sources.
     command: Literal[
         "profile", "kickoff", "state", "planning", "checkin", "task", "why", "card",
-        "link", "unlink", "catchup",
+        "link", "unlink", "catchup", "ask",
     ]
     member_id: int = Field(alias="memberId")
     args: dict[str, Any] = Field(default_factory=dict)

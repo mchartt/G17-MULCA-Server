@@ -45,8 +45,8 @@ group member applies it, inside one database transaction.
 | `proactive_writer.py` | 249 | Drafts CS5/CS2/CS3 cards, grounded on numbered chat lines (M3). |
 | `proactive.py` | 186 | The bridge from a fired strategy to a card, with rules R1-R7 (M3). |
 | `checkin.py` | 90 | M4: plan against reality, computed in code (late, blocked, due soon, no owner, milestone, dependency). |
-| `plan_writer.py` | 230 | M4: model drafts for /planning, /checkin options, and answers to "why did we decide X?" with the decisions they rest on. |
-| `plan_commands.py` | 175 | M4: the commands planning, checkin, task, why (one model command at a time, in the background). |
+| `plan_writer.py` | 230 | M4: model drafts for /planning, /checkin options, answers to "why did we decide X?" with the decisions they rest on, and answers to "@coordinator ...?" from the saved tasks, milestones and decisions. |
+| `plan_commands.py` | 175 | M4: the commands planning, checkin, task, why, ask (one model command at a time, in the background). |
 | `router.py` | 271 | Receives the coordinator messages of one session and answers them. |
 | `settings.py` | 50 | The on/off switch, the proposal lifetime, the timed check-in interval and the text model, from the environment. |
 | `card_requests.py` | 60 | Helpful (feedback on a proactive card, FR21) and the `card` command (a card sent back to the asker). No model, no state change. |

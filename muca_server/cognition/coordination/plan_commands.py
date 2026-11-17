@@ -10,11 +10,14 @@ PlanCommands: the M4 commands of one group session, used by router.py.
               -> a member updates a task (their own action: no card, no model)
     why       args.question -> PlanWriter answers from the decision log only,
               with the decisions it rests on as the source
+    ask       args.question -> PlanWriter answers from the saved tasks,
+              milestones and decisions, each named as the source; when none
+              of them answers, the server says so (spec: "@coordinator")
 
 The check-in also runs on time (spec FR15): checkin_timer.py calls
 `timed_checkin`, which posts a card only when something is late or at risk.
 
-planning, checkin and why call the model, so they run in the background (like
+planning, checkin, why and ask call the model, so they run in the background (like
 the kickoff) and only one runs at a time per group: the session reads its
 messages one by one and must never wait for the model.
 """
@@ -29,7 +32,8 @@ from typing import Any
 
 from .checkin import findings, owners_report
 from .models import ProposalKind, TaskStatus
-from .plan_writer import PlanWriter, WhyAnswer
+from .models import Decision
+from .plan_writer import AskAnswer, PlanWriter, WhyAnswer
 from .proposals import ProposalService
 from .store import CoordinationStore
 
@@ -38,6 +42,9 @@ logger = logging.getLogger(__name__)
 BUSY = "The coordinator is already working on a request for this group: its answer will appear here."
 MAX_TASKS_TEXT = 4000
 MAX_QUESTION = 500
+NOT_SAVED = (
+    "Nothing saved answers this. I can only read the plan, the milestones and the decisions the group confirmed."
+)
 
 
 class PlanCommands:
@@ -66,11 +73,11 @@ class PlanCommands:
         self._task: asyncio.Task | None = None
 
     async def handle(self, message) -> None:
-        """Entry point for planning, checkin, task and why (router.py checked membership)."""
+        """Entry point for planning, checkin, task, why and ask (router.py checked membership)."""
         if message.command == "task":
             await self._on_task(message)
             return
-        handlers = {"planning": self._planning, "checkin": self._checkin, "why": self._why}
+        handlers = {"planning": self._planning, "checkin": self._checkin, "why": self._why, "ask": self._ask}
         if self._task is not None and not self._task.done():
             await self._notice(False, BUSY, message.request_id)
             return
@@ -156,6 +163,21 @@ class PlanCommands:
             return
         await self._notice(True, why_text(answer, self._participants()), message.request_id)
 
+    async def _ask(self, message) -> None:
+        question = str(message.args.get("question", "")).strip()[:MAX_QUESTION]
+        if not question:
+            await self._notice(False, "Write your question after @coordinator.", message.request_id)
+            return
+        state = await self._store().load_state()
+        if not (state.tasks or state.milestones or state.decisions):
+            await self._notice(True, NOT_SAVED, message.request_id)  # nothing to read: no model call
+            return
+        answer = await self._writer.answer_question(question, members=self._participants(), state=state)
+        if answer is None:
+            await self._unavailable(message.event, message.request_id)
+            return
+        await self._notice(True, ask_text(answer, self._participants()), message.request_id)
+
     async def _on_task(self, message) -> None:
         """A member updates a task's status. Their own action: no card, no model."""
         status = str(message.args.get("status", "")).strip().lower()
@@ -177,10 +199,26 @@ class PlanCommands:
 
 def why_text(answer: WhyAnswer, members: dict[int, str]) -> str:
     """The answer, then its source: each decision with who decided, when, and from which card."""
+    return "\n".join([answer.answer, *(_decision_source(d, members) for d in answer.decisions)])
+
+
+def ask_text(answer: AskAnswer, members: dict[int, str]) -> str:
+    """The answer, then every saved item it rests on; with no source, the fixed "nothing saved" line."""
+    if not answer.found:
+        return NOT_SAVED
     lines = [answer.answer]
-    for d in answer.decisions:
-        when = datetime.fromtimestamp(d.decided_at).strftime("%d %b")
-        who = members.get(d.decided_by, "a member")
-        source = f", card {d.source.split(':', 1)[1]}" if d.source.startswith("proposal:") else ""
-        lines.append(f"Source: “{d.question}” → {d.choice} (decided by {who} on {when}{source}).")
+    for t in answer.tasks:
+        owner = members.get(t.owner_id, "a member") if t.owner_id else "no owner"
+        due = t.due_date.strftime("%d %b") if t.due_date else "no date"
+        lines.append(f"Source: task “{t.title}” ({owner}, due {due}, {t.status.value}).")
+    for m in answer.milestones:
+        lines.append(f"Source: milestone “{m.title}” ({m.due_date.strftime('%d %b') if m.due_date else 'no date'}).")
+    lines.extend(_decision_source(d, members) for d in answer.decisions)
     return "\n".join(lines)
+
+
+def _decision_source(d: Decision, members: dict[int, str]) -> str:
+    when = datetime.fromtimestamp(d.decided_at).strftime("%d %b")
+    who = members.get(d.decided_by, "a member")
+    source = f", card {d.source.split(':', 1)[1]}" if d.source.startswith("proposal:") else ""
+    return f"Source: “{d.question}” → {d.choice} (decided by {who} on {when}{source})."

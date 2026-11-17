@@ -208,7 +208,7 @@ class CoordinatorRouter:
                 await self._on_profile(message)
             elif message.command == "kickoff":
                 await self._start_kickoff(message)
-            elif message.command in ("planning", "checkin", "task", "why"):
+            elif message.command in ("planning", "checkin", "task", "why", "ask"):
                 await self._plan.handle(message)
             elif message.command == "link":
                 await self._on_link(message)
