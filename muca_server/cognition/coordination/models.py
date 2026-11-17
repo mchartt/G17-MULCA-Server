@@ -42,7 +42,8 @@ class _Model(BaseModel):
 class MemberProfile(_Model):
     """
     One member of the group. Only what the project rules allow us to keep:
-    display name, discipline, skills, weekly hours (no scores, no judgements).
+    display name, discipline, skills, weekly hours, and a few lines the member
+    writes about their own background (no scores, no judgements).
     """
 
     member_id: int  # the same id as protocol Participant.id
@@ -50,6 +51,9 @@ class MemberProfile(_Model):
     discipline: str = Field(default="", max_length=100)
     skills: list[str] = Field(default_factory=list, max_length=20)
     weekly_hours: int | None = Field(default=None, ge=0, le=80)
+    # Written by the member, in their own words: what they studied, what they
+    # have done before. The coordinator reads it when it suggests an owner.
+    background: str = Field(default="", max_length=600)
 
 
 # ----------------------------------------------------------------------

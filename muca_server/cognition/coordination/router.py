@@ -17,6 +17,7 @@ What it handles:
   coordinator_command  profile | kickoff | state | planning | checkin | task | why | card
                        | language (the language of the coordinator's texts)
                        | charter  (a member edits the charter: a card to confirm)
+                       | milestone (a member adds, changes or removes a milestone by hand)
                        | link | unlink | catchup   (linked groups, links.py and catchup.py)
   proposal_response    confirm | reject | take | choose | not_now | helpful
 and it answers with coordinator_proposal / coordinator_state / coordinator_notice.
@@ -216,7 +217,7 @@ class CoordinatorRouter:
                 await self._on_profile(message)
             elif message.command == "kickoff":
                 await self._start_kickoff(message)
-            elif message.command in ("planning", "checkin", "task", "why", "ask"):
+            elif message.command in ("planning", "checkin", "task", "milestone", "why", "ask"):
                 await self._plan.handle(message)
             elif message.command == "language":
                 await self._on_language(message)
@@ -268,6 +269,7 @@ class CoordinatorRouter:
                 discipline=args.get("discipline", ""),
                 skills=skills,
                 weekly_hours=args.get("weekly_hours"),
+                background=str(args.get("background") or "").strip(),
             )
         except ValidationError as exc:
             await self._notice(False, f"Profile not saved: {_first_error(exc)}", message.request_id)

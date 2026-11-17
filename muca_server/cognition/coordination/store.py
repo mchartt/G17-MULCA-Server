@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS coord_member (
     display_name  TEXT NOT NULL,
     discipline    TEXT NOT NULL DEFAULT '',
     skills_json   TEXT NOT NULL DEFAULT '[]',
-    weekly_hours  INTEGER
+    weekly_hours  INTEGER,
+    background    TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS coord_charter (
     id                 INTEGER PRIMARY KEY CHECK (id = 1),  -- one charter per group
@@ -140,6 +141,10 @@ class CoordinationStore:
         if not self._ready:
             try:
                 await db.executescript(SCHEMA)
+                # Files made before "background" existed get the column.
+                cursor = await db.execute("PRAGMA table_info(coord_member)")
+                if "background" not in {row[1] for row in await cursor.fetchall()}:
+                    await db.execute("ALTER TABLE coord_member ADD COLUMN background TEXT NOT NULL DEFAULT ''")
             except Exception:
                 await db.close()
                 raise
@@ -156,13 +161,14 @@ class CoordinationStore:
             await db.execute(
                 """
                 INSERT INTO coord_member
-                    (member_id, display_name, discipline, skills_json, weekly_hours)
-                VALUES (?, ?, ?, ?, ?)
+                    (member_id, display_name, discipline, skills_json, weekly_hours, background)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(member_id) DO UPDATE SET
                     display_name = excluded.display_name,
                     discipline   = excluded.discipline,
                     skills_json  = excluded.skills_json,
-                    weekly_hours = excluded.weekly_hours
+                    weekly_hours = excluded.weekly_hours,
+                    background   = excluded.background
                 """,
                 (
                     profile.member_id,
@@ -170,6 +176,7 @@ class CoordinationStore:
                     profile.discipline,
                     json.dumps(profile.skills),
                     profile.weekly_hours,
+                    profile.background,
                 ),
             )
         finally:
@@ -321,6 +328,79 @@ class CoordinationStore:
         finally:
             await db.close()
 
+    # ------------------------------------------------------------------
+    # The plan edited by hand (a member's own action: no card, no model)
+    # ------------------------------------------------------------------
+
+    async def add_task_by_hand(self, task_id: str, title: str, owner_id: int | None, due_date: str | None) -> None:
+        db = await self._connect()
+        try:
+            await db.execute(
+                "INSERT INTO coord_task (task_id, title, owner_id, due_date, status) VALUES (?, ?, ?, ?, 'todo')",
+                (task_id, title, owner_id, due_date),
+            )
+        finally:
+            await db.close()
+
+    async def edit_task(self, task_id: str, fields: dict) -> bool:
+        """Set the given columns of a task (title, owner_id, due_date, status); None clears owner or date."""
+        allowed = {k: v for k, v in fields.items() if k in ("title", "owner_id", "due_date", "status")}
+        if not allowed:
+            return False
+        db = await self._connect()
+        try:
+            cursor = await db.execute(
+                f"UPDATE coord_task SET {', '.join(f'{column} = ?' for column in allowed)} WHERE task_id = ?",
+                (*allowed.values(), task_id),
+            )
+            return cursor.rowcount > 0
+        finally:
+            await db.close()
+
+    async def remove_task(self, task_id: str) -> bool:
+        db = await self._connect()
+        try:
+            await db.execute("DELETE FROM coord_task_dependency WHERE task_id = ? OR depends_on = ?", (task_id, task_id))
+            cursor = await db.execute("DELETE FROM coord_task WHERE task_id = ?", (task_id,))
+            return cursor.rowcount > 0
+        finally:
+            await db.close()
+
+    async def add_milestone(self, milestone_id: str, title: str, due_date: str | None) -> None:
+        db = await self._connect()
+        try:
+            await db.execute(
+                """
+                INSERT INTO coord_milestone (milestone_id, title, due_date, position)
+                VALUES (?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM coord_milestone))
+                """,
+                (milestone_id, title, due_date),
+            )
+        finally:
+            await db.close()
+
+    async def edit_milestone(self, milestone_id: str, fields: dict) -> bool:
+        allowed = {k: v for k, v in fields.items() if k in ("title", "due_date")}
+        if not allowed:
+            return False
+        db = await self._connect()
+        try:
+            cursor = await db.execute(
+                f"UPDATE coord_milestone SET {', '.join(f'{column} = ?' for column in allowed)} WHERE milestone_id = ?",
+                (*allowed.values(), milestone_id),
+            )
+            return cursor.rowcount > 0
+        finally:
+            await db.close()
+
+    async def remove_milestone(self, milestone_id: str) -> bool:
+        db = await self._connect()
+        try:
+            cursor = await db.execute("DELETE FROM coord_milestone WHERE milestone_id = ?", (milestone_id,))
+            return cursor.rowcount > 0
+        finally:
+            await db.close()
+
     async def active_snoozes(self, now: float) -> set[tuple[str, str]]:
         """(strategy_id, topic_key) pairs silenced by "Not now" and not yet over."""
         db = await self._connect()
@@ -404,6 +484,7 @@ class CoordinationStore:
                     discipline=row["discipline"],
                     skills=json.loads(row["skills_json"]),
                     weekly_hours=row["weekly_hours"],
+                    background=row["background"],
                 )
                 for row in await _all(db, "SELECT * FROM coord_member ORDER BY display_name")
             ]

@@ -123,7 +123,7 @@ async def test_profile_is_saved_with_skills_from_a_comma_list(store):
     (member,) = of_type(sent, CoordinatorStateMessage)[0].state["members"]
     assert member == {
         "member_id": 2, "display_name": "Bruno", "discipline": "Design",
-        "skills": ["figma", "ux"], "weekly_hours": 5,
+        "skills": ["figma", "ux"], "weekly_hours": 5, "background": "",
     }
 
 
