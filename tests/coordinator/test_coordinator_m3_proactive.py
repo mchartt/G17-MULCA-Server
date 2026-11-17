@@ -54,7 +54,7 @@ def utter(speaker_id, text, name="Ada", ts=0):
 HISTORY = [utter(1, "fonts?", "Ada"), utter(2, "Arial!", "Bruno"), utter(3, "no, Helvetica", "Chiara")]
 
 
-def make_bridge(store, writer, conversation=None, clock=None):
+def make_bridge(store, writer, conversation=None, clock=None, members=None):
     clock = clock or Clock()
     sent = []
 
@@ -67,6 +67,7 @@ def make_bridge(store, writer, conversation=None, clock=None):
         store=lambda: store,
         service=lambda: ProposalService(store, clock=clock),
         send_proposal=send,
+        members=members,
         today=lambda: date(2026, 11, 20),
         clock=clock,
     )
@@ -146,6 +147,32 @@ async def test_r3_r4_survive_a_server_restart(store):
     clock.now += MIN_SECONDS_BETWEEN + 1
     assert await offer(second, count=20 + MIN_MESSAGES_BETWEEN) is Verdict.TAKEN
     assert len(sent2) == 1
+
+
+# Linked groups: two channels (two bridges) share one project file.
+
+
+async def test_linked_channels_share_the_five_minutes_but_not_the_message_count(store):
+    web, sent_web, clock = make_bridge(store, FakeWriter(deleg_draft("a")), FakeConversation(conversation_id="web:AB12"))
+    discord, sent_discord, _ = make_bridge(
+        store, FakeWriter(deleg_draft("b")), FakeConversation(conversation_id="channel:9"), clock=clock
+    )
+    # Discord already looked at the marker once, before the web card existed.
+    assert await offer(discord, strategy="not_a_coordinator_strategy") is Verdict.NOT_MINE
+    assert await offer(web, count=200) is Verdict.TAKEN and len(sent_web) == 1
+    # R4 is the group's: a card on the web a moment ago silences Discord too.
+    assert await offer(discord, count=3) is Verdict.VETOED and sent_discord == []
+    # R3 is per channel: the web's count of 200 says nothing about Discord's 3.
+    clock.now += MIN_SECONDS_BETWEEN + 1
+    assert await offer(discord, count=3) is Verdict.TAKEN and len(sent_discord) == 1
+
+
+async def test_a_card_may_name_a_member_of_another_channel(store):
+    writer = FakeWriter(deleg_draft())
+    group = {1: "Ada", 2: "Bruno", 77: "Carla (Discord)"}
+    bridge, _, _ = make_bridge(store, writer, members=lambda: group)
+    assert await offer(bridge) is Verdict.TAKEN
+    assert writer.calls[0]["members"] == group
 
 
 async def test_an_unreadable_marker_never_breaks_the_offer(store):

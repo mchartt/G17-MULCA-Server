@@ -9,7 +9,7 @@ Requirement ids (N1–N4, G1–G6, FR, UC, CS) come from the technical spec v3
 (Claude artifact "Documentazione tecnica v3"). Only items of the demo scope
 (project instructions, section 7) are listed.
 
-Last update: 15 Nov 2026 (M5).
+Last update: 17 Nov 2026 (linked groups).
 
 ## Platform rules (project instructions, section 4.3)
 
@@ -40,7 +40,7 @@ Last update: 15 Nov 2026 (M5).
 | G5 Why? and Not now on every proactive card | NOT VERIFIED (live) — tested | Why? from the card's `context` (strategy, topic, evidence copied by the server); Not now = status `snoozed` + `coord_snooze` 30 min (`test_not_now_snoozes_*`, `test_r6_*`, Playwright "Not now", axe 0 violations with Why? open). Helpful (FR21): feedback only, once per member, `coord_feedback`, on web and Discord (`test_helpful_*`, Playwright CS2). Missing: live run |
 | UC9 project panel always visible | NOT VERIFIED (live) — tested | web panel (goal, milestones, tasks with owner and status select, decisions, Ask why), shown also before the charter; Discord `/coordinator plan` (private, numbered tasks). Vitest, Playwright |
 | N3 calendar feed | NOT VERIFIED (live) — tested | `mulca_discord/web/calendar.py`: private revocable link, one all-day event per dated milestone and open task, RFC 5545 escaping/folding (`tests/test_web_calendar.py`); Playwright "calendar" (feed read by the browser, old link 404). Missing: subscription tried in Google Calendar / Outlook |
-| Multichannel (one group across web and Discord) | OUT OF SCOPE (decision 15/11) | web and Discord are separate groups by Matteo's decision (DECISIONS.md); future work in the report |
+| Multichannel (one project across web, Discord and Slack) | NOT VERIFIED (live) — tested offline (decision 16/11) | `links.py`, `catchup.py`, router fan-out; `test_coordinator_links.py`; client `test_cross_channel.py`, `test_slack.py`. Chats and member ids stay per channel; see "Coordinator strategies in a linked group" below |
 
 ## M3 deterministic rules (proactive.py)
 
@@ -53,6 +53,17 @@ Last update: 15 Nov 2026 (M5).
 | R6 Not now per strategy + topic, 30 min (GL10) | tested | `test_r6_a_snoozed_topic_never_gets_a_card` |
 | R7 no CS5 for a task that has an owner | tested | `test_r7_*`, writer `task_id` check |
 | Coordinator off: strategies not offered, policy unchanged | tested | `test_offered_to_the_model_only_when_the_coordinator_is_on`, `test_without_a_bridge_the_policy_is_unchanged` |
+
+## Coordinator strategies in a linked group (17/11)
+
+| Point | Status | Proof / limit |
+|---|---|---|
+| R4: one unsolicited card every 5 minutes for the whole group, whichever channel it appears on | tested | `proactive.py` reads the shared marker at every offer; `test_linked_channels_share_the_five_minutes_but_not_the_message_count` |
+| R3: 10 messages between cards, counted per channel | tested | marker `proactive:<conversation id>`; same test |
+| CS5 may name as owner a member of any linked channel | tested | the bridge gets the group's roster; `test_a_card_may_name_a_member_of_another_channel`. Limit: only members whose channel has an open session |
+| CS6 check-in, UC9 why, Not now (R6), first click wins | tested | they read and write the shared project file |
+| CS2, CS3, CS5, CS7 judge only the chat of the channel where they fire | LIMIT, by design | each channel keeps its own agent memory; a discussion split between Discord and web is not seen as one, and Why? quotes that channel's messages only |
+| One person on web and on Discord is two members | LIMIT, by design | no account linking (DECISIONS.md 16/11); a task taken on Discord shows the Discord name |
 
 ## Out of the demo (shown with the clickable prototype)
 

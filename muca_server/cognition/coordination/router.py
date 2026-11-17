@@ -108,6 +108,7 @@ class CoordinatorRouter:
                 store=self._store_now,
                 service=self._service,
                 send_proposal=self._send_proposal,
+                members=self._roster,
                 today=today,
             )
             if proactive_writer is not None
