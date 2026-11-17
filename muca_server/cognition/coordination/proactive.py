@@ -30,6 +30,15 @@ dropped does not silence the group. Their marker is saved in the group's
 SQLite file (store.save_mark("proactive", ...)) and read back on the first offer of
 a new session, so a server restart does not reset them. The policy's own cooldown
 (`cooldown_messages` in the strategy YAML) still applies on top.
+
+Linked groups (links.py): several channels share one project, and each has
+its own bridge. The group must still get one unsolicited card at a time, so:
+    - R4 (time) is for the whole group: the time of the last card is read
+      from the shared file at every offer, whichever channel posted it;
+    - R3 (messages) stays per channel, because each channel counts its own
+      messages: its count is saved under "proactive:<conversation id>";
+    - the members a card may name (CS5 owner) are the group's, on every
+      channel (`members`, the router's roster), not only this channel's.
 """
 
 from __future__ import annotations
@@ -70,6 +79,7 @@ class ProactiveBridge:
         store: Callable[[], CoordinationStore],
         service: Callable[[], ProposalService],
         send_proposal: Callable[[Proposal], Awaitable[None]],
+        members: Callable[[], dict[int, str]] | None = None,
         today: Callable[[], date] = date.today,
         clock: Callable[[], float] = time.time,
     ) -> None:
@@ -78,6 +88,10 @@ class ProactiveBridge:
         self._store = store
         self._service = service
         self._send_proposal = send_proposal
+        # Who a card may name: the whole group when linked, else this channel.
+        self._members = members or (lambda: dict(conversation.participants()))
+        # R3 counts this channel's own messages; R4's time is the group's.
+        self._count_mark = f"proactive:{getattr(conversation, 'conversation_id', '')}"
         self._today = today
         self._clock = clock
         self._task: asyncio.Task | None = None
@@ -120,17 +134,23 @@ class ProactiveBridge:
             await asyncio.gather(self._task, return_exceptions=True)
 
     async def _load_mark(self) -> None:
-        """Once per session: the R3/R4 marker saved before a restart."""
-        if self._mark_loaded:
-            return
-        self._mark_loaded = True
+        """
+        The R3/R4 markers from the group's file. The time of the last card is
+        read at every offer (another channel of the group may have posted one
+        a minute ago); this channel's message count only once, after a restart.
+        """
         try:
-            mark = await self._store().mark("proactive")
+            store = self._store()
+            shared = await store.mark("proactive")
+            if shared is not None and (self._last_at is None or shared[1] > self._last_at):
+                self._last_at = shared[1]
+            if not self._mark_loaded:
+                self._mark_loaded = True
+                own = await store.mark(self._count_mark)
+                if own is not None and self._last_count is None:
+                    self._last_count = own[0]
         except Exception:
             logger.exception("%s coordinator: could not read the R3/R4 marker", self._conversation.conversation_id)
-            return
-        if mark is not None and self._last_count is None:
-            self._last_count, self._last_at = mark
 
     # ------------------------------------------------------------------
     # Rules and drafting
@@ -160,7 +180,7 @@ class ProactiveBridge:
             state = await store.load_state()
             snoozes = await store.active_snoozes(self._clock())
             silenced = sorted(topic for sid, topic in snoozes if sid == strategy_id)
-            members = dict(self._conversation.participants())
+            members = dict(self._members())
             draft = await self._writer.draft(
                 strategy_id,
                 chat=chat,
@@ -186,6 +206,7 @@ class ProactiveBridge:
             self._last_count = message_count
             self._last_at = self._clock()
             await store.save_mark("proactive", self._last_count, self._last_at)
+            await store.save_mark(self._count_mark, self._last_count, self._last_at)
             await self._send_proposal(proposal)
         except Exception:
             # Project rule: a model or database error never breaks the chat.
