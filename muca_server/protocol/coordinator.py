@@ -77,11 +77,18 @@ class CoordinatorCommandMessage(CoordinatorIncomingMessage):
     # milestones and decisions; answered with a notice that names its sources.
     # language (additive): args.language "en" | "it" | "" (follow the chat):
     # the language of everything the coordinator writes for this group.
+    # task (additive): besides args.status, a member may set args.owner (a
+    # member id, or "" for nobody), args.due (YYYY-MM-DD, or ""), args.title;
+    # args.add = the title of a new task; args.remove = true drops the task.
+    # milestone (additive): args.add = title (+ args.due); or args.milestone =
+    # its id with args.title / args.due / args.remove. By hand: no card.
+    # planning (additive): args.items = [{title, owner_id?, due_date?}] instead
+    # of args.text; an owner the members chose is kept, the others are suggested.
     # charter (additive): args.goal, args.deliverables: a member edits the
     # confirmed charter; answered with a charter card to confirm, no model.
     command: Literal[
         "profile", "kickoff", "state", "planning", "checkin", "task", "why", "card",
-        "link", "unlink", "catchup", "ask", "language", "charter",
+        "link", "unlink", "catchup", "ask", "language", "charter", "milestone",
     ]
     member_id: int = Field(alias="memberId")
     args: dict[str, Any] = Field(default_factory=dict)

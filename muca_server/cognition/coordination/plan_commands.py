@@ -1,13 +1,20 @@
 """
 PlanCommands: the M4 commands of one group session, used by router.py.
 
-    planning  args.text = the tasks the members wrote, one per line
-              -> PlanWriter suggests owners and dates -> one "plan" card
+    planning  args.text = the tasks the members wrote, one per line; or
+              args.items = [{title, owner_id?, due_date?}] (a list with the
+              owners the members already chose)
+              -> PlanWriter suggests owners and dates for the tasks without
+              an owner -> one "plan" card. All owners chosen: no model call.
     checkin   no args -> checkin.findings() in code; if nothing is late or at
               risk, a notice "on track"; else PlanWriter proposes up to three
               fixes -> one "checkin" card (findings + options)
-    task      args.task = task id or its number in the plan, args.status
-              -> a member updates a task (their own action: no card, no model)
+    task      args.task = task id or its number in the plan, with any of
+              args.status, args.owner, args.due, args.title, args.remove;
+              or args.add = the title of a new task (+ owner, due)
+              -> a member edits the plan by hand (their own action: no card, no model)
+    milestone args.add = title (+ due); or args.milestone = its id with
+              args.title, args.due or args.remove -> by hand, like task
     why       args.question -> PlanWriter answers from the decision log only,
               with the decisions it rests on as the source
     ask       args.question -> PlanWriter answers from the saved tasks,
@@ -31,10 +38,11 @@ from datetime import date, datetime
 from typing import Any
 
 from .checkin import findings, owners_report
-from .models import ProposalKind, TaskStatus
-from .models import Decision
+from pydantic import ValidationError
+
+from .models import MAX_TITLE, Decision, PlanItem, PlanPayload, ProposalKind, TaskStatus
 from .plan_writer import AskAnswer, PlanWriter, WhyAnswer
-from .proposals import ProposalService
+from .proposals import ProposalService, new_id
 from .store import CoordinationStore
 
 logger = logging.getLogger(__name__)
@@ -77,6 +85,9 @@ class PlanCommands:
         if message.command == "task":
             await self._on_task(message)
             return
+        if message.command == "milestone":
+            await self._on_milestone(message)
+            return
         handlers = {"planning": self._planning, "checkin": self._checkin, "why": self._why, "ask": self._ask}
         if self._task is not None and not self._task.done():
             await self._notice(False, BUSY, message.request_id)
@@ -96,17 +107,47 @@ class PlanCommands:
     # ------------------------------------------------------------------
 
     async def _planning(self, message) -> None:
+        members = self._participants()
+        chosen: list[PlanItem] = []  # tasks whose owner the members already chose
         text = str(message.args.get("text", "")).strip()[:MAX_TASKS_TEXT]
-        if not text:
+        items = message.args.get("items")
+        if isinstance(items, list) and items:
+            open_titles = []
+            for raw in items[:15]:
+                if not isinstance(raw, dict):
+                    continue
+                title = " ".join(str(raw.get("title", "")).split())[:MAX_TITLE]
+                if not title:
+                    continue
+                owner = _member_id(raw.get("owner_id"), members)
+                due = _date(raw.get("due_date"))
+                if owner is _INVALID or due is _INVALID:
+                    await self._notice(False, f"Check “{title}”: its owner must be a member and its date a real day.", message.request_id)
+                    return
+                if due is not None and due < self._today():
+                    await self._notice(False, f"The date of “{title}” is in the past.", message.request_id)
+                    return
+                if owner is None:
+                    open_titles.append(title if due is None else f"{title} (by {due.isoformat()})")
+                else:
+                    chosen.append(PlanItem(title=title, owner_id=owner, reason="Chosen by the group.", due_date=due))
+            text = "\n".join(open_titles)
+        if not text and not chosen:
             await self._notice(False, "Write the tasks, one per line, then send them.", message.request_id)
             return
-        state = await self._store().load_state()
-        draft = await self._writer.draft_plan(text, members=self._participants(), state=state, today=self._today())
-        if draft is None:
-            await self._unavailable(message.event, message.request_id)
-            return
+        if text:
+            state = await self._store().load_state()
+            draft = await self._writer.draft_plan(text, members=members, state=state, today=self._today())
+            if draft is None:
+                await self._unavailable(message.event, message.request_id)
+                return
+            payload = PlanPayload(items=[*chosen, *draft.payload.items][:15])
+            rationale = draft.rationale
+        else:  # every owner chosen by the members: nothing to suggest, no model call
+            payload = PlanPayload(items=chosen)
+            rationale = f"{members.get(message.member_id, 'A member')} listed the tasks with their owners."
         proposal = await self._service().create(
-            ProposalKind.PLAN, draft.payload, rationale=draft.rationale, origin_channel=message.channel
+            ProposalKind.PLAN, payload, rationale=rationale, origin_channel=message.channel
         )
         await self._send_proposal(proposal)
         await self._notice(True, "Plan card posted: any member can confirm or reject it.", message.request_id)
@@ -179,22 +220,137 @@ class PlanCommands:
         await self._notice(True, ask_text(answer, self._participants()), message.request_id)
 
     async def _on_task(self, message) -> None:
-        """A member updates a task's status. Their own action: no card, no model."""
-        status = str(message.args.get("status", "")).strip().lower()
-        if status not in {s.value for s in TaskStatus}:
-            await self._notice(False, "Status must be todo, doing, done or blocked.", message.request_id)
+        """
+        A member edits the plan by hand: a new task, or the status, owner,
+        date or title of one, or its removal. Their own action: no card, no
+        model. Every value is checked here (the owner is a member, the date
+        is a real day), exactly as for a card.
+        """
+        args = message.args
+        members = self._participants()
+        fields: dict = {}
+        if "status" in args:
+            status = str(args.get("status", "")).strip().lower()
+            if status not in {s.value for s in TaskStatus}:
+                await self._notice(False, "Status must be todo, doing, done or blocked.", message.request_id)
+                return
+            fields["status"] = status
+        if "owner" in args:
+            owner = _member_id(args.get("owner"), members)
+            if owner is _INVALID:
+                await self._notice(False, "The owner must be a member of this group.", message.request_id)
+                return
+            fields["owner_id"] = owner
+        if "due" in args:
+            due = _date(args.get("due"))
+            if due is _INVALID:
+                await self._notice(False, "Write the date as YYYY-MM-DD.", message.request_id)
+                return
+            fields["due_date"] = due.isoformat() if due else None
+        if "title" in args or "add" in args:
+            title = " ".join(str(args.get("add") or args.get("title") or "").split())
+            if not title or len(title) > MAX_TITLE:
+                await self._notice(False, f"Write the task in a few words (up to {MAX_TITLE} characters).", message.request_id)
+                return
+            fields["title"] = title
+
+        if "add" in args:
+            await self._store().add_task_by_hand(new_id(), fields["title"], fields.get("owner_id"), fields.get("due_date"))
+            owner_name = members.get(fields.get("owner_id"), "nobody yet")
+            await self._notice(True, f"Task added: “{fields['title']}” ({owner_name}).", message.request_id)
+            await self._send_state("")
             return
+
         tasks = (await self._store().load_state()).tasks
-        ref = str(message.args.get("task", "")).strip()
+        ref = str(args.get("task", "")).strip()
         task = next((t for t in tasks if t.task_id == ref), None)
         if task is None and ref.isdigit() and 1 <= int(ref) <= len(tasks):
             task = tasks[int(ref) - 1]  # the number shown in the plan
         if task is None:
             await self._notice(False, "No such task in the plan.", message.request_id)
             return
-        await self._store().set_task_status(task.task_id, status)
-        await self._notice(True, f"“{task.title}” is now {status}.", message.request_id)
+        if args.get("remove") is True:
+            await self._store().remove_task(task.task_id)
+            await self._notice(True, f"“{task.title}” was removed from the plan.", message.request_id)
+            await self._send_state("")
+            return
+        if not fields:
+            await self._notice(False, "Say what to change: status, owner, date or title.", message.request_id)
+            return
+        await self._store().edit_task(task.task_id, fields)
+        changes = []
+        if "status" in fields:
+            changes.append(f"is now {fields['status']}")
+        if "owner_id" in fields:
+            changes.append(f"is {members[fields['owner_id']]}'s" if fields["owner_id"] is not None else "has no owner")
+        if "due_date" in fields:
+            changes.append(f"is due {fields['due_date']}" if fields["due_date"] else "has no date")
+        if "title" in fields:
+            changes.append("was renamed")
+        await self._notice(True, f"“{fields.get('title', task.title)}” {', '.join(changes)}.", message.request_id)
         await self._send_state("")
+
+    async def _on_milestone(self, message) -> None:
+        """A member adds, changes or removes a milestone by hand. No card, no model."""
+        args = message.args
+        fields: dict = {}
+        if "due" in args:
+            due = _date(args.get("due"))
+            if due is _INVALID:
+                await self._notice(False, "Write the date as YYYY-MM-DD.", message.request_id)
+                return
+            fields["due_date"] = due.isoformat() if due else None
+        if "title" in args or "add" in args:
+            title = " ".join(str(args.get("add") or args.get("title") or "").split())
+            if not title or len(title) > MAX_TITLE:
+                await self._notice(False, f"Name the milestone in a few words (up to {MAX_TITLE} characters).", message.request_id)
+                return
+            fields["title"] = title
+        if "add" in args:
+            await self._store().add_milestone(new_id(), fields["title"], fields.get("due_date"))
+            await self._notice(True, f"Milestone added: “{fields['title']}”.", message.request_id)
+            await self._send_state("")
+            return
+        milestones = (await self._store().load_state()).milestones
+        ref = str(args.get("milestone", "")).strip()
+        milestone = next((m for m in milestones if m.milestone_id == ref), None)
+        if milestone is None:
+            await self._notice(False, "No such milestone.", message.request_id)
+            return
+        if args.get("remove") is True:
+            await self._store().remove_milestone(milestone.milestone_id)
+            await self._notice(True, f"Milestone “{milestone.title}” was removed.", message.request_id)
+        elif fields:
+            await self._store().edit_milestone(milestone.milestone_id, fields)
+            await self._notice(True, f"Milestone “{fields.get('title', milestone.title)}” was updated.", message.request_id)
+        else:
+            await self._notice(False, "Say what to change: the name or the date.", message.request_id)
+            return
+        await self._send_state("")
+
+
+_INVALID = object()
+
+
+def _member_id(value, members: dict[int, str]):
+    """A member's id, None for "nobody" (None, "", "none"), or _INVALID."""
+    if value is None or str(value).strip().lower() in ("", "none", "null"):
+        return None
+    try:
+        member_id = int(str(value).strip())
+    except ValueError:
+        return _INVALID
+    return member_id if member_id in members else _INVALID
+
+
+def _date(value):
+    """A date from YYYY-MM-DD, None for "no date" (None, ""), or _INVALID."""
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        return date.fromisoformat(str(value).strip())
+    except ValueError:
+        return _INVALID
 
 
 def why_text(answer: WhyAnswer, members: dict[int, str]) -> str:

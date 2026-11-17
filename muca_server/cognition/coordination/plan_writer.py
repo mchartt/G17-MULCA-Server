@@ -99,7 +99,8 @@ PLAN_SYSTEM = COMMON + """
 
 The members wrote the tasks of their project between <tasks> tags, one per line.
 Keep their tasks (you may shorten a title, never add tasks). For each task:
-- owner_id: suggest the member whose skills and free weekly hours fit best,
+- owner_id: suggest the member whose discipline, skills, background and free
+  weekly hours fit best,
   spreading the work; null if the profiles give no basis for a choice.
 - reason: one short sentence on why that member (skills, hours), or "" if null.
 - due_date: YYYY-MM-DD if the line says a date, else the first milestone date
@@ -270,7 +271,13 @@ def _members(members: dict[int, str], profiles: list[MemberProfile]) -> str:
     lines = []
     for member_id, name in sorted(members.items()):
         p = by_id.get(member_id)
-        extra = f" | skills: {', '.join(p.skills) or '-'} | weekly hours: {p.weekly_hours if p.weekly_hours is not None else '-'}" if p else ""
+        extra = (
+            f" | discipline: {p.discipline or '-'} | skills: {', '.join(p.skills) or '-'}"
+            f" | weekly hours: {p.weekly_hours if p.weekly_hours is not None else '-'}"
+            f" | background: {' '.join(p.background.split()) or '-'}"
+            if p
+            else ""
+        )
         lines.append(f"- id {member_id}: {name}{extra}")
     return "Members:\n" + "\n".join(lines)
 

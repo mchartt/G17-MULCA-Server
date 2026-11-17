@@ -224,6 +224,7 @@ def _context(chat, members, profiles, tasks, silenced_topics, today: date) -> st
                 f" | discipline: {profile.discipline or '-'}"
                 f" | skills: {', '.join(profile.skills) or '-'}"
                 f" | weekly hours: {profile.weekly_hours if profile.weekly_hours is not None else '-'}"
+                f" | background: {' '.join(profile.background.split()) or '-'}"
             )
         member_lines.append(f"- id {member_id}: {name}{extra}")
     task_lines = [
