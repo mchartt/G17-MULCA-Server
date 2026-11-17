@@ -15,6 +15,8 @@ coordinator is OFF there is no wrapper at all.
 
 What it handles:
   coordinator_command  profile | kickoff | state | planning | checkin | task | why | card
+                       | language (the language of the coordinator's texts)
+                       | charter  (a member edits the charter: a card to confirm)
                        | link | unlink | catchup   (linked groups, links.py and catchup.py)
   proposal_response    confirm | reject | take | choose | not_now | helpful
 and it answers with coordinator_proposal / coordinator_state / coordinator_notice.
@@ -52,14 +54,14 @@ from .card_requests import CardRequests
 from .catchup import CatchUp, channel_of, summary_line
 from .checkin_timer import CheckinTimer
 from .links import GroupLinks, LinkError, LiveGroups
-from .models import MemberProfile, Proposal, ProposalKind
+from .models import CharterPayload, MemberProfile, MilestoneDraft, Proposal, ProposalKind
 from .plan_commands import PlanCommands
 from .plan_writer import PlanWriter
 from .proactive import ProactiveBridge
 from .proactive_writer import ProactiveWriter
 from .proposals import ProposalService
 from .store import CoordinationStore
-from .writer import ProposalWriter
+from .writer import LANGUAGES, MAX_RATIONALE_CHARS, ProposalWriter
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +91,11 @@ class CoordinatorRouter:
         self._conversation = conversation
         self._outbound = outbound_queue
         self._store_for = store_for
+        # This group's writers: every model call follows the language the
+        # group chose (command "language"), read from its store at each call.
+        writer = writer.for_group(self._language)
+        if proactive_writer is not None:
+            proactive_writer = proactive_writer.for_group(self._language)
         self._writer = writer
         self._ttl = proposal_ttl_seconds
         self._today = today
@@ -211,6 +218,10 @@ class CoordinatorRouter:
                 await self._start_kickoff(message)
             elif message.command in ("planning", "checkin", "task", "why", "ask"):
                 await self._plan.handle(message)
+            elif message.command == "language":
+                await self._on_language(message)
+            elif message.command == "charter":
+                await self._on_charter(message)
             elif message.command == "link":
                 await self._on_link(message)
             elif message.command == "unlink":
@@ -264,6 +275,61 @@ class CoordinatorRouter:
         await self._store_now().upsert_member(profile)
         await self._notice(True, "Profile saved.", message.request_id)
         await self._send_state(message.request_id)
+
+    async def _language(self) -> str:
+        """The language this group chose ("" = none). Never stops a model call."""
+        try:
+            return await self._store_now().setting("language")
+        except Exception:
+            logger.exception("%s could not read the group's language", self._conversation.conversation_id)
+            return ""
+
+    async def _on_language(self, message: CoordinatorCommandMessage) -> None:
+        """A member chooses the language of the coordinator's texts (their action)."""
+        code = str(message.args.get("language", "")).strip().lower()
+        if code == "auto":
+            code = ""
+        if code and code not in LANGUAGES:
+            await self._notice(False, "Choose English (en), Italian (it) or auto.", message.request_id)
+            return
+        await self._store_now().save_setting("language", code)
+        text = f"Cadence now writes in {LANGUAGES[code]}." if code else "Cadence now follows the language of the chat."
+        await self._notice(True, text, message.request_id)
+        await self._send_state("")
+
+    async def _on_charter(self, message: CoordinatorCommandMessage) -> None:
+        """
+        A member edits the charter by hand: goal and deliverables as they
+        wrote them, the milestones as they are. No model call. Like every
+        change to the charter it becomes a card, and it is saved only when
+        a member confirms it.
+        """
+        state = await self._store_now().load_state()
+        deliverables = message.args.get("deliverables", [])
+        if isinstance(deliverables, str):  # one per line, or ";"-separated, from a slash command
+            deliverables = deliverables.replace(";", "\n").split("\n")
+        try:
+            payload = CharterPayload(
+                goal=" ".join(str(message.args.get("goal", "")).split()),
+                deliverables=[" ".join(str(d).split()) for d in deliverables if str(d).strip()],
+                milestones=[MilestoneDraft(title=m.title, due_date=m.due_date) for m in state.milestones],
+            )
+        except (ValidationError, TypeError) as exc:
+            reason = _first_error(exc) if isinstance(exc, ValidationError) else "write the deliverables as a list"
+            await self._notice(False, f"Charter not changed: {reason}", message.request_id)
+            return
+        if state.charter is not None and (payload.goal, payload.deliverables) == (state.charter.goal, state.charter.deliverables):
+            await self._notice(False, "Nothing changed: the goal and deliverables are the same as now.", message.request_id)
+            return
+        name = self._roster().get(message.member_id, "A member")
+        proposal = await self._service().create(
+            ProposalKind.CHARTER,
+            payload,
+            rationale=f"{name} edited the goal and deliverables."[:MAX_RATIONALE_CHARS],
+            origin_channel=message.channel,
+        )
+        await self._send_proposal(proposal)
+        await self._notice(True, "Charter card posted: it is saved when a member confirms it.", message.request_id)
 
     async def _start_kickoff(self, message: CoordinatorCommandMessage) -> None:
         """

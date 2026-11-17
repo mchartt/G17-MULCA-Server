@@ -75,9 +75,13 @@ class CoordinatorCommandMessage(CoordinatorIncomingMessage):
     # time; what the member missed in the group's other channels).
     # ask (additive): args.question, any question about the saved tasks,
     # milestones and decisions; answered with a notice that names its sources.
+    # language (additive): args.language "en" | "it" | "" (follow the chat):
+    # the language of everything the coordinator writes for this group.
+    # charter (additive): args.goal, args.deliverables: a member edits the
+    # confirmed charter; answered with a charter card to confirm, no model.
     command: Literal[
         "profile", "kickoff", "state", "planning", "checkin", "task", "why", "card",
-        "link", "unlink", "catchup", "ask",
+        "link", "unlink", "catchup", "ask", "language", "charter",
     ]
     member_id: int = Field(alias="memberId")
     args: dict[str, Any] = Field(default_factory=dict)

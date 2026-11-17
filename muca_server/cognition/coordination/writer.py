@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -72,9 +73,29 @@ Write a draft project charter:
 - milestones: deadlines that appear in the text, each with its date as
   YYYY-MM-DD. If the text gives no date for a milestone, due_date is null.
   Never invent a date or a deliverable that is not in the text.
-- rationale: one short sentence starting with "Stepping in because" that says
-  why you are proposing this now.
-Write in the language of the assignment text."""
+- rationale: one short sentence starting with "Stepping in because" (or the
+  same in the assignment's language) that says why you are proposing this now.
+Write every text, the rationale too, in the language of the assignment text."""
+
+# The language a group chose for everything the coordinator writes (command
+# "language"). "" = not chosen: each prompt follows the chat or the assignment,
+# as before. With a choice, one rule is added to every prompt, so a card never
+# mixes two languages (an Italian assignment discussed in an English chat).
+LANGUAGES = {"en": "English", "it": "Italian"}
+OPENINGS = {"en": "Stepping in because", "it": "Intervengo perché"}
+
+
+def language_rule(code: str) -> str:
+    """The line added to a prompt for a group that chose a language; "" if it did not."""
+    name = LANGUAGES.get(code)
+    if name is None:
+        return ""
+    return (
+        f"LANGUAGE: this group chose {name}. Write every text you produce in {name}, "
+        "whatever language the chat or the assignment is in; this replaces any other "
+        "language instruction above. Keep names of people, products and quoted words as they are. "
+        f'A rationale starts with "{OPENINGS[code]}".'
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,15 +111,23 @@ class ProposalWriter:
         *,
         model: str = DEFAULT_WRITER_MODEL,
         record_cost: Any = None,
+        language: Callable[[], Awaitable[str]] | None = None,
     ) -> None:
         """
         client: an AsyncOpenAI client (or a fake with the same
         `chat.completions.create`). record_cost: the lab's cost recorder,
         `agents.openai.main_agent.record_cost`, or None in tests.
+        language: reads the group's chosen language ("en", "it" or ""); None
+        for the shared writer, which belongs to no group (see for_group).
         """
         self._client = client
         self._model = model
         self._record_cost = record_cost
+        self._language = language
+
+    def for_group(self, language: Callable[[], Awaitable[str]]) -> ProposalWriter:
+        """The same writer for one group: its calls follow that group's language."""
+        return ProposalWriter(self._client, model=self._model, record_cost=self._record_cost, language=language)
 
     async def draft_charter(
         self,
@@ -128,6 +157,10 @@ class ProposalWriter:
         JSON (not yet validated). Shared with proactive_writer.py, so every
         coordinator call has the same timeout and cost recording.
         """
+        if self._language is not None:
+            rule = language_rule(await self._language())
+            if rule:
+                system = f"{system}\n\n{rule}"
         response = await self._client.chat.completions.create(
             model=self._model,
             messages=[
