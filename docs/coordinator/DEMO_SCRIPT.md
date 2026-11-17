@@ -16,14 +16,18 @@ Azure without manual fixes (PROGRESS.md, M5). Note date and cost here.
 2. `cd mulca/prototype/webapp && npm ci && npm run build` (once).
 3. From the folder with both clones: `bash mulca/prototype/webapp/scripts/demo-up.sh`.
 4. Two browser windows side by side (normal + private): **Ada** and **Bruno**.
+   Each one creates an account first (**Create account**: email, password,
+   display name); the profile is filled once and follows the person into
+   every space.
 5. **Three spaces**, one per proactive scenario. The rules allow at most one
    unsolicited card every 10 messages and 5 minutes per group (NFR3), so each
    proactive scenario runs in its own space. Create them in Ada's window, join
    each with Bruno (invite code), and fill the profiles (Edit my profile):
    - Ada: Computer Engineering · Python, FastAPI, testing · 8 h
    - Bruno: Interaction Design · Figma, user research, writing · 6 h
-6. Discord (optional, separate group by design): a test server with the bot
-   linked to a channel (`mulca/prototype/TRYING_ON_DISCORD.md`).
+6. Discord (optional): a test server with the bot in a channel
+   (`mulca/prototype/TRYING_ON_DISCORD.md`); Slack (optional):
+   `mulca/prototype/SLACK_SETUP.md`. Step 10 links them to space "Demo A".
 
 ## 1. Kickoff — UC2 (space "Demo A")
 
@@ -114,12 +118,53 @@ Panel → **Ask why the group decided something**: `Why did we choose think-alou
 blocked UI task, the milestone if it is within 48 h) and up to three
 options. Choose one → the plan changes, the card says Confirmed.
 
-## 10. Discord (optional, separate group)
+## 10. Cross-channel: one project on web, Discord and Slack (space "Demo A")
 
-On the Discord test channel: `/coordinator kickoff`, `/coordinator planning`
-(tasks separated by `;`), `/coordinator plan`, `/coordinator checkin`,
-`/coordinator why`. Web and Discord are two separate groups by design
-(DECISIONS.md, 15/11).
+Since 16/11 a Discord or Slack channel can be linked to a web space
+(DECISIONS.md, 16/11). All channels must talk to the same MUCA-Server.
+
+1. Web, Ada: copy the line in the sidebar block **Discord and Slack**
+   (`/coordinator link <invite code>`).
+2. Discord test channel: paste it → "Linked to the web space: plan, tasks, decisions and cards
+   are now shared."
+   Slack (if the app is installed, `mulca/prototype/SLACK_SETUP.md`): the same.
+3. Discord: `/coordinator plan` → the goal, milestones and tasks made on the
+   web in steps 1 and 2. **Say it: same project, three places.**
+4. Discord, Carla (a third person): `I can take the user test recruiting`
+   → the message shows in the web chat with a "Discord" tag.
+5. Web, Bruno: **Check-in** (or any card) → the card also appears on Discord;
+   click **Confirm** on Discord → the web card turns "Confirmed" for everyone
+   (first valid click wins).
+6. Web, Ada: **Catch up** → the decisions since her last visit and what was
+   written on Discord and Slack, read from disk with no model call.
+
+Each channel keeps its own chat and its own agent memory; what is shared is
+the project (plan, decisions, cards). **NOT VERIFIED (live)**: tested offline
+with a fake Discord and a fake Slack against a real local server.
+
+## 11. Commands typed in the chat
+
+- Discord and Slack: `/coordinator kickoff | planning | checkin | task | why |
+  plan | profile | link | unlink | catchup`.
+- Web chat: type `/` to see the list (`/kickoff`, `/planning`, `/checkin`,
+  `/catchup`, `/task 2 done`, `/why …`, `/plan`); a `/` line is never posted
+  to the group. `@coordinator` with a question asks the coordinator directly.
+
+## Plan B: the demo without Azure, Render, Discord or Slack
+
+If the network, Azure or Render fails, run everything on one laptop:
+
+```sh
+cd mulca/prototype/webapp && npm ci && npm run build && cd ..
+python webapp/e2e/fake_stack.py        # http://127.0.0.1:8090
+```
+
+What is real: accounts, spaces, the chat, cards, clicks, the plan, the
+decision log, Why?, Not now, check-in, calendar feed, catch-up. What is
+scripted: the model's drafts (fixed texts) and the two proactive triggers:
+a message with **font** fires CS2, one with **think-aloud** fires CS3
+(steps 4 and 6 work as written). CS5 and CS7 do not fire offline. Discord and
+Slack are not part of it. **Say on stage that the model is scripted.**
 
 ## If something does not fire
 
