@@ -1,4 +1,4 @@
-# Multi-User Conversational Agent Server
+# Multi-User Conversational Agent Server Ctrl+Alt+Design
 
 MUCA-Server runs multi-party conversational agents behind one WebSocket:
 
