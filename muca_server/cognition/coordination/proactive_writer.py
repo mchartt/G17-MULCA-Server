@@ -345,7 +345,8 @@ def _validate(kind, strategy_id, data, chat, members, tasks, today, decisions=()
         data.setdefault("ways_forward", [])
         data.setdefault("depends_on_title", "")
         if data["depends_on_task_id"] is not None:
-            data["depends_on_title"] = ""
+            # The card names the work by the plan's own title, not the model's.
+            data["depends_on_title"] = next(t.title for t in tasks if t.task_id == data["depends_on_task_id"])
         return ProactiveDraft(kind, BlockerPayload(context=context, **data), rationale)
 
     due = data.get("due_date")

@@ -208,6 +208,7 @@ async def test_a_possible_dependency_is_drafted_with_its_evidence_and_ways_forwa
     draft = await draft_cs7(POSSIBLE)
     payload = draft.payload
     assert payload.certainty is BlockerCertainty.POSSIBLE
+    assert payload.depends_on_title == "Booking API"  # the plan's title, for every channel
     assert payload.ways_forward == ["Test with mock data", "Chiara ships a minimal booking flow first"]
     assert [e.text for e in payload.context.evidence] == [CHAT_B[0].text, CHAT_B[1].text]
 
