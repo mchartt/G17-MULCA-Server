@@ -26,6 +26,7 @@ from pydantic import ValidationError
 from .models import (
     BlockerPayload,
     Decision,
+    DecisionOption,
     DecisionPayload,
     Evidence,
     MemberProfile,
@@ -212,6 +213,14 @@ group already made (it is in the decision list with its reason).
 }
 
 
+def revisit_options(choice: str) -> list[DecisionOption]:
+    """K3 buttons, in the order of REVISIT_KEEP and REVISIT_REOPEN."""
+    keep = f"Keep \u201c{choice}\u201d"
+    if len(keep) > 80:
+        keep = "Keep it"
+    return [DecisionOption(label=keep), DecisionOption(label="Reopen it")]
+
+
 class ProactiveWriter:
     def __init__(self, writer: ProposalWriter) -> None:
         self._writer = writer
@@ -319,6 +328,7 @@ def _validate(kind, strategy_id, data, chat, members, tasks, today, decisions=()
             reason=decision.reason,
             decided_at=decision.decided_at,
             new_point=" ".join(data["new_point"].split()),
+            options=revisit_options(decision.choice),
         )
         return ProactiveDraft(kind, payload, rationale)
     if kind is ProposalKind.BLOCKER:

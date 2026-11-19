@@ -68,6 +68,7 @@ async def test_the_card_copies_choice_and_reason_from_the_log():
     assert result.kind is ProposalKind.REVISIT
     assert (payload.choice, payload.reason, payload.question) == (TABS.choice, TABS.reason, TABS.question)
     assert payload.new_point == "Ada finds the side menu cleaner"
+    assert [o.label for o in payload.options] == ["Keep “Tabs”", "Reopen it"]
     assert [e.speaker for e in payload.context.evidence] == ["Ada", "Bruno"]
     assert "decision_id d1: App navigation -> chose \"Tabs\"" in client.calls[0]["messages"][-1]["content"]
 

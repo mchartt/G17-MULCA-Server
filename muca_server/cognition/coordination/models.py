@@ -368,6 +368,9 @@ class RevisitPayload(_Model):
     reason: str = Field(default="", max_length=MAX_TEXT)
     decided_at: float = 0
     new_point: str = Field(default="", max_length=MAX_QUOTE)
+    # The two buttons, labelled by the server (Discord and Slack draw one
+    # button per option, as for a decision card): [Keep "<choice>", Reopen it].
+    options: list[DecisionOption] = Field(default_factory=list, max_length=2)
 
 
 REVISIT_KEEP = 0
