@@ -51,8 +51,9 @@ from datetime import date
 from enum import StrEnum
 from typing import Any
 
-from .models import BlockerPayload, Proposal, ProposalKind, TaskAssignmentPayload, TaskStatus
+from .models import BlockerCertainty, BlockerPayload, Proposal, ProposalKind, TaskAssignmentPayload, TaskStatus
 from .plan_writes import topic_key
+from .project_memory import RESEND_EVERY, project_memory
 from .proactive_writer import STRATEGY_KINDS, ChatLine, ProactiveDraft, ProactiveWriter
 from .proposals import ProposalService
 from .store import CoordinationStore
@@ -99,6 +100,9 @@ class ProactiveBridge:
         self._last_count: int | None = None
         self._last_at: float | None = None
         self._mark_loaded = False
+        # K1: the project memory last told to the observer, and when.
+        self._memory_sent: str | None = None
+        self._memory_sent_at_count = 0
 
     # ------------------------------------------------------------------
     # Called by CoalaPolicy
@@ -127,6 +131,28 @@ class ProactiveBridge:
         ]
         self._task = asyncio.create_task(self._post(strategy_id, chat, message_count))
         return Verdict.TAKEN
+
+    async def observer_note(self, message_count: int) -> str:
+        """
+        K1: the project memory for the intervention agent (project_memory.py),
+        or "" when it has not changed since it was last sent and fewer than
+        RESEND_EVERY messages have passed. Called by the policy on every
+        judged turn; a database error gives "" (the turn goes on as before).
+        """
+        try:
+            state = await self._store().load_state()
+            note = project_memory(state, dict(self._members()), self._today())
+        except Exception:
+            logger.exception("%s coordinator: could not build the project memory", self._conversation.conversation_id)
+            return ""
+        if not note:
+            return ""
+        stale = message_count - self._memory_sent_at_count >= RESEND_EVERY
+        if note == self._memory_sent and not stale:
+            return ""
+        self._memory_sent = note
+        self._memory_sent_at_count = message_count
+        return note
 
     async def wait(self) -> None:
         """Wait for a running draft (tests, shutdown)."""
@@ -225,6 +251,10 @@ def _dropped(draft: ProactiveDraft, silenced: list[str], tasks) -> str:
             return "R7 the plan already has this task with an owner"
     if draft.kind is ProposalKind.BLOCKER:
         assert isinstance(draft.payload, BlockerPayload)
-        if any(t.task_id == draft.payload.task_id and t.status is TaskStatus.BLOCKED for t in tasks):
+        payload = draft.payload
+        task = next((t for t in tasks if payload.task_id is not None and t.task_id == payload.task_id), None)
+        if payload.certainty is BlockerCertainty.BLOCKED and task is not None and task.status is TaskStatus.BLOCKED:
             return "R7 the task is already marked blocked"
+        if task is not None and payload.depends_on_task_id is not None and payload.depends_on_task_id in task.depends_on:
+            return "R7 the plan already records this dependency"
     return ""

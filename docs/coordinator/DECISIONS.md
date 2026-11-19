@@ -256,3 +256,34 @@ Newest first. Each entry: date, decision, alternatives, reason, status.
 - **Limits:** the mirror and the shared cards reach sessions open in the same
   server process; a channel whose session is closed sees them through
   `catchup` and the next state it asks for. NOT VERIFIED live on Render.
+
+## 2026-11-19 · K1 the observer sees the project; K2 CS7 v2 (possible dependencies)
+
+- **Problem (tutor 18/11, audit G0):** the intervention agent judged the
+  coordinator strategies from the chat alone. It could not notice that a test
+  on Friday needs an API that is due Saturday, nor a decision being reopened:
+  those facts are in the plan and the decision log, not in the last messages.
+- **K1 decision:** when the coordinator is on, the observer's turn update
+  ("Current trigger variables: …") ends with a short **Project memory**
+  (`coordination/project_memory.py`): open tasks with owner, date, status and
+  what they wait on; milestones of the next 14 days; the last 8 decisions with
+  their reason. Built in code from the database, never by a model. Sent only
+  when it changes, or again every 25 messages (the observer's context is
+  trimmed). Hook: `CoalaPolicy._project_note` (policy.py, ~15 lines). With the
+  coordinator off, with no bridge, with nothing saved or on any error the
+  update is byte-for-byte the lab's (test
+  `test_policy_turn_update_is_the_labs_when_off_unchanged_or_failing`).
+  Cost: a few hundred input tokens, only on the turns where the plan changed.
+- **K2 decision:** CS7 cards say how sure they are. `certainty = blocked`
+  (a member said they are stuck: as before, confirming marks the task
+  blocked) or `possible` (inferred from the chat and the plan: the card asks
+  the group to confirm; confirming only records the dependency, never marks
+  anything blocked). A possible dependency must name what it may wait on: a
+  plan task or, if the plan does not have it, its title from the chat, added
+  without owner on confirmation. Up to three `ways_forward` (mock data, a
+  minimal version first, swap the order) are suggestions, not state changes.
+  New R7: no card for a dependency the plan already records.
+- **Not changed:** the lab strategies (`resolve_conflict` overlap with CS3
+  stays Matteo's decision), the Realtime evaluator, R1-R6.
+- **Status:** IMPLEMENTED/TESTED OFFLINE (26 tests). Whether the evaluator
+  actually fires CS7 on the corpus in `CS_CORPUS.md`: NOT VERIFIED (live run).

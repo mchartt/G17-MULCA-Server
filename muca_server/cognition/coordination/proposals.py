@@ -45,6 +45,7 @@ from .appliers import (
     task_applier,
 )
 from .models import (
+    BlockerCertainty,
     BlockerPayload,
     CharterPayload,
     CheckinPayload,
@@ -293,6 +294,11 @@ class ProposalService:
 
         if kind is ProposalKind.BLOCKER and action == "confirm":
             assert isinstance(payload, BlockerPayload)
-            return "", blocker_applier(payload, new_task_id=new_id()), f"Marked as blocked: \u201c{payload.title}\u201d."
+            what = f"\u201c{payload.depends_on_title.strip()}\u201d" if payload.depends_on_title.strip() else "the task on the card"
+            if payload.certainty is BlockerCertainty.POSSIBLE:
+                message = f"Dependency saved: \u201c{payload.title}\u201d waits on {what}."
+            else:
+                message = f"Marked as blocked: \u201c{payload.title}\u201d."
+            return "", blocker_applier(payload, new_task_id=new_id(), new_dependency_id=new_id()), message
 
         return f"This button does not apply to a {kind.value} card.", None, ""

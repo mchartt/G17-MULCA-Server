@@ -22,6 +22,7 @@ One builder per kind (Strategy-like table in proposals.py chooses it):
 from __future__ import annotations
 
 from .models import (
+    BlockerCertainty,
     BlockerPayload,
     Charter,
     CharterPayload,
@@ -181,10 +182,13 @@ def checkin_applier(option: CheckinOption) -> Applier:
     return apply
 
 
-def blocker_applier(payload: BlockerPayload, *, new_task_id: str) -> Applier:
+def blocker_applier(payload: BlockerPayload, *, new_task_id: str, new_dependency_id: str | None = None) -> Applier:
     """
-    CS7 confirmed: the task is marked blocked (added if the plan did not have
-    it) and, if the card names one, the task it waits on is recorded.
+    CS7 confirmed. The task is added if the plan did not have it. BLOCKED:
+    the task is marked blocked. POSSIBLE: the status is left alone (nobody
+    said it is blocked, the group only confirmed that it depends).
+    In both cases the work it waits on is recorded: a plan task, or a new
+    task with the title said in the chat (no owner: the card never assigns).
     """
 
     async def apply(db) -> None:
@@ -196,10 +200,17 @@ def blocker_applier(payload: BlockerPayload, *, new_task_id: str) -> Applier:
             exists, _ = await task_owner(db, task_id)
             if not exists:
                 raise StaleProposal("This task is no longer in the plan.")
-        await update_task(db, task_id=task_id, status=TaskStatus.BLOCKED)
-        if payload.depends_on_task_id:
-            exists, _ = await task_owner(db, payload.depends_on_task_id)
-            if exists:
-                await add_dependency(db, task_id=task_id, depends_on=payload.depends_on_task_id)
+        if payload.certainty is BlockerCertainty.BLOCKED:
+            await update_task(db, task_id=task_id, status=TaskStatus.BLOCKED)
+        depends_on = payload.depends_on_task_id
+        if depends_on:
+            exists, _ = await task_owner(db, depends_on)
+            if not exists:
+                depends_on = None
+        elif payload.depends_on_title.strip() and new_dependency_id:
+            depends_on = new_dependency_id
+            await add_task(db, task_id=depends_on, title=payload.depends_on_title.strip(), owner_id=None, due_date=None)
+        if depends_on:
+            await add_dependency(db, task_id=task_id, depends_on=depends_on)
 
     return apply

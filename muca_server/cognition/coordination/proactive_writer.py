@@ -123,8 +123,11 @@ SCHEMAS: dict[ProposalKind, dict[str, Any]] = {
             "task_id": NULLABLE_STRING,
             "title": {"type": "string"},
             "depends_on_task_id": NULLABLE_STRING,
+            "depends_on_title": {"type": "string"},
             "helper_id": {"type": ["integer", "null"]},
             "question": {"type": "string"},
+            "certainty": {"type": "string", "enum": ["blocked", "possible"]},
+            "ways_forward": {"type": "array", "items": {"type": "string"}},
         },
     ),
 }
@@ -165,14 +168,29 @@ does not close it.
   (a few words) and `argument` (one sentence: what was said for it, in the
   members' terms, with its main drawback if one was said).""",
     ProposalKind.BLOCKER: """\
-Situation: a member is blocked or waiting on someone else's work, or a task is
-past its date with no update, and a deadline is at risk.
-- task_id: the plan task that is blocked, or null if it is not in the plan.
-- title: that task, short.
-- depends_on_task_id: the plan task it waits on, or null if none is named.
-- helper_id: the member who can unblock it (the owner of the task it waits on,
-  or the member whose skills fit), only ids from the member list, or null.
-- question: one short question to the blocked member about what blocks them.""",
+Situation: a piece of project work cannot go on, or may not be able to go on,
+because it needs other work that is not ready, and a date is at risk. Either a
+member said so ("I can't start the UI until the API is ready"), or the chat and
+the plan together show it (Sara says she tests on Friday; the plan or the chat
+shows the API she needs is not done, or is due after Friday).
+- certainty: "blocked" only if a member said they are stuck or waiting;
+  "possible" if you infer the dependency and nobody confirmed it.
+- task_id: the plan task that is (or may be) held up, or null if it is not in the plan.
+- title: that task, short (e.g. "Usability test").
+- depends_on_task_id: the plan task it waits on, or null.
+- depends_on_title: if depends_on_task_id is null, the work it waits on as said
+  in the chat (e.g. "API integration"); else "". Required for "possible".
+- helper_id: the member who can unblock it (the owner of the work it waits on,
+  or whose skills fit), only ids from the member list, or null.
+- question: ONE short question for the group. For "possible", ask whether the
+  dependency is real and offer the cheapest way around it, e.g. "Is the API
+  needed for Friday's test, or could Sara use mock data?". For "blocked", ask
+  what exactly is missing. Never ask why someone is late, never suggest that
+  anyone is slow, lazy or struggling: talk about the work, not the people.
+- ways_forward: 0 to 3 concrete options, each under 15 words, that the chat or
+  the plan make realistic (mock data, a minimal version first, swap the order,
+  someone pairs for an hour). [] if nothing concrete is visible. Never "move the
+  deadline" unless the chat says the date can move.""",
 }
 
 
@@ -230,6 +248,7 @@ def _context(chat, members, profiles, tasks, silenced_topics, today: date) -> st
     task_lines = [
         f"- task_id {t.task_id}: {t.title} | owner: {members.get(t.owner_id, '-') if t.owner_id else 'none'}"
         f" | due: {t.due_date or '-'} | {t.status.value}"
+        + (f" | waits on: {', '.join(t.depends_on)}" if t.depends_on else "")
         for t in tasks
     ] or ["- (no tasks yet)"]
     chat_lines = [f"[{n}] {line.speaker}: {line.text}" for n, line in enumerate(chat, start=1)]
@@ -264,8 +283,16 @@ def _validate(kind, strategy_id, data, chat, members, tasks, today) -> Proactive
         for key in ("task_id", "depends_on_task_id"):
             if data[key] is not None and data[key] not in ids:
                 raise ValueError(f"{key} is not a plan task")
+        if data["task_id"] is not None and data["task_id"] == data["depends_on_task_id"]:
+            raise ValueError("a task cannot wait on itself")
         if data["helper_id"] is not None and data["helper_id"] not in members:
             raise ValueError("helper is not a member")
+        # Older answers (and the M4 tests) have no certainty: a stated blocker.
+        data.setdefault("certainty", "blocked")
+        data.setdefault("ways_forward", [])
+        data.setdefault("depends_on_title", "")
+        if data["depends_on_task_id"] is not None:
+            data["depends_on_title"] = ""
         return ProactiveDraft(kind, BlockerPayload(context=context, **data), rationale)
 
     due = data.get("due_date")

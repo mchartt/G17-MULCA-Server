@@ -284,18 +284,66 @@ class CheckinPayload(_Model):
     options: list[CheckinOption] = Field(min_length=1, max_length=3)
 
 
+class BlockerCertainty(StrEnum):
+    """
+    How sure the coordinator is (CS7 v2). The card says it in words, so the
+    group can tell a fact it stated from something the coordinator inferred.
+
+    BLOCKED   a member said they are stuck or waiting on other work.
+    POSSIBLE  nobody said so: the chat and the plan suggest a dependency
+              (Sara tests on Friday, the API she needs is not done). The
+              card asks the group to confirm it before anything is recorded.
+    """
+
+    BLOCKED = "blocked"
+    POSSIBLE = "possible"
+
+
+MAX_WAY = 160
+
+
 class BlockerPayload(_Model):
     """
-    CS7: a task is blocked, or waits on another one. Confirming marks the task
-    blocked and records the dependency; `helper_id` is who could help.
+    CS7: a task is blocked, or waits on another one. `helper_id` is who could help.
+
+    Confirming a BLOCKED card marks the task blocked and records what it
+    waits on. Confirming a POSSIBLE card only records the dependency ("yes,
+    it depends"): the task is not marked blocked, nobody said it was.
+    The work it waits on is a plan task (`depends_on_task_id`) or, when the
+    plan does not have it yet, its title as said in the chat
+    (`depends_on_title`), added to the plan on confirmation.
+    `ways_forward`: up to three concrete options taken from the chat and the
+    plan (mock data, a minimal version first, another order). Shown on the
+    card as suggestions: choosing one changes nothing by itself.
     """
 
     context: ProactiveContext
     task_id: str | None = None
     title: str = Field(min_length=1, max_length=MAX_TITLE)
     depends_on_task_id: str | None = None
+    depends_on_title: str = Field(default="", max_length=MAX_TITLE)
     helper_id: int | None = None
     question: str = Field(default="", max_length=MAX_QUOTE)
+    certainty: BlockerCertainty = BlockerCertainty.BLOCKED
+    ways_forward: list[str] = Field(default_factory=list, max_length=3)
+
+    @field_validator("ways_forward")
+    @classmethod
+    def _short_ways(cls, value: list[str]) -> list[str]:
+        cleaned = [" ".join(item.split()) for item in value if item.strip()]
+        if any(len(item) > MAX_WAY for item in cleaned):
+            raise ValueError("a way forward is too long")
+        return cleaned
+
+    @model_validator(mode="after")
+    def _possible_names_what(self) -> "BlockerPayload":
+        if (
+            self.certainty is BlockerCertainty.POSSIBLE
+            and self.depends_on_task_id is None
+            and not self.depends_on_title.strip()
+        ):
+            raise ValueError("a possible dependency must say what the task may wait on")
+        return self
 
 
 # Which payload model belongs to which kind. A new kind = one new line here,

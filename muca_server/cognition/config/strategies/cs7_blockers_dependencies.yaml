@@ -1,15 +1,28 @@
 id: cs7_blockers_dependencies
-# Group Coordinator (spec S7 "Blockers", M4). Answered with a card: a member
-# confirms that the task is blocked and what it waits on.
+# Group Coordinator (spec S7 "Blockers", M4; v2 K2). Answered with a card: a
+# member confirms that the task is blocked, or that it really depends on the
+# other work. The "Project memory" in the turn update is the saved plan and
+# decision log (cognition/coordination/project_memory.py).
 trigger_description: >
-  A member says they are stuck or waiting on someone else's work for a
-  project task ("I can't start the UI until the API is ready", "still
-  waiting for the survey data"), or a task is past its date and its owner
-  says it is not done, and this puts a deadline at risk.
-  Do NOT fire for: a question that someone is already answering; a short
-  delay that the member says they will solve themselves today; personal
+  Project work is held up, or is about to be, by other work that is not
+  ready, and a date is at risk. Fire in either case:
+  (a) STATED: a member says they are stuck or waiting on someone else's
+  work ("I can't start the UI until the API is ready", "still waiting for
+  the survey data"), or a task is past its date and its owner says it is
+  not done;
+  (b) POSSIBLE, nobody said it yet: a member announces or plans work with a
+  date (a test, a demo, a hand-in, "I'll run the user tests on Friday") and
+  the chat or the Project memory shows that this work needs something that
+  is not done: an open task that is due later, or not started, or blocked,
+  or something a teammate just said is unfinished ("the booking flow still
+  crashes"). The date must be close (within about a week) or a milestone.
+  Do NOT fire for: a dependency the Project memory already records while
+  both dates still fit; a question that someone is already answering; a short
+  delay that the member says they will solve themselves today; someone being
+  quiet or slow with no date at risk (silence is not a blocker); personal
   reasons or health (never ask about them); complaints about a person; a
-  blocker the group has just discussed and resolved.
+  blocker the group has just discussed and resolved; two tasks that merely
+  sound related but nothing in the chat or the plan says one needs the other.
 cooldown_messages: 10
 trigger_variables: []
 prompt_template: |
