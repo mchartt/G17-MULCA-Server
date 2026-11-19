@@ -13,7 +13,7 @@ can change the project state.
                     6. APPLIED / REJECTED / SNOOZED and the change, in one transaction
 
 Buttons (the `action` of proposal_response):
-    confirm   charter, plan, blocker, or a task_owner card with a suggested owner
+    confirm   charter, plan, blocker, approach, or a task_owner card with a suggested owner
     take      "I'll take it": task_owner and delegation, the clicker becomes owner
     choose    decision and checkin: `option` is the index of the chosen option
     reject    any card: closed, nothing changes
@@ -36,6 +36,7 @@ from pydantic import BaseModel
 
 from .appliers import (
     StaleProposal,
+    approach_applier,
     blocker_applier,
     charter_applier,
     checkin_applier,
@@ -45,6 +46,7 @@ from .appliers import (
     task_applier,
 )
 from .models import (
+    ApproachPayload,
     BlockerPayload,
     CharterPayload,
     CheckinPayload,
@@ -294,5 +296,15 @@ class ProposalService:
         if kind is ProposalKind.BLOCKER and action == "confirm":
             assert isinstance(payload, BlockerPayload)
             return "", blocker_applier(payload, new_task_id=new_id()), f"Marked as blocked: \u201c{payload.title}\u201d."
+
+        if kind is ProposalKind.APPROACH and action == "confirm":
+            assert isinstance(payload, ApproachPayload)
+            return "", approach_applier(
+                payload,
+                member_id=member_id,
+                now=now,
+                decision_id=new_id(),
+                proposal_id=proposal.proposal_id,
+            ), "Saved: how you plan the work is in the decisions."
 
         return f"This button does not apply to a {kind.value} card.", None, ""

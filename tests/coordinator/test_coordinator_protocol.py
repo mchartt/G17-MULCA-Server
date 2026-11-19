@@ -97,3 +97,11 @@ def test_m1_clicks_still_parse_without_an_option():
 def test_m4_commands_parse(command):
     message = parse_incoming_message({"event": "coordinator_command", "command": command, "memberId": 1})
     assert message.command == command
+
+
+def test_the_plan_together_command_parses_and_the_old_ones_are_unchanged():
+    """CS-OPEN-01 adds "approach"; every command that existed before still parses the same."""
+    message = parse_incoming_message({"event": "coordinator_command", "command": "approach", "memberId": 1, "channel": "web"})
+    assert (message.command, message.args, message.channel) == ("approach", {}, "web")
+    for old in ["profile", "kickoff", "state", "planning", "checkin", "task", "why", "card", "link", "unlink", "catchup", "ask", "language", "charter", "milestone"]:
+        assert parse_incoming_message({"event": "coordinator_command", "command": old, "memberId": 1}).command == old

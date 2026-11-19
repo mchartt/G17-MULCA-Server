@@ -138,6 +138,7 @@ class ProposalKind(StrEnum):
     PLAN = "plan"  # M4: /planning, the tasks the members wrote with suggested owners
     CHECKIN = "checkin"  # M4: /checkin, up to three ways to fix what is late or at risk
     BLOCKER = "blocker"  # M4: CS7, a task is blocked or waits on another
+    APPROACH = "approach"  # plan opener (CS-OPEN-01): how the group plans the work, as it said it
 
 
 class ProposalStatus(StrEnum):
@@ -298,6 +299,28 @@ class BlockerPayload(_Model):
     question: str = Field(default="", max_length=MAX_QUOTE)
 
 
+class ApproachPayload(_Model):
+    """
+    Plan opener (CS-OPEN-01): after the charter, how the group said it wants
+    to plan the work. Each agreement rests on chat lines the server copied
+    into `context.evidence`; confirming it writes one decision.
+    """
+
+    context: ProactiveContext
+    question: str = Field(min_length=1, max_length=MAX_TITLE)
+    summary: str = Field(min_length=1, max_length=MAX_TITLE)
+    agreements: list[str] = Field(min_length=1, max_length=5)
+    open_points: list[str] = Field(default_factory=list, max_length=3)
+
+    @field_validator("agreements", "open_points")
+    @classmethod
+    def _short_points(cls, value: list[str]) -> list[str]:
+        cleaned = [" ".join(item.split()) for item in value if item.strip()]
+        if any(len(item) > MAX_TITLE for item in cleaned):
+            raise ValueError("point too long")
+        return cleaned
+
+
 # Which payload model belongs to which kind. A new kind = one new line here,
 # one payload model above and one applier in appliers.py.
 PAYLOAD_MODELS: dict[ProposalKind, type[_Model]] = {
@@ -308,6 +331,7 @@ PAYLOAD_MODELS: dict[ProposalKind, type[_Model]] = {
     ProposalKind.PLAN: PlanPayload,
     ProposalKind.CHECKIN: CheckinPayload,
     ProposalKind.BLOCKER: BlockerPayload,
+    ProposalKind.APPROACH: ApproachPayload,
 }
 
 

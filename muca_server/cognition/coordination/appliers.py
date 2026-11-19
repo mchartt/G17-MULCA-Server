@@ -17,11 +17,13 @@ One builder per kind (Strategy-like table in proposals.py chooses it):
     plan_applier         PLAN        add every task of the /planning list
     checkin_applier      CHECKIN     change one task (date, owner) or drop it
     blocker_applier      BLOCKER     mark a task blocked, record what it waits on
+    approach_applier     APPROACH    write how the group plans the work to the decision log
 """
 
 from __future__ import annotations
 
 from .models import (
+    ApproachPayload,
     BlockerPayload,
     Charter,
     CharterPayload,
@@ -131,6 +133,35 @@ def decision_applier(
         question=payload.question,
         choice=chosen.label,
         reason=chosen.argument,
+        decided_by=member_id,
+        decided_at=now,
+        source=f"proposal:{proposal_id}",
+    )
+
+    async def apply(db) -> None:
+        await add_decision(db, decision)
+
+    return apply
+
+
+def approach_applier(
+    payload: ApproachPayload,
+    *,
+    member_id: int,
+    now: float,
+    decision_id: str,
+    proposal_id: str,
+) -> Applier:
+    """
+    Plan opener: the group's way of working becomes one decision. The choice
+    is the summary on the card, the reason its agreed points, and the source
+    this card, so "why did we decide X?" finds where it came from.
+    """
+    decision = Decision(
+        decision_id=decision_id,
+        question=payload.question,
+        choice=payload.summary,
+        reason="; ".join(payload.agreements),
         decided_by=member_id,
         decided_at=now,
         source=f"proposal:{proposal_id}",

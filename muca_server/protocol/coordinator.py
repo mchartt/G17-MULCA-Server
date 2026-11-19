@@ -86,9 +86,12 @@ class CoordinatorCommandMessage(CoordinatorIncomingMessage):
     # of args.text; an owner the members chose is kept, the others are suggested.
     # charter (additive): args.goal, args.deliverables: a member edits the
     # confirmed charter; answered with a charter card to confirm, no model.
+    # approach (additive, CS-OPEN-01): no args; "Plan together": Cadence asks the
+    # group how it wants to plan the work, then sums the answers up in a card.
     command: Literal[
         "profile", "kickoff", "state", "planning", "checkin", "task", "why", "card",
         "link", "unlink", "catchup", "ask", "language", "charter", "milestone",
+        "approach",
     ]
     member_id: int = Field(alias="memberId")
     args: dict[str, Any] = Field(default_factory=dict)

@@ -19,6 +19,7 @@ What it handles:
                        | charter  (a member edits the charter: a card to confirm)
                        | milestone (a member adds, changes or removes a milestone by hand)
                        | link | unlink | catchup   (linked groups, links.py and catchup.py)
+                       | approach (Plan together: ask how the group plans the work, opener.py)
   proposal_response    confirm | reject | take | choose | not_now | helpful
 and it answers with coordinator_proposal / coordinator_state / coordinator_notice.
 
@@ -30,6 +31,10 @@ goes to all the group's open sessions, not only this one. Without `links`
 It is also the session's worker in place of the Conversation (start/close
 below, plugged in by session_components_factory.py), so the timed check-in
 (checkin_timer.py) starts and stops with the session.
+
+Plan opener (opener.py, CS-OPEN-01): when a charter card is confirmed here,
+the opener may ask the group how it wants to plan the work, in the
+background; every chat message then passes through `opener.heard`.
 """
 
 from __future__ import annotations
@@ -55,7 +60,8 @@ from .card_requests import CardRequests
 from .catchup import CatchUp, channel_of, summary_line
 from .checkin_timer import CheckinTimer
 from .links import GroupLinks, LinkError, LiveGroups
-from .models import CharterPayload, MemberProfile, MilestoneDraft, Proposal, ProposalKind
+from .models import CharterPayload, MemberProfile, MilestoneDraft, Proposal, ProposalKind, ProposalStatus
+from .opener import PlanOpener
 from .plan_commands import PlanCommands
 from .plan_writer import PlanWriter
 from .proactive import ProactiveBridge
@@ -118,6 +124,8 @@ class CoordinatorRouter:
                 send_proposal=self._send_proposal,
                 members=self._roster,
                 today=today,
+                # R8: no proactive card while the opener collects the group's answers.
+                listening=lambda: self.opener.listening,
             )
             if proactive_writer is not None
             else None
@@ -136,6 +144,17 @@ class CoordinatorRouter:
         )
         # Helpful and "send me this card again": no model, no state change.
         self._cards = CardRequests(store=self._store_now, notice=self._notice)
+        # CS-OPEN-01: "How do you want to plan the work?" after the charter.
+        self.opener = PlanOpener(
+            conversation,
+            outbound=outbound_queue,
+            store=self._store_now,
+            service=self._service,
+            writer=writer,
+            members=lambda: dict(conversation.participants()),
+            language=self._language,
+            send_proposal=self._send_proposal,
+        )
         # FR15: the check-in on time, while the session is open (off when 0).
         self.checkin_timer = CheckinTimer(
             conversation,
@@ -155,8 +174,9 @@ class CoordinatorRouter:
         self.checkin_timer.start()
 
     async def close(self) -> None:
-        """Session worker: stop the timer, then close the Conversation as before."""
+        """Session worker: stop the timer and the opener, then close the Conversation as before."""
         await self.checkin_timer.close()
+        await self.opener.close()
         self._leave_live()
         await self._conversation.close()
 
@@ -170,6 +190,10 @@ class CoordinatorRouter:
             await self._mirror(message)
         except Exception:  # showing a copy elsewhere must never break the chat
             logger.exception("%s could not mirror a message", self._conversation.conversation_id)
+        try:
+            self.opener.heard(message)
+        except Exception:  # an answer to the opener must never break the chat
+            logger.exception("%s plan opener could not read a message", self._conversation.conversation_id)
 
     async def _mirror(self, message: Any) -> None:
         if self._conversation.is_private or self._conversation.is_ephemeral:
@@ -229,6 +253,8 @@ class CoordinatorRouter:
                 await self._on_unlink(message)
             elif message.command == "catchup":
                 await self._on_catchup(message)
+            elif message.command == "approach":
+                await self._on_approach(message)
             else:  # "state"
                 await self._send_state(request_id)
         except Exception:
@@ -388,6 +414,17 @@ class CoordinatorRouter:
         await self._notice(outcome.ok, outcome.message, message.request_id)
         if outcome.ok:
             await self._send_state("")
+            proposal = outcome.proposal
+            if proposal is not None and proposal.kind is ProposalKind.CHARTER and proposal.status is ProposalStatus.APPLIED:
+                # In the background: the click's answer and state go out first.
+                self.opener.after_charter(message.channel)
+
+    async def _on_approach(self, message: CoordinatorCommandMessage) -> None:
+        """"Plan together": ask how the group plans the work, now (a member's action)."""
+        if self.opener.on_demand(message.channel):
+            await self._notice(True, "Cadence asked the group how it wants to plan the work.", message.request_id)
+        else:
+            await self._notice(False, "Cadence is already listening to your answers about how to plan the work.", message.request_id)
 
     # ------------------------------------------------------------------
     # Helpers

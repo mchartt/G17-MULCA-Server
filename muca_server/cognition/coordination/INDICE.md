@@ -43,7 +43,8 @@ group member applies it, inside one database transaction.
 | `plan_writes.py` | 109 | SQL writes of tasks, decisions and "Not now" used by the appliers (M3). |
 | `writer.py` | 163 | Asks the model for a draft, in a fixed JSON shape, validated. |
 | `proactive_writer.py` | 249 | Drafts CS5/CS2/CS3 cards, grounded on numbered chat lines (M3). |
-| `proactive.py` | 186 | The bridge from a fired strategy to a card, with rules R1-R7 (M3). |
+| `proactive.py` | 238 | The bridge from a fired strategy to a card, with rules R1-R8 (M3; R8 = no card while the plan opener listens). |
+| `opener.py` | 377 | CS-OPEN-01: after the charter, asks "How do you want to plan the work?" (an `assistant_text` frame), listens (60 s minimum, 5 s quiet, 10 min cap), drafts an `approach` card (or a CS3 `decision` card when the answers differ); "Plan together" = command `approach`. |
 | `checkin.py` | 90 | M4: plan against reality, computed in code (late, blocked, due soon, no owner, milestone, dependency). |
 | `plan_writer.py` | 230 | M4: model drafts for /planning, /checkin options, answers to "why did we decide X?" with the decisions they rest on, and answers to "@coordinator ...?" from the saved tasks, milestones and decisions. |
 | `plan_commands.py` | 175 | M4: the commands planning, checkin, task, why, ask (one model command at a time, in the background). |
@@ -67,7 +68,7 @@ turns them into JSON for the clients.
 | `TaskStatus`, `Task` | A task: title, owner, due date, status (todo/doing/done/blocked), ids it depends on. Read now, written from M3. |
 | `Decision` | Question, choice, reason, who and when, `source` (e.g. `proposal:<id>`). Read now, written from M3. |
 | `ProjectState` | Everything above in one object: what the project panel shows. |
-| `ProposalKind` | What a proposal changes: `charter` (M1), `task_owner` (CS5), `delegation` (CS2), `decision` (CS3). |
+| `ProposalKind` | What a proposal changes: `charter` (M1), `task_owner` (CS5), `delegation` (CS2), `decision` (CS3), `plan`, `checkin`, `blocker` (M4), `approach` (plan opener). |
 | `ProposalStatus` | `pending` → `applied` \| `rejected` \| `expired` \| `snoozed` (final states; snoozed = "Not now"). |
 | `CharterPayload` | The content of a charter proposal; `_no_empty_deliverables` drops blank items and refuses items that are too long. |
 | `Evidence` | One chat message behind a proactive card (speaker, text, time), copied by the server, never written by the model. Shown under "Why?". |
@@ -77,6 +78,7 @@ turns them into JSON for the clients.
 | `PlanItem`, `PlanPayload` | M4 /planning: tasks with suggested owner, reason, date; confirmed all together. |
 | `CheckinOption`, `CheckinPayload` | M4 /checkin: findings from `checkin.py` + 1–3 options, each changing one task (date, owner, or drop; at least one change, checked by a validator). |
 | `BlockerPayload` | M4 CS7: blocked task (or a new one), what it waits on, who could help, the question to ask. |
+| `ApproachPayload` | Plan opener: fixed question, summary, 1–5 agreed points, 0–3 open points, evidence copied by the server. Confirm = one decision (`approach_applier`). |
 | `PAYLOAD_MODELS` | Which payload model belongs to which kind. |
 | `Proposal` | One proposal: id, kind, status, payload, one-sentence `rationale`, channel of origin, created/expires, resolved by/at. `typed_payload()` validates the payload against its kind. |
 

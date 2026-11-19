@@ -24,6 +24,9 @@ rules 4.3 and 11, spec NFR3, GL4, GL10):
         after the draft, when the topic is known)
     R7  CS5: no card for a task the plan already shows with an owner;
         CS7: no card for a task already marked blocked
+    R8  no card while the plan opener listens for the group's answers to
+        "How do you want to plan the work?" (opener.py): their replies
+        ("I take the API") are answers, not gaps to fill
 
 R3 and R4 count only cards actually posted: a draft that fails or is
 dropped does not silence the group. Their marker is saved in the group's
@@ -82,8 +85,11 @@ class ProactiveBridge:
         members: Callable[[], dict[int, str]] | None = None,
         today: Callable[[], date] = date.today,
         clock: Callable[[], float] = time.time,
+        listening: Callable[[], bool] | None = None,
     ) -> None:
         self._conversation = conversation
+        # R8: True while the plan opener waits for the group's answers.
+        self._listening = listening or (lambda: False)
         self._writer = writer
         self._store = store
         self._service = service
@@ -157,11 +163,13 @@ class ProactiveBridge:
     # ------------------------------------------------------------------
 
     def _veto(self, history: list, message_count: int, assistant_id: int) -> str:
-        """The first rule (R1-R5) that says no, or "" if none does."""
+        """The first rule (R1-R5, R8) that says no, or "" if none does."""
         if self._conversation.is_private or self._conversation.is_ephemeral:
             return "R1 not a group conversation"
         if self._task is not None and not self._task.done():
             return "R2 a draft is already running"
+        if self._listening():
+            return "R8 the plan opener is listening for the group's answers"
         if self._last_count is not None and message_count - self._last_count < MIN_MESSAGES_BETWEEN:
             return "R3 too few messages since the last card"
         if self._last_at is not None and self._clock() - self._last_at < MIN_SECONDS_BETWEEN:
