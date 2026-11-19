@@ -200,11 +200,14 @@ async def test_the_question_waits_until_the_agent_has_finished_answering(store):
     assert len(of_type(await drain(queue), AssistantTextMessage)) == 1
 
 
-async def test_asking_saves_the_shared_proactive_time_so_r4_waits(store):
-    router, queue, clock = make_router(store, GOOD_CHARTER)
+async def test_the_opener_never_starts_r4s_five_minutes(store):
+    """Decision of Matteo, 19/11: R8 only. The question and its card leave R4 alone,
+    so CS5/CS7 may step in as soon as the group has answered (demo: kickoff, then CS5)."""
+    router, queue, _ = make_router(store, GOOD_CHARTER, AGREED)
     await confirm_charter(router, queue)
-    mark = await store.mark("proactive")
-    assert mark is not None and mark[1] == clock.now
+    assert await store.mark("proactive") is None
+    await answer(router, queue, (1, "Ada", "Split by area."), (2, "Bruno", "Monday check-ins."))
+    assert await store.mark("proactive") is None
 
 
 async def test_plan_together_asks_on_demand_even_after_the_first_time(store):
@@ -292,8 +295,6 @@ async def test_agreed_answers_become_an_approach_card_grounded_on_the_chat(store
     assert [e["speaker"] for e in evidence] == ["Ada", "Bruno"]
     assert evidence[0]["text"] == "Let's split by area: I take the API, Bruno the dashboard."  # copied, not written
     assert payload["context"]["strategy_id"] == "plan_opener"
-    # The card counts for R4 too.
-    assert (await store.mark("proactive"))[1] >= 1_000.0
 
 
 async def test_the_question_is_never_a_chat_line_the_model_can_cite(store):
@@ -392,6 +393,6 @@ async def test_proactive_cards_are_vetoed_while_the_opener_listens(store):
     verdict = await router.proactive.offer("cs5_owner_and_date", history=history, message_count=500, assistant_id=0)
     assert verdict is Verdict.VETOED
 
-    clock.now += MAX_OPEN_SECONDS + 1  # window over (and R4's five minutes too)
+    clock.now += MAX_OPEN_SECONDS + 1  # the window is over: no rule says no any more (no R4 from the opener)
     assert not router.opener.listening
-    assert "opener" not in router.proactive._veto(history, 500, 0)  # noqa: SLF001
+    assert router.proactive._veto(history, 500, 0) == ""  # noqa: SLF001

@@ -19,7 +19,9 @@ How the question reaches the chat (a'): an `assistant_text` frame, the
 event every client already shows as Cadence's message, sent only when the
 main agent is not answering; the observer agents are told, so the answers
 are not mistaken for gaps. While it listens, ProactiveBridge vetoes every
-proactive card (R8 in proactive.py).
+proactive card (R8 in proactive.py). R8 only (Matteo, 19/11): neither the
+question nor its card writes R4's "proactive" mark, so CS5/CS7 may step in
+as soon as the window is over (the demo goes from kickoff straight to CS5).
 
 The marker MARK is saved when the question is asked, like checkin_timer.py
 saves before running: Reject, Not now and expiry never make it ask again by
@@ -294,7 +296,6 @@ class PlanOpener:
                 await wait_until_idle()
         now = self.clock()
         await store.save_mark(MARK, 0, now)
-        await store.save_mark("proactive", 0, now)  # R4: it counts as an unsolicited message
         language = await self._language()
         self._question = QUESTIONS.get(language, QUESTIONS["en"])
         self._asked_at = now
@@ -345,7 +346,6 @@ class PlanOpener:
             return
         kind, payload, rationale = draft
         proposal = await self._service().create(kind, payload, rationale=rationale, origin_channel=self._channel)
-        await self._store().save_mark("proactive", 0, self.clock())
         await self._send_proposal(proposal)
 
     # ------------------------------------------------------------------
