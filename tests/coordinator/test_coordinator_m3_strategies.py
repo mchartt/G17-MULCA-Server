@@ -41,3 +41,15 @@ def test_offered_to_the_model_only_when_the_coordinator_is_on(monkeypatch, tmp_p
     with_coordinator = [ids for ids in seen if "cs2_delegate_simple_task" in ids]
     # On: the ambient catalog and the policy's store. Off: nowhere.
     assert len(with_coordinator) == (2 if enabled == "1" else 0)
+
+
+def test_with_the_coordinator_on_the_labs_unsolicited_strategies_leave_the_catalog():
+    on = run_server.ambient_strategy_ids(True)
+    assert not set(on) & set(run_server.PROACTIVE_STRATEGY_IDS)
+    assert set(run_server.COORDINATOR_STRATEGY_IDS) <= set(on)
+    # Solicited ones stay: @MULCA still gets an answer, a summary, a memory.
+    assert {"respond_when_addressed", "provide_summary", "remember"} <= set(on)
+
+
+def test_with_the_coordinator_off_the_labs_catalog_is_unchanged():
+    assert run_server.ambient_strategy_ids(False) == run_server.ACTIVE_STRATEGY_IDS
