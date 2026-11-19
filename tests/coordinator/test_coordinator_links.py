@@ -269,7 +269,7 @@ async def add_decision(db_dir, at):
     await store.load_state()  # creates the tables
     async with aiosqlite.connect(db_path_for(WEB, base_dir=db_dir)) as db:
         await db.execute(
-            "INSERT INTO coord_decision VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO coord_decision (decision_id, question, choice, reason, decided_by, decided_at, source) VALUES (?, ?, ?, ?, ?, ?, ?)",
             ("d1", "Which lab slot?", "Tuesday 17:00", "Everyone is free", 9001, at, "card p1"),
         )
         await db.commit()

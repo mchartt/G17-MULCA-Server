@@ -69,3 +69,34 @@ A1 · related-sounding tasks, nothing says one needs the other
 A2 · date unclear ("next week")
 > Sara: I'd like to test next week
 > Marco: API should be done soonish
+
+## K3 · a decision reopened (`cs3_reopened_decision`)
+
+Common state: decision "App navigation → Tabs, because five sections fit and
+testers missed the side menu" (decided 12 Nov).
+
+### Positive
+R1 · proposed again, reason forgotten → card: recalls Tabs + reason, `new_point` ≈ "looks cleaner"
+> Marco: what if we switch to a side menu? looks cleaner
+> Sara: hmm why did we choose tabs?
+> Giulia: don't remember tbh
+
+R2 · new information → card with a real `new_point`
+> Marco: the client now wants 8 sections, tabs won't fit
+> Giulia: so side menu?
+
+### Negative
+N1 · decision applied, not reopened
+> Giulia: we said tabs, so I'm drawing the tab bar today
+
+N2 · reminded and closed by a member
+> Marco: side menu?
+> Sara: we chose tabs because testers missed the menu, let's keep it
+> Marco: ok fair
+
+N3 · same words, different question
+> Sara: browser tabs keep crashing on my laptop
+
+### Ambiguous
+A1 · a half-joke
+> Marco: honestly side menus are the best thing ever invented lol

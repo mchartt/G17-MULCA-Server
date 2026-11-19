@@ -25,11 +25,13 @@ from pydantic import ValidationError
 
 from .models import (
     BlockerPayload,
+    Decision,
     DecisionPayload,
     Evidence,
     MemberProfile,
     ProactiveContext,
     ProposalKind,
+    RevisitPayload,
     Task,
     TaskAssignmentPayload,
 )
@@ -43,6 +45,7 @@ STRATEGY_KINDS: dict[str, ProposalKind] = {
     "cs2_delegate_simple_task": ProposalKind.DELEGATION,
     "cs3_close_decision": ProposalKind.DECISION,
     "cs7_blockers_dependencies": ProposalKind.BLOCKER,  # M4
+    "cs3_reopened_decision": ProposalKind.REVISIT,  # K3
 }
 MAX_EVIDENCE = 5
 
@@ -59,7 +62,7 @@ class ChatLine:
 @dataclass(frozen=True, slots=True)
 class ProactiveDraft:
     kind: ProposalKind
-    payload: TaskAssignmentPayload | DecisionPayload | BlockerPayload
+    payload: TaskAssignmentPayload | DecisionPayload | BlockerPayload | RevisitPayload
     rationale: str
 
 
@@ -130,6 +133,13 @@ SCHEMAS: dict[ProposalKind, dict[str, Any]] = {
             "ways_forward": {"type": "array", "items": {"type": "string"}},
         },
     ),
+    ProposalKind.REVISIT: _schema(
+        "reopened_decision",
+        {
+            "decision_id": {"type": "string"},
+            "new_point": {"type": "string"},
+        },
+    ),
 }
 
 COMMON_RULES = """\
@@ -191,6 +201,14 @@ shows the API she needs is not done, or is due after Friday).
   the plan make realistic (mock data, a minimal version first, swap the order,
   someone pairs for an hour). [] if nothing concrete is visible. Never "move the
   deadline" unless the chat says the date can move.""",
+    ProposalKind.REVISIT: """\
+Situation: someone in the chat proposes again, or argues against, a choice the
+group already made (it is in the decision list with its reason).
+- decision_id: the id of that decision, only from the decision list.
+- new_point: one sentence with what is NEW in the chat compared with the
+  saved reason (new information, a new constraint, a test result), in the
+  members' terms; "" if the chat only repeats an argument the group already
+  weighed. Do not judge whether reopening is right: the group decides.""",
 }
 
 
@@ -212,17 +230,21 @@ class ProactiveWriter:
         tasks: list[Task],
         silenced_topics: list[str],
         today: date,
+        decisions: list[Decision] = (),
     ) -> ProactiveDraft | None:
         """A validated card for this strategy, or None (model failed twice, or nothing to ground it)."""
         kind = STRATEGY_KINDS.get(strategy_id)
         if kind is None or not chat:
             return None
         system = f"{COMMON_RULES}\n\n{TASK_RULES[kind]}"
-        user = _context(chat, members, profiles, tasks, silenced_topics, today)
+        open_decisions = [d for d in decisions if d.reopened_at is None]
+        if kind is ProposalKind.REVISIT and not open_decisions:
+            return None  # nothing in the log to revisit: no model call
+        user = _context(chat, members, profiles, tasks, silenced_topics, today, open_decisions)
         for attempt in range(1, ATTEMPTS + 1):
             try:
                 data = await self._writer.call_json(system, user, SCHEMAS[kind])
-                return _validate(kind, strategy_id, data, chat, members, tasks, today)
+                return _validate(kind, strategy_id, data, chat, members, tasks, today, open_decisions)
             except (ValidationError, ValueError, KeyError, TypeError, IndexError) as exc:
                 logger.warning("%s draft invalid (attempt %d): %s", strategy_id, attempt, exc)
             except Exception:
@@ -230,7 +252,7 @@ class ProactiveWriter:
         return None
 
 
-def _context(chat, members, profiles, tasks, silenced_topics, today: date) -> str:
+def _context(chat, members, profiles, tasks, silenced_topics, today: date, decisions=()) -> str:
     """The user message: today, members with profiles, plan, silenced topics, chat."""
     by_id = {p.member_id: p for p in profiles}
     member_lines = []
@@ -253,16 +275,22 @@ def _context(chat, members, profiles, tasks, silenced_topics, today: date) -> st
     ] or ["- (no tasks yet)"]
     chat_lines = [f"[{n}] {line.speaker}: {line.text}" for n, line in enumerate(chat, start=1)]
     silenced = ", ".join(json.dumps(t, ensure_ascii=False) for t in silenced_topics) or "none"
+    decision_lines = [
+        f"- decision_id {d.decision_id}: {d.question} -> chose {json.dumps(d.choice, ensure_ascii=False)}"
+        f" | reason: {' '.join(d.reason.split()) or '-'}"
+        for d in decisions
+    ] or ["- (no decisions yet)"]
     return (
         f"Today is {today.isoformat()}.\n"
         f"Members:\n" + "\n".join(member_lines) + "\n"
         f"Plan:\n" + "\n".join(task_lines) + "\n"
+        f"Decisions already taken:\n" + "\n".join(decision_lines) + "\n"
         f"Topics the group asked you not to raise now (do not draft about them): {silenced}\n"
         f"<chat>\n" + "\n".join(chat_lines) + "\n</chat>"
     )
 
 
-def _validate(kind, strategy_id, data, chat, members, tasks, today) -> ProactiveDraft:
+def _validate(kind, strategy_id, data, chat, members, tasks, today, decisions=()) -> ProactiveDraft:
     """Turn the model's JSON into a payload, or raise (= one retry)."""
     numbers = data.pop("evidence")
     if not numbers:
@@ -278,6 +306,21 @@ def _validate(kind, strategy_id, data, chat, members, tasks, today) -> Proactive
 
     if kind is ProposalKind.DECISION:
         return ProactiveDraft(kind, DecisionPayload(context=context, **data), rationale)
+    if kind is ProposalKind.REVISIT:
+        decision = next((d for d in decisions if d.decision_id == data["decision_id"]), None)
+        if decision is None:
+            raise ValueError("decision_id is not an open decision of the log")
+        # What was decided and why comes from the log, never from the model.
+        payload = RevisitPayload(
+            context=context,
+            decision_id=decision.decision_id,
+            question=decision.question,
+            choice=decision.choice,
+            reason=decision.reason,
+            decided_at=decision.decided_at,
+            new_point=" ".join(data["new_point"].split()),
+        )
+        return ProactiveDraft(kind, payload, rationale)
     if kind is ProposalKind.BLOCKER:
         ids = {t.task_id for t in tasks}
         for key in ("task_id", "depends_on_task_id"):

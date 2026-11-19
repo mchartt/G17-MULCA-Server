@@ -1,0 +1,23 @@
+id: cs3_reopened_decision
+# Group Coordinator K3 (scenario C, tutor question 18/11: "how does Cadence
+# detect that this decision was already made?"). Answered with a card that
+# recalls the decision and its reason: Keep, Reopen it, Not now. The
+# decisions come from the "Project memory" in the turn update.
+trigger_description: >
+  A member proposes again, or argues against, a choice that the Project
+  memory lists under "Decisions already taken" (same question, for example
+  "what about a side menu instead?" when the group chose tabs for the
+  navigation), and the others do not seem to remember that it was decided,
+  or the discussion starts over as if it were open.
+  Do NOT fire for: a decision listed as reopened; someone who mentions the
+  decision only to apply it or remind the others ("we said tabs, so I'm
+  doing tabs"); a member who already answered "we decided X because Y" and
+  the group moved on; a different question that merely uses the same words;
+  a question that has no entry in the Project memory (that is CS3, closing a
+  new decision); jokes.
+cooldown_messages: 10
+trigger_variables: []
+prompt_template: |
+  A decision the group already took is being discussed again. {prompt_fragment}
+  In one short sentence starting with your reason, recall the decision and
+  its reason and ask whether something has changed.

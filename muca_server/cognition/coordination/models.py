@@ -108,6 +108,10 @@ class Decision(_Model):
     decided_at: float
     # Where the decision came from, e.g. "proposal:<id>", for the answer's source.
     source: str = ""
+    # K3: set when a member chose "Reopen it" on a revisit card. The decision
+    # stays in the log (history is kept); a later CS3 card can close it again.
+    reopened_at: float | None = None
+    reopened_by: int | None = None
 
 
 class ProjectState(_Model):
@@ -138,6 +142,7 @@ class ProposalKind(StrEnum):
     PLAN = "plan"  # M4: /planning, the tasks the members wrote with suggested owners
     CHECKIN = "checkin"  # M4: /checkin, up to three ways to fix what is late or at risk
     BLOCKER = "blocker"  # M4: CS7, a task is blocked or waits on another
+    REVISIT = "revisit"  # K3: a decision in the log is being reopened: keep it or reopen it
 
 
 class ProposalStatus(StrEnum):
@@ -346,6 +351,29 @@ class BlockerPayload(_Model):
         return self
 
 
+class RevisitPayload(_Model):
+    """
+    K3: the chat reopens a question the decision log already closed.
+    The card recalls the decision and its reason, says what seems new
+    (`new_point`, "" if nothing new was said) and offers two buttons:
+    option 0 "Keep" (nothing changes) and option 1 "Reopen it" (the decision
+    is marked reopened, history kept). `choice` and `reason` are copied by
+    the server from the log, never written by the model.
+    """
+
+    context: ProactiveContext
+    decision_id: str = Field(min_length=1, max_length=40)
+    question: str = Field(min_length=1, max_length=MAX_TITLE)
+    choice: str = Field(min_length=1, max_length=MAX_TITLE)
+    reason: str = Field(default="", max_length=MAX_TEXT)
+    decided_at: float = 0
+    new_point: str = Field(default="", max_length=MAX_QUOTE)
+
+
+REVISIT_KEEP = 0
+REVISIT_REOPEN = 1
+
+
 # Which payload model belongs to which kind. A new kind = one new line here,
 # one payload model above and one applier in appliers.py.
 PAYLOAD_MODELS: dict[ProposalKind, type[_Model]] = {
@@ -356,6 +384,7 @@ PAYLOAD_MODELS: dict[ProposalKind, type[_Model]] = {
     ProposalKind.PLAN: PlanPayload,
     ProposalKind.CHECKIN: CheckinPayload,
     ProposalKind.BLOCKER: BlockerPayload,
+    ProposalKind.REVISIT: RevisitPayload,
 }
 
 

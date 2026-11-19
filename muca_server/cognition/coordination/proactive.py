@@ -215,11 +215,12 @@ class ProactiveBridge:
                 tasks=state.tasks,
                 silenced_topics=silenced,
                 today=self._today(),
+                decisions=state.decisions,
             )
             if draft is None:
                 logger.warning("%s coordinator: no valid %s draft, staying silent", conversation_id, strategy_id)
                 return
-            dropped = _dropped(draft, silenced, state.tasks)
+            dropped = _dropped(draft, silenced, state.tasks, state.decisions)
             if dropped:
                 logger.info("%s coordinator dropped %s: %s", conversation_id, strategy_id, dropped)
                 return
@@ -239,7 +240,7 @@ class ProactiveBridge:
             logger.exception("%s coordinator failed on %s", conversation_id, strategy_id)
 
 
-def _dropped(draft: ProactiveDraft, silenced: list[str], tasks) -> str:
+def _dropped(draft: ProactiveDraft, silenced: list[str], tasks, decisions=()) -> str:
     """R6 and R7, on the finished draft. Returns why it is dropped, or ""."""
     context = draft.payload.context
     if topic_key(context.topic) in silenced:
@@ -257,4 +258,8 @@ def _dropped(draft: ProactiveDraft, silenced: list[str], tasks) -> str:
             return "R7 the task is already marked blocked"
         if task is not None and payload.depends_on_task_id is not None and payload.depends_on_task_id in task.depends_on:
             return "R7 the plan already records this dependency"
+    if draft.kind is ProposalKind.REVISIT:
+        decision = next((d for d in decisions if d.decision_id == draft.payload.decision_id), None)
+        if decision is None or decision.reopened_at is not None:
+            return "R7 the decision is no longer closed in the log"
     return ""

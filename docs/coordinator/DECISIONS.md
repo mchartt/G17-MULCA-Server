@@ -287,3 +287,22 @@ Newest first. Each entry: date, decision, alternatives, reason, status.
   stays Matteo's decision), the Realtime evaluator, R1-R6.
 - **Status:** IMPLEMENTED/TESTED OFFLINE (26 tests). Whether the evaluator
   actually fires CS7 on the corpus in `CS_CORPUS.md`: NOT VERIFIED (live run).
+
+## 2026-11-19 · K3 a reopened decision (scenario C)
+
+- **Problem:** "let's say Marco reopens a decision. How does Cadence detect
+  that this decision was already made?" (tutor 18/11, via Gabriele's report).
+  Before K3 the honest answer was "it doesn't; `why` answers if asked".
+- **Decision:** new strategy `cs3_reopened_decision` (kept apart from CS3:
+  CS3 closes an open question, this one recalls a closed one). The observer
+  judges it from the chat **and** the Project memory (K1), which lists the
+  decisions with their reason. The card (kind `revisit`) recalls the
+  question, the choice and the reason **copied from the log by the server**,
+  says what seems new (`new_point`, "" if nothing), and offers
+  Keep (option 0: nothing changes, the card records who kept it) /
+  Reopen it (option 1: `coord_decision.reopened_at/by` set; the old choice and
+  reason stay in the log; a later CS3 can close it again) / Not now.
+  Uses the existing `choose` action: no protocol change. Migration: two
+  nullable columns, added to older files at open.
+- **Status:** IMPLEMENTED/TESTED OFFLINE (12 tests). Clients must render the
+  `revisit` card (U3). Detection quality: NOT VERIFIED until the corpus runs live.

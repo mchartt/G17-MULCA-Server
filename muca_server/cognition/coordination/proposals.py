@@ -37,6 +37,8 @@ from pydantic import BaseModel
 from .appliers import (
     StaleProposal,
     blocker_applier,
+    keep_applier,
+    revisit_applier,
     charter_applier,
     checkin_applier,
     decision_applier,
@@ -54,6 +56,9 @@ from .models import (
     Proposal,
     ProposalKind,
     ProposalStatus,
+    REVISIT_KEEP,
+    REVISIT_REOPEN,
+    RevisitPayload,
     TaskAssignmentPayload,
 )
 from .store import Applier, CoordinationStore
@@ -300,5 +305,16 @@ class ProposalService:
             else:
                 message = f"Marked as blocked: \u201c{payload.title}\u201d."
             return "", blocker_applier(payload, new_task_id=new_id(), new_dependency_id=new_id()), message
+
+        if kind is ProposalKind.REVISIT and action == "choose":
+            assert isinstance(payload, RevisitPayload)
+            if option == REVISIT_KEEP:
+                return "", keep_applier(), f"Kept: \u201c{payload.choice}\u201d stays the decision."
+            if option == REVISIT_REOPEN:
+                return "", revisit_applier(payload, member_id=member_id, now=now), (
+                    f"Reopened: \u201c{payload.question}\u201d is open again. "
+                    "The old choice and its reason stay in the log."
+                )
+            return "Choose Keep or Reopen.", None, ""
 
         return f"This button does not apply to a {kind.value} card.", None, ""

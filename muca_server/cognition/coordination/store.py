@@ -79,7 +79,9 @@ CREATE TABLE IF NOT EXISTS coord_decision (
     reason       TEXT NOT NULL DEFAULT '',
     decided_by   INTEGER NOT NULL,
     decided_at   REAL NOT NULL,
-    source       TEXT NOT NULL DEFAULT ''
+    source       TEXT NOT NULL DEFAULT '',
+    reopened_at  REAL,
+    reopened_by  INTEGER
 );
 CREATE TABLE IF NOT EXISTS coord_proposal (
     proposal_id     TEXT PRIMARY KEY,
@@ -145,6 +147,12 @@ class CoordinationStore:
                 cursor = await db.execute("PRAGMA table_info(coord_member)")
                 if "background" not in {row[1] for row in await cursor.fetchall()}:
                     await db.execute("ALTER TABLE coord_member ADD COLUMN background TEXT NOT NULL DEFAULT ''")
+                # Files made before K3 get the "reopened" columns.
+                cursor = await db.execute("PRAGMA table_info(coord_decision)")
+                decision_columns = {row[1] for row in await cursor.fetchall()}
+                if "reopened_at" not in decision_columns:
+                    await db.execute("ALTER TABLE coord_decision ADD COLUMN reopened_at REAL")
+                    await db.execute("ALTER TABLE coord_decision ADD COLUMN reopened_by INTEGER")
             except Exception:
                 await db.close()
                 raise

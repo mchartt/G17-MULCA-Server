@@ -31,6 +31,7 @@ from .models import (
     DecisionPayload,
     Milestone,
     PlanPayload,
+    RevisitPayload,
     TaskAssignmentPayload,
     TaskStatus,
 )
@@ -41,6 +42,7 @@ from .plan_writes import (
     add_task,
     assign_task,
     delete_task,
+    reopen_decision,
     task_owner,
     update_task,
 )
@@ -212,5 +214,28 @@ def blocker_applier(payload: BlockerPayload, *, new_task_id: str, new_dependency
             await add_task(db, task_id=depends_on, title=payload.depends_on_title.strip(), owner_id=None, due_date=None)
         if depends_on:
             await add_dependency(db, task_id=task_id, depends_on=depends_on)
+
+    return apply
+
+
+def revisit_applier(payload: RevisitPayload, *, member_id: int, now: float) -> Applier:
+    """
+    K3 "Reopen it": the decision is marked reopened, not deleted (the log
+    keeps why it was taken). If it is gone or someone reopened it already,
+    the card is stale.
+    """
+
+    async def apply(db) -> None:
+        if not await reopen_decision(db, payload.decision_id, member_id=member_id, now=now):
+            raise StaleProposal("This decision was already reopened or is no longer in the log.")
+
+    return apply
+
+
+def keep_applier() -> Applier:
+    """K3 "Keep": nothing in the plan changes; the card records who kept it and when."""
+
+    async def apply(db) -> None:
+        return None
 
     return apply

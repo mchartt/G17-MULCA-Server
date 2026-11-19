@@ -43,8 +43,10 @@ def project_memory(state: ProjectState, members: dict[int, str], today: date) ->
     by_id = {t.task_id: t for t in state.tasks}
     horizon = today + timedelta(days=MILESTONE_DAYS)
     milestones = [m for m in state.milestones if m.due_date is not None and today <= m.due_date <= horizon]
-    decisions = sorted(state.decisions, key=lambda d: d.decided_at, reverse=True)[:MAX_DECISIONS]
-    if not (open_tasks or milestones or decisions):
+    recent = sorted(state.decisions, key=lambda d: d.decided_at, reverse=True)[:MAX_DECISIONS]
+    decisions = [d for d in recent if d.reopened_at is None]
+    reopened = [d for d in recent if d.reopened_at is not None]
+    if not (open_tasks or milestones or recent):
         return ""
 
     lines = [f"{HEADER}. Today is {_day(today)} ({today.isoformat()})."]
@@ -65,6 +67,10 @@ def project_memory(state: ProjectState, members: dict[int, str], today: date) ->
         for decision in decisions:
             reason = f" because {_one_line(decision.reason, MAX_REASON)}" if decision.reason.strip() else ""
             lines.append(f"- {_one_line(decision.question, 120)} → chose “{decision.choice}”{reason}")
+    if reopened:
+        lines.append("Reopened by the group (open again, being discussed; do not treat as decided):")
+        for decision in reopened:
+            lines.append(f"- {_one_line(decision.question, 120)} (was “{decision.choice}”)")
     return "\n".join(lines)
 
 
