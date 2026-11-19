@@ -1,4 +1,12 @@
 from .control import EndSession
+from .coordinator import (
+    CoordinatorCommandMessage,
+    CoordinatorMirrorMessage,
+    CoordinatorNoticeMessage,
+    CoordinatorProposalMessage,
+    CoordinatorStateMessage,
+    ProposalResponseMessage,
+)
 from .incoming import (
     CONNECT_EVENTS,
     ArmListeningMessage,
@@ -38,6 +46,12 @@ from .outgoing import (
 )
 
 __all__ = [
+    "CoordinatorCommandMessage",
+    "CoordinatorMirrorMessage",
+    "CoordinatorNoticeMessage",
+    "CoordinatorProposalMessage",
+    "CoordinatorStateMessage",
+    "ProposalResponseMessage",
     "CONNECT_EVENTS",
     "AgentGuidMessage",
     "ArmListeningMessage",

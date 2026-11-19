@@ -2,6 +2,9 @@ import json
 from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
+# Group Coordinator messages (added, nothing existing changed).
+from .coordinator import CoordinatorCommandMessage, ProposalResponseMessage
+
 
 class IncomingMessage(BaseModel):
     model_config = ConfigDict(
@@ -235,7 +238,9 @@ IncomingProtocolMessage = Annotated[
     | RemoveAuxiliaryAgentMessage
     | SetModelMessage
     | SetCostAlertMessage
-    | ArmListeningMessage,
+    | ArmListeningMessage
+    | ProposalResponseMessage
+    | CoordinatorCommandMessage,
     Field(discriminator="event"),
 ]
 

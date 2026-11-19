@@ -82,3 +82,53 @@ Send `audio_stream` every 100–200 ms:
 4. **Barge-in:** if a user speaks over the assistant, the server stops the reply, cuts it at `playbackTimeMs`, and sends `clearAudioQueue: true`.
 
 Text and voice can share one session, as with a Discord text channel and its voice channel. They share its memory. Each reply comes back in the medium its turn arrived in.
+
+## Group Coordinator
+
+Added for the AUI Group Coordinator (Group 17). Nothing above changes. The
+server handles these events only when it runs with
+`MUCA_COORDINATOR_ENABLED=true`; otherwise it logs the client events and
+drops them. Clients that do not know the server events ignore them.
+Code: `muca_server/protocol/coordinator.py`.
+
+A proposal changes nothing until a member confirms it. The first valid click
+wins; every later click is refused and every channel gets the updated card.
+
+### Client → server
+
+| Event | Fields | Meaning |
+|---|---|---|
+| `proposal_response` | `proposalId`, `action` (`confirm` \| `reject` \| `take` \| `choose` \| `not_now`), `option` (integer, only for `choose`), `memberId` (a `participants` id), `channel` (`discord` \| `web` \| `slack` \| `calendar`, default `discord`), `requestId` (echoed in the notice) | A member clicked a card button. Refused if `memberId` is not in the session's text roster. |
+| `coordinator_command` | `command` (`profile` \| `kickoff` \| `state` \| `planning` \| `checkin` \| `task` \| `why` \| `ask` \| `language` \| `charter` \| `milestone`), `memberId`, `args` (object), `channel`, `requestId` (echoed back) | `profile`: `args` = `display_name?`, `discipline`, `skills` (list or comma text), `weekly_hours`. `kickoff`: `args.text` = the assignment text; answered with a charter card. `state`: answered with `coordinator_state`. M4: `planning`: `args.text` = tasks, one per line → a `plan` card. `checkin`: no args → a notice "on track", or a `checkin` card. `task`: `args.task` (task id or its number in the plan), `args.status` (`todo` \| `doing` \| `done` \| `blocked`) → applied at once (a member's own action), new state. `why`: `args.question` → a notice with the answer and its source (the decisions it rests on). `ask`: `args.question` → a notice answered only from the saved tasks, milestones and decisions, each named as a `Source:` line; when none of them answers, a fixed "nothing saved" notice. `language`: `args` = `language` (`en` \| `it` \| `auto`): the language of everything the coordinator writes for the group; answered with a notice and the state (`state.language`, `""` = follows the chat). `charter`: `args` = `goal`, `deliverables?` (list, or text with one per line): a member edits the charter; no model call, answered with a `charter` card that is saved when a member confirms it (milestones unchanged). By hand (a member's own action, no card, no model): `task` also takes `owner` (member id, or `""` for nobody), `due` (`YYYY-MM-DD` or `""`), `title`, `remove: true`, or `add` (the title of a new task, with `owner`/`due`); `milestone` takes `add` (+ `due`), or `milestone` (its id) with `title`, `due` or `remove: true`. `planning` also takes `items` = `[{title, owner_id?, due_date?}]`: owners the members chose are kept, the rest are suggested; all chosen means no model call. `profile` also takes `background` (free text, up to 600 characters). |
+
+### Server → client
+
+| Event | Fields | Meaning |
+|---|---|---|
+| `coordinator_proposal` | `proposal`: `proposal_id`, `kind` (`charter` \| `task_owner` \| `delegation` \| `decision`), `status` (`pending` \| `applied` \| `rejected` \| `expired` \| `snoozed`), `payload`, `rationale`, `origin_channel` (`group` for proactive cards: show it in every channel), `created_at`, `expires_at`, `resolved_by`, `resolved_at` | A card to draw, or a new status for one already drawn. A `charter` payload has `goal`, `deliverables` (list), `milestones` (list of `title`, `due_date` ISO date or null). Proactive payloads (below) have a `context`: `strategy_id`, `topic`, `evidence` (list of `speaker`, `text`, `at_ms`), shown under "Why?". |
+| `coordinator_state` | `state`: `charter`, `members`, `milestones`, `tasks`, `decisions`; `requestId` | The whole project state, after a change or when asked. |
+| `coordinator_notice` | `ok`, `text`, `requestId` | A short answer to a command or a click: done, or why not. |
+
+Proactive cards (M3), posted by the coordinator on its own when a strategy
+fires. Buttons and the `action` they send:
+
+| `kind` | Strategy | Payload besides `context` | Buttons |
+|---|---|---|---|
+| `task_owner` | `cs5_owner_and_date` | `task_id` (existing task or null), `title`, `owner_id` (suggested member or null), `due_date` | Confirm (`confirm`, only with a suggested owner), I'll take it (`take`), Reject, Not now |
+| `delegation` | `cs2_delegate_simple_task` | `title`, `due_date`, `return_to` (topic to go back to); never an owner | I'll take it (`take`), Reject, Not now |
+| `decision` | `cs3_close_decision` | `question`, `options` (2–3 of `label`, `argument`) | one per option (`choose` + `option` index), Reject, Not now |
+| `blocker` (M4) | `cs7_blockers_dependencies` | `task_id` (plan task or null), `title`, `depends_on_task_id`, `helper_id`, `question` | Confirm (marks it blocked, records the dependency), Reject, Not now |
+
+Cards answering a command (M4), no Why?/Not now:
+
+| `kind` | Payload | Buttons |
+|---|---|---|
+| `plan` | `items` (1–15 of `title`, `owner_id` suggested or null, `reason`, `due_date`) | Confirm (adds every task), Reject |
+| `checkin` | `findings` (computed by the server, not the model), `options` (1–3 of `label`, `task_id`, `new_due_date`, `new_owner_id`, `drop`) | one per option (`choose` + `option`), Reject |
+
+`not_now` closes the card as `snoozed` and silences that strategy on that
+topic for 30 minutes. "Why?" needs no event: the card already carries the
+strategy, the topic and the messages behind it.
+
+These events are only for group conversations: in a DM or a session without
+`conversationId` every command is answered with a refusing notice.

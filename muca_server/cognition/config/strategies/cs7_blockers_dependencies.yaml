@@ -1,0 +1,18 @@
+id: cs7_blockers_dependencies
+# Group Coordinator (spec S7 "Blockers", M4). Answered with a card: a member
+# confirms that the task is blocked and what it waits on.
+trigger_description: >
+  A member says they are stuck or waiting on someone else's work for a
+  project task ("I can't start the UI until the API is ready", "still
+  waiting for the survey data"), or a task is past its date and its owner
+  says it is not done, and this puts a deadline at risk.
+  Do NOT fire for: a question that someone is already answering; a short
+  delay that the member says they will solve themselves today; personal
+  reasons or health (never ask about them); complaints about a person; a
+  blocker the group has just discussed and resolved.
+cooldown_messages: 10
+trigger_variables: []
+prompt_template: |
+  A member is blocked or waiting on other work. {prompt_fragment}
+  In one short sentence starting with your reason, ask what blocks them and
+  name who could help.

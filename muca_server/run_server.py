@@ -19,7 +19,6 @@ from pathlib import Path
 
 import uvicorn
 from dotenv import load_dotenv
-from openai import AsyncOpenAI
 
 from .agents import MainAgentOptions
 from .agents.conversation import DEFAULT_SILENCE_TIMEOUT_MS
@@ -29,7 +28,9 @@ from .agents.openai import (
     OpenAIEmbedder,
     OpenAIWebSearcher,
 )
+from .agents.openai.client_config import build_openai_client
 from .agents.openai.day_summarizer import DAILY_SUMMARY_MODEL
+from .agents.openai.main_agent import SUMMARY_MODEL
 from .agents.openai.model_settings import ModelSettings
 from .usage_report import UsageTracker
 from .cognition import CoalaPolicy
@@ -44,12 +45,16 @@ from .cognition.memory.sqlite import (
     SqliteSnapshotStore,
     db_path_for,
 )
+from .cognition.coordination.wiring import build_coordinator_factory
+from .cognition.coordination.settings import CoordinatorSettings
 from .main import create_app
 from .sessions.session_components_factory import DefaultSessionComponentsFactory
 
 logger = logging.getLogger(__name__)
 
 TASK_ID = "general_moderation"
+# Group Coordinator task, used instead when MUCA_COORDINATOR_ENABLED is on.
+COORDINATOR_TASK_ID = "group_coordinator"
 # participation_equality_voice deliberately left out: voice is mention-only
 # (respond_when_addressed/provide_summary/remember, all solicited) -- the
 # strategy and its voice-only roster/trigger-variable plumbing stay in the
@@ -78,7 +83,35 @@ PROACTIVE_STRATEGY_IDS = [
     "pleasant_conversation",
     "resolve_conflict",
 ]
+# Group Coordinator strategies (M3), added to the ambient catalog and to the
+# policy's store only when MUCA_COORDINATOR_ENABLED is on. Answered with a
+# card (cognition/coordination/proactive.py), never with a reply.
+COORDINATOR_STRATEGY_IDS = [
+    "cs5_owner_and_date",
+    "cs2_delegate_simple_task",
+    "cs3_close_decision",
+    "cs7_blockers_dependencies",
+]
 ASSISTANT_NAME = "MULCA"
+
+
+def ambient_strategy_ids(coordinator_enabled: bool) -> list[str]:
+    """
+    The catalog the intervention agent picks from in an ambient conversation.
+
+    Coordinator off: the lab's catalog, unchanged. Coordinator on: the lab's
+    unsolicited strategies (PROACTIVE_STRATEGY_IDS) are left out, so the agent
+    chooses only between the coordinator's strategies (answered with a card)
+    and the solicited ones (respond_when_addressed, provide_summary, remember).
+    Otherwise both compete for the same message: in the 17/11 live test
+    resolve_conflict answered a decision debate with free text and CS3 never
+    fired, and the free replies ignored the group's language and the
+    guidelines on when and how much to speak (LG3, LG5).
+    """
+    if not coordinator_enabled:
+        return list(ACTIVE_STRATEGY_IDS)
+    solicited = [sid for sid in ACTIVE_STRATEGY_IDS if sid not in PROACTIVE_STRATEGY_IDS]
+    return solicited + COORDINATOR_STRATEGY_IDS
 
 # "ambient": every turn is judged, as above. "toggle"/
 # "transcribe": the intervention agent is only consulted inside a window
@@ -128,8 +161,13 @@ def build_app():
     # between these two per conversation, from that conversation's own
     # resolved listening_mode (server default, or its own handshake
     # override) -- never from this process's own env var alone.
-    client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    strategy_store = load_strategy_store(ACTIVE_STRATEGY_IDS)
+    # OpenAI as before, or Azure OpenAI when AZURE_OPENAI_ENDPOINT and
+    # AZURE_OPENAI_API_KEY are both set (agents/openai/client_config.py).
+    client = build_openai_client(os.environ)
+    coordinator_settings = CoordinatorSettings.from_env(os.environ)
+    logger.info("Group Coordinator: %s", "on" if coordinator_settings.enabled else "off")
+    coordinator_ids = COORDINATOR_STRATEGY_IDS if coordinator_settings.enabled else []
+    strategy_store = load_strategy_store(ambient_strategy_ids(coordinator_settings.enabled))
     non_ambient_strategy_store = load_strategy_store(
         [sid for sid in ACTIVE_STRATEGY_IDS if sid not in PROACTIVE_STRATEGY_IDS]
         + ["always_reply"]
@@ -150,7 +188,7 @@ def build_app():
     # some conversations would make a legitimate strategy_id the model's
     # own (correctly filtered) catalog just gave it resolve to nothing here.
     policy_strategy_store = load_strategy_store(
-        ACTIVE_STRATEGY_IDS + ["always_reply"]
+        ACTIVE_STRATEGY_IDS + coordinator_ids + ["always_reply"]
     )
     main_persona = load_persona("main_default")
     intervention_persona = load_persona("intervention_default")
@@ -164,7 +202,8 @@ def build_app():
         "intervention_default",
         config_dir=WAKE_V2_CONFIG_DIR,
     )
-    task_knowledge = load_task(TASK_ID)
+    task_id = COORDINATOR_TASK_ID if coordinator_settings.enabled else TASK_ID
+    task_knowledge = load_task(task_id)
     # Which prompt a reply came from, for the logs: changes with any edit to
     # the persona or the task. A client's session.update replaces both (and
     # is logged per session).
@@ -173,7 +212,7 @@ def build_app():
         hashlib.sha256(
             "\n".join([main_persona, task_knowledge]).encode()
         ).hexdigest()[:12],
-        TASK_ID,
+        task_id,
     )
 
     # One SQLite file per conversation_id, not one shared file -- e.g. each
@@ -241,10 +280,12 @@ def build_app():
     # Long-term memory (docs/MEMORY_DESIGN.md): without it, nothing is
     # summarized and the agents only ever know today. The once-a-day
     # summaries run on a stronger model, MUCA_DAILY_SUMMARY_MODEL to
-    # override.
+    # override. MUCA_SUMMARY_MODEL overrides the everyday summary model
+    # (default unchanged); on Azure it is the deployment name.
     day_summarizer = OpenAIDaySummarizer(
         client,
         daily_model=os.environ.get("MUCA_DAILY_SUMMARY_MODEL") or DAILY_SUMMARY_MODEL,
+        model=os.environ.get("MUCA_SUMMARY_MODEL") or SUMMARY_MODEL,
         usage_tracker=usage_tracker,
     )
     web_searcher = OpenAIWebSearcher(client, usage_tracker=usage_tracker)
@@ -277,6 +318,13 @@ def build_app():
             )
         ),
         listening_mode=listening_mode,
+        # None when the coordinator is off: sessions are built exactly as before.
+        coordinator_factory=build_coordinator_factory(
+            coordinator_settings,
+            client=client,
+            db_dir=db_dir,
+            usage_tracker=usage_tracker,
+        ),
     )
 
     return create_app(

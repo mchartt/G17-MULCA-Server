@@ -14,6 +14,12 @@ if TYPE_CHECKING:
 
 PolicyFactory = Callable[[SessionContext], CognitionPolicy]
 
+# Group Coordinator: given the session's Conversation and outbound queue,
+# returns the router the dispatcher talks to (a CoordinatorRouter wrapping
+# the Conversation). None, the default, means no coordinator: the
+# Conversation is the router, exactly as before.
+CoordinatorFactory = Callable[[Conversation, object], object]
+
 
 class DefaultSessionComponentsFactory:
     """
@@ -33,7 +39,9 @@ class DefaultSessionComponentsFactory:
         model_settings: ModelSettings | None = None,
         usage_tracker: UsageTracker | None = None,
         listening_mode: Literal["ambient", "toggle", "transcribe", "wake"] = "ambient",
+        coordinator_factory: CoordinatorFactory | None = None,
     ) -> None:
+        self.coordinator_factory = coordinator_factory
         self.model_settings = model_settings
         self.usage_tracker = usage_tracker
         self.agent_factory = agent_factory
@@ -55,8 +63,19 @@ class DefaultSessionComponentsFactory:
             conversation=conversation,
         )
 
+        agent_router = (
+            conversation
+            if self.coordinator_factory is None
+            else self.coordinator_factory(conversation, context.outbound_queue)
+        )
+
+        if agent_router is not conversation:
+            # Group Coordinator: the router starts and closes the Conversation
+            # itself (plus its check-in timer), so it takes its worker slot.
+            workers = [agent_router if w is conversation else w for w in workers]
+
         return SessionComponents(
-            agent_router=conversation,
+            agent_router=agent_router,
             workers=workers,
         )
 

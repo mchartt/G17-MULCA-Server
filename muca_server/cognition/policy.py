@@ -216,6 +216,13 @@ class CoalaPolicy:
         # The strategy the latest turn resolved with (None: nothing fired,
         # or forced). Read-only for the conversation's wake session.
         self._last_turn_strategy: str | None = None
+        # Group Coordinator (cognition/coordination/proactive.py): set only
+        # when the coordinator is on, by its wiring. None = exactly as before.
+        self._proactive = None
+
+    def set_proactive_bridge(self, bridge) -> None:
+        """Group Coordinator: its strategies answer with a card, not a reply."""
+        self._proactive = bridge
 
     async def start(self, port: ConversationPort) -> None:
         self._port = port
@@ -679,6 +686,27 @@ class CoalaPolicy:
             strategy_id = None
             prompt_fragment = None
             needs_history = False
+
+        # Group Coordinator hook (M3). Its strategies (CS5, CS2, CS3) become
+        # a card drafted in the background, never a free-text reply; its own
+        # deterministic rules may veto them. Anything else: NOT_MINE, and the
+        # turn goes on exactly as before. Skipped entirely when off.
+        if strategy_id is not None and self._proactive is not None:
+            verdict = await self._proactive.offer(
+                strategy_id,
+                history=list(wm.history),
+                message_count=wm.total_message_count,
+                assistant_id=self._assistant_id,
+            )
+            if verdict != "not_mine":
+                if verdict == "taken":
+                    wm.record_action(strategy_id, wm.total_message_count)
+                await self._finish_turn(
+                    path="none",
+                    strategy_id=None,
+                    prompt_fragment=f"coordinator {verdict}: {strategy_id}",
+                )
+                return
 
         # "toggle"/"transcribe" guarantee: not a request the model might
         # ignore, same as the vetoes above -- "do nothing" is not a real

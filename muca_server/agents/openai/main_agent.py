@@ -173,6 +173,12 @@ PRICES_PER_MILLION = {
     TRANSCRIPTION_MODEL: (2.5, 0.0, 2.5, 0.0, 10.0, 0.0),
     SUMMARY_MODEL: (2.5, 1.25, 0.0, 0.0, 10.0, 0.0),
     "gpt-5": (1.25, 0.125, 0.0, 0.0, 10.0, 0.0),
+    # Group Coordinator on Azure (docs/coordinator/AZURE_SETUP.md): text
+    # models chosen through MUCA_SUMMARY_MODEL / MUCA_COORDINATOR_MODEL.
+    # OpenAI list prices, read 15 Nov 2026; Azure Global Standard prices
+    # are assumed equal (NOT VERIFIED: check Cost Management).
+    "gpt-6.1-sol": (2.0, 0.10, 0.0, 0.0, 10.0, 0.0),
+    "gpt-6-luna": (0.10, 0.01, 0.0, 0.0, 0.50, 0.0),
     "text-embedding-3-small": (0.02, 0.0, 0.0, 0.0, 0.0, 0.0),
     # web_search.py's default model -- content tokens only; the tool's own
     # per-call fee is tracked separately (record_cost's extra_fee_usd),

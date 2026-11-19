@@ -61,6 +61,45 @@ def create_app(
         body = await run_in_threadpool(export_episodic_csv, path, since=since)
         return Response(content=body, media_type="text/csv; charset=utf-8")
 
+    @app.delete("/conversation")
+    async def delete_conversation(
+        conversation_id: str,
+        x_admin_token: str = Header(default=""),
+    ) -> dict:
+        """
+        Group Coordinator (project rule 10, "delete all the group's data on
+        confirmation"): remove one conversation's SQLite file, i.e. its
+        memory, episodic log and project state. Gated on MUCA_ADMIN_TOKEN
+        like /export; off entirely without one. The client closes the
+        group's session first, so nothing writes the file again.
+        """
+
+        from .cognition.memory.sqlite import db_path_for
+
+        if not admin_token or not hmac.compare_digest(
+            x_admin_token.encode(),
+            admin_token.encode(),
+        ):
+            raise HTTPException(status_code=403, detail="bad admin token")
+        if db_dir is None:
+            raise HTTPException(status_code=404, detail="no database directory")
+
+        path = db_path_for(conversation_id, base_dir=db_dir)
+        removed = []
+        # SQLite may leave its journal files next to the database.
+        for candidate in (path, path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm"), path.with_name(path.name + "-journal")):
+            if candidate.is_file():
+                await run_in_threadpool(candidate.unlink)
+                removed.append(candidate.name)
+        # A deleted web space takes its links with it, and a deleted channel
+        # its own link (coordination/links.py): no stale "this group" left.
+        from .cognition.coordination.links import GroupLinks
+
+        links = GroupLinks(db_dir)
+        await run_in_threadpool(links.forget_home, conversation_id)
+        await run_in_threadpool(links.unlink, conversation_id)
+        return {"deleted": bool(removed)}
+
     @app.websocket("/")
     async def websocket_endpoint(ws: WebSocket) -> None:
         runtime = await runtime_factory.create(websocket=ws)

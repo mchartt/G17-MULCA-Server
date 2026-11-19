@@ -1,0 +1,20 @@
+id: cs2_delegate_simple_task
+# Group Coordinator (spec S2 "Delegate simple tasks", Collaborative Cognitive
+# Load Theory). Answered with a card: one member takes the task with a click.
+trigger_description: >
+  At least two members have been going back and forth for several messages
+  about a task that one person could easily complete alone: formatting,
+  fonts and margins, renaming files, booking a room, fixing a citation
+  style, choosing a colour. The group spends shared attention on it while
+  it does not need a group decision.
+  Do NOT fire for: a complex or interdependent task discussed together on
+  purpose (architecture, database schema, evaluation method, the project
+  goal); a real choice between options that affects others (that is a
+  decision, not a simple task); a short exchange of one or two messages;
+  someone who already said they will do it.
+cooldown_messages: 10
+trigger_variables: []
+prompt_template: |
+  A simple task is taking the whole group's attention. {prompt_fragment}
+  In one short sentence starting with your reason, suggest that one person
+  takes it. Do not assign anyone.
