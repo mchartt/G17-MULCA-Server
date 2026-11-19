@@ -95,6 +95,8 @@ class Task(_Model):
     due_date: date | None = None
     status: TaskStatus = TaskStatus.TODO
     depends_on: list[str] = Field(default_factory=list)  # other task_ids
+    # Written by a member by hand (the "New task" popup); cards never set it.
+    description: str = Field(default="", max_length=MAX_TEXT)
 
 
 class Decision(_Model):

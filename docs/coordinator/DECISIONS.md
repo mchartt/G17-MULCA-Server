@@ -314,3 +314,25 @@ Newest first. Each entry: date, decision, alternatives, reason, status.
   (`proactive._duplicate`, `store.open_proposals`). The first card stays
   answerable; a copy would only add noise (CCLT: coordination is a cost too).
   Code, not model. Tested offline.
+
+## 2026-11-19 · Slice C: a task made by hand has a description and what it waits on
+
+- **Decision:** the hand command `task` accepts two more arguments:
+  `description` (up to 2000 characters, "" clears it) and `depends_on` (a
+  list of task ids or plan numbers; [] clears it), on add and on edit. The
+  server refuses a task that waits on itself, on an unknown task, or in a
+  loop (A waits on B, B on A, through any tasks), and saves nothing.
+  The check runs inside the same transaction as the write
+  (`store._replace_dependencies`), so two members cannot race a loop in.
+- **Why:** the "+ New" popup and the dependency page need both; the table
+  `coord_task_dependency` already existed but nothing by hand wrote it.
+- **Protocol:** additive. Old clients send neither argument and nothing
+  changes. Migration: one column with a default, added to older files at open.
+  By hand = no card, no model call. Approved by the user on 2026-11-19
+  (decision 2 of the plan).
+- **Known gap (not fixed here):** a CS7 card that confirms "A waits on B"
+  (`blocker_applier`) does not run the loop check. IDEA: reuse
+  `_replace_dependencies` there, with its own decision.
+- **Open question:** hand-added tasks accept a past date (the planning list
+  refuses it). Left as is: a member may log work that is already late.
+- **Status:** IMPLEMENTED/TESTED OFFLINE (9 tests, `test_coordinator_task_details.py`).
