@@ -94,6 +94,25 @@ COORDINATOR_STRATEGY_IDS = [
 ]
 ASSISTANT_NAME = "MULCA"
 
+
+def ambient_strategy_ids(coordinator_enabled: bool) -> list[str]:
+    """
+    The catalog the intervention agent picks from in an ambient conversation.
+
+    Coordinator off: the lab's catalog, unchanged. Coordinator on: the lab's
+    unsolicited strategies (PROACTIVE_STRATEGY_IDS) are left out, so the agent
+    chooses only between the coordinator's strategies (answered with a card)
+    and the solicited ones (respond_when_addressed, provide_summary, remember).
+    Otherwise both compete for the same message: in the 17/11 live test
+    resolve_conflict answered a decision debate with free text and CS3 never
+    fired, and the free replies ignored the group's language and the
+    guidelines on when and how much to speak (LG3, LG5).
+    """
+    if not coordinator_enabled:
+        return list(ACTIVE_STRATEGY_IDS)
+    solicited = [sid for sid in ACTIVE_STRATEGY_IDS if sid not in PROACTIVE_STRATEGY_IDS]
+    return solicited + COORDINATOR_STRATEGY_IDS
+
 # "ambient": every turn is judged, as above. "toggle"/
 # "transcribe": the intervention agent is only consulted inside a window
 # (opened by the button/`/listen`, or a spoken wake phrase, respectively --
@@ -148,7 +167,7 @@ def build_app():
     coordinator_settings = CoordinatorSettings.from_env(os.environ)
     logger.info("Group Coordinator: %s", "on" if coordinator_settings.enabled else "off")
     coordinator_ids = COORDINATOR_STRATEGY_IDS if coordinator_settings.enabled else []
-    strategy_store = load_strategy_store(ACTIVE_STRATEGY_IDS + coordinator_ids)
+    strategy_store = load_strategy_store(ambient_strategy_ids(coordinator_settings.enabled))
     non_ambient_strategy_store = load_strategy_store(
         [sid for sid in ACTIVE_STRATEGY_IDS if sid not in PROACTIVE_STRATEGY_IDS]
         + ["always_reply"]
