@@ -231,6 +231,18 @@ class CoordinationStore:
             await db.close()
         return _proposal_from_row(row) if row is not None else None
 
+    async def open_proposals(self, now: float) -> list[Proposal]:
+        """Pending proposals not yet expired (R8: no second card on the same thing)."""
+        db = await self._connect()
+        db.row_factory = aiosqlite.Row
+        try:
+            rows = await _all_params(
+                db, "SELECT * FROM coord_proposal WHERE status = 'pending' AND expires_at > ?", (now,)
+            )
+        finally:
+            await db.close()
+        return [_proposal_from_row(row) for row in rows]
+
     async def resolve_proposal(
         self,
         proposal_id: str,
@@ -544,6 +556,11 @@ class CoordinationStore:
             decisions=decisions,
             language=language_rows[0]["value"] if language_rows else "",
         )
+
+
+async def _all_params(db: aiosqlite.Connection, sql: str, params: tuple) -> list[aiosqlite.Row]:
+    cursor = await db.execute(sql, params)
+    return list(await cursor.fetchall())
 
 
 async def _all(db: aiosqlite.Connection, sql: str) -> list[aiosqlite.Row]:

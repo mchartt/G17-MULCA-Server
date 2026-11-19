@@ -23,7 +23,10 @@ rules 4.3 and 11, spec NFR3, GL4, GL10):
     R6  "Not now": a silenced (strategy, topic) never gets a card (checked
         after the draft, when the topic is known)
     R7  CS5: no card for a task the plan already shows with an owner;
-        CS7: no card for a task already marked blocked
+        CS7: no card for a task already marked blocked, or for a dependency
+        the plan already records; K3: no card on a decision already reopened
+    R8  no second card while one on the same thing (kind and topic, or task
+        title) is still waiting for a click
 
 R3 and R4 count only cards actually posted: a draft that fails or is
 dropped does not silence the group. Their marker is saved in the group's
@@ -220,7 +223,9 @@ class ProactiveBridge:
             if draft is None:
                 logger.warning("%s coordinator: no valid %s draft, staying silent", conversation_id, strategy_id)
                 return
-            dropped = _dropped(draft, silenced, state.tasks, state.decisions)
+            dropped = _dropped(draft, silenced, state.tasks, state.decisions) or _duplicate(
+                draft, await store.open_proposals(self._clock())
+            )
             if dropped:
                 logger.info("%s coordinator dropped %s: %s", conversation_id, strategy_id, dropped)
                 return
@@ -238,6 +243,25 @@ class ProactiveBridge:
         except Exception:
             # Project rule: a model or database error never breaks the chat.
             logger.exception("%s coordinator failed on %s", conversation_id, strategy_id)
+
+
+def _duplicate(draft: ProactiveDraft, open_cards: list[Proposal]) -> str:
+    """
+    R8: a card still waiting for a click already asks the same thing (same
+    kind and topic, or for CS5/CS2 the same task title). The group can still
+    answer the first one; a second copy would only be noise.
+    """
+    topic = topic_key(draft.payload.context.topic)
+    title = topic_key(getattr(draft.payload, "title", "") or "")
+    for card in open_cards:
+        if card.kind is not draft.kind:
+            continue
+        context = card.payload.get("context") or {}
+        if topic_key(context.get("topic", "")) == topic:
+            return "R8 an open card already asks this"
+        if title and topic_key(card.payload.get("title", "") or "") == title:
+            return "R8 an open card already asks this"
+    return ""
 
 
 def _dropped(draft: ProactiveDraft, silenced: list[str], tasks, decisions=()) -> str:

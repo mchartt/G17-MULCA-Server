@@ -305,3 +305,28 @@ def test_r7_a_possible_dependency_on_a_blocked_task_is_still_useful():
 def test_a_possible_dependency_must_say_on_what():
     with pytest.raises(ValueError):
         possible_payload(depends_on_task_id=None)
+
+
+# ----------------------------------------------------------------------
+# R8 · no second card while the first one is still open
+# ----------------------------------------------------------------------
+
+
+async def test_r8_no_duplicate_card_while_the_first_waits(store):
+    from muca_server.cognition.coordination.proactive import MIN_MESSAGES_BETWEEN, MIN_SECONDS_BETWEEN
+
+    first = ProactiveDraft(ProposalKind.BLOCKER, possible_payload(), "Stepping in because r.")
+    same = ProactiveDraft(ProposalKind.BLOCKER, possible_payload(), "Stepping in because r.")
+    other = ProactiveDraft(
+        ProposalKind.BLOCKER,
+        possible_payload(context=context(CS7, "Slides wait on data"), task_id=None, title="Slides",
+                         depends_on_task_id=None, depends_on_title="Survey data"),
+        "Stepping in because r.",
+    )
+    bridge, sent, clock = make_bridge(store, FakeWriter(first, same, other))
+    history = [Utterance(speaker_id=1, speaker_name="Ada", content="x", timestamp_ms=0)] * 3
+    for count in (20, 20 + MIN_MESSAGES_BETWEEN, 20 + 2 * MIN_MESSAGES_BETWEEN):
+        await bridge.offer(CS7, history=history, message_count=count, assistant_id=0)
+        await bridge.wait()
+        clock.now += MIN_SECONDS_BETWEEN + 1
+    assert [p.payload["title"] for p in sent] == ["Usability test", "Slides"]

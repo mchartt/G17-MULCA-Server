@@ -306,3 +306,11 @@ Newest first. Each entry: date, decision, alternatives, reason, status.
   nullable columns, added to older files at open.
 - **Status:** IMPLEMENTED/TESTED OFFLINE (12 tests). Clients must render the
   `revisit` card (U3). Detection quality: NOT VERIFIED until the corpus runs live.
+
+## 2026-11-19 · R8 no second card on the same thing
+
+- A card still waiting for a click (same kind and topic, or for CS5/CS2 the
+  same task title) stops a new draft from being posted
+  (`proactive._duplicate`, `store.open_proposals`). The first card stays
+  answerable; a copy would only add noise (CCLT: coordination is a cost too).
+  Code, not model. Tested offline.
