@@ -71,7 +71,8 @@ CREATE TABLE IF NOT EXISTS coord_task (
     description  TEXT NOT NULL DEFAULT '',
     progress     INTEGER NOT NULL DEFAULT 0,  -- 0-100, set by a member; 100 when done
     created_at   REAL,                        -- unix time, set by TASK_TIMES
-    done_at      REAL                         -- unix time it became done, NULL otherwise
+    done_at      REAL,                        -- unix time it became done, NULL otherwise
+    touched_at   REAL                         -- unix time status or progress last changed (TASK_TIMES)
 );
 CREATE TABLE IF NOT EXISTS coord_task_dependency (
     task_id     TEXT NOT NULL,
@@ -120,6 +121,22 @@ CREATE TABLE IF NOT EXISTS coord_mark (
     message_count  INTEGER NOT NULL DEFAULT 0,
     at             REAL NOT NULL
 );
+-- CS6 progress check-ins (progress.py): one row per task and deadline, so a
+-- task is asked about at most once per due date (a new due date is a new key:
+-- a check-in planned for the old one can never fire). Claimed with INSERT OR
+-- IGNORE before the message is sent, so two timers, a restart or two workers
+-- on the same file never send it twice. `answer` is what the member said
+-- (on_track, behind, blocked, done, declined, skipped), read from their reply
+-- by the ask path; coordinator memory only, never a change of the plan.
+CREATE TABLE IF NOT EXISTS coord_progress_checkin (
+    task_id      TEXT NOT NULL,
+    due_date     TEXT NOT NULL,
+    member_id    INTEGER,
+    asked_at     REAL,
+    answer       TEXT NOT NULL DEFAULT '',
+    answered_at  REAL,
+    PRIMARY KEY (task_id, due_date)
+);
 -- Choices of the group that are not project state: "language" = the language
 -- of the coordinator's texts ("en" or "it"; no row = it follows the chat).
 CREATE TABLE IF NOT EXISTS coord_setting (
@@ -160,6 +177,11 @@ CREATE TRIGGER IF NOT EXISTS coord_task_done AFTER UPDATE OF status ON coord_tas
 WHEN NEW.status = 'done' AND OLD.status <> 'done'
 BEGIN
     UPDATE coord_task SET done_at = (julianday('now') - 2440587.5) * 86400.0, progress = 100 WHERE task_id = NEW.task_id;
+END;
+CREATE TRIGGER IF NOT EXISTS coord_task_touched AFTER UPDATE OF status, progress ON coord_task
+WHEN NEW.status IS NOT OLD.status OR NEW.progress IS NOT OLD.progress
+BEGIN
+    UPDATE coord_task SET touched_at = (julianday('now') - 2440587.5) * 86400.0 WHERE task_id = NEW.task_id;
 END;
 CREATE TRIGGER IF NOT EXISTS coord_task_reopened AFTER UPDATE OF status ON coord_task
 WHEN NEW.status <> 'done' AND OLD.status = 'done'
@@ -204,6 +226,9 @@ class CoordinationStore:
                     await db.execute("ALTER TABLE coord_task ADD COLUMN progress INTEGER NOT NULL DEFAULT 0")
                     await db.execute("ALTER TABLE coord_task ADD COLUMN created_at REAL")
                     await db.execute("ALTER TABLE coord_task ADD COLUMN done_at REAL")
+                # Files made before CS6 progress check-ins get the column (old tasks: never touched).
+                if "touched_at" not in task_columns:
+                    await db.execute("ALTER TABLE coord_task ADD COLUMN touched_at REAL")
                 # Files made before link provenance get the column (old links: unknown).
                 cursor = await db.execute("PRAGMA table_info(coord_task_dependency)")
                 if "source" not in {row[1] for row in await cursor.fetchall()}:
@@ -544,6 +569,43 @@ class CoordinationStore:
         finally:
             await db.close()
 
+    # ------------------------------------------------------------------
+    # CS6 progress check-ins (progress.py): coordinator memory, not the plan
+    # ------------------------------------------------------------------
+
+    async def claim_progress_checkin(self, task_id: str, due_date: str, member_id: int | None, at: float) -> bool:
+        """Reserve the one check-in of this task for this due date. False: already asked (or answered)."""
+        db = await self._connect()
+        try:
+            cursor = await db.execute(
+                "INSERT OR IGNORE INTO coord_progress_checkin (task_id, due_date, member_id, asked_at) VALUES (?, ?, ?, ?)",
+                (task_id, due_date, member_id, at),
+            )
+            return cursor.rowcount > 0
+        finally:
+            await db.close()
+
+    async def record_progress(self, task_id: str, due_date: str, answer: str, at: float) -> None:
+        """What a member said about a task's progress for this due date (asked or not)."""
+        db = await self._connect()
+        try:
+            await db.execute(
+                "INSERT INTO coord_progress_checkin (task_id, due_date, answer, answered_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT (task_id, due_date) DO UPDATE SET answer = excluded.answer, answered_at = excluded.answered_at",
+                (task_id, due_date, answer, at),
+            )
+        finally:
+            await db.close()
+
+    async def progress_checkins(self) -> list[dict]:
+        """Every check-in row (task_id, due_date, member_id, asked_at, answer, answered_at)."""
+        db = await self._connect()
+        db.row_factory = aiosqlite.Row
+        try:
+            return [dict(row) for row in await _all(db, "SELECT * FROM coord_progress_checkin")]
+        finally:
+            await db.close()
+
     async def setting(self, name: str) -> str:
         """A choice of the group ("language"), or "" if it never made one."""
         db = await self._connect()
@@ -636,6 +698,7 @@ class CoordinationStore:
                     progress=row["progress"],
                     created_at=row["created_at"],
                     done_at=row["done_at"],
+                    touched_at=row["touched_at"],
                 )
                 for row in await _all(db, "SELECT * FROM coord_task ORDER BY task_id")
             ]

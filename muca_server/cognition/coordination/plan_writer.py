@@ -116,8 +116,20 @@ ASK_SCHEMA = _strict(
                          "depends_on_title", "depends_on_owner_id"],
             "additionalProperties": False,
         },
+        # CS6: what the message says about a task's progress (a reply to a
+        # check-in, or a status given unasked). Coordinator memory only.
+        "progress": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": ["string", "null"]},
+                "status": {"type": "string", "enum": ["none", "on_track", "behind", "blocked", "done", "declined"]},
+            },
+            "required": ["task_id", "status"],
+            "additionalProperties": False,
+        },
     },
 )
+PROGRESS_SCHEMA = _strict("progress_question", {"text": {"type": "string"}, "skip_reason": {"type": "string"}})
 
 TOPICS_SCHEMA = _strict(
     "week_topics",
@@ -187,10 +199,31 @@ How to answer:
   line starting with "- " (at most 6). You may put **bold** on the one fact
   they asked for (a name, a date), at most twice. No headings, no tables, no
   links, no HTML, no emoji, no "As an AI".
-- Facts about the project come only from <project> and <chat>. If the answer
-  is not there, say so plainly and suggest the next step (e.g. paste the
-  assignment, add the task, decide it together). Never invent a date, a
-  person, a task or a decision.
+- Casual talk is welcome: a personal or off-topic question ("giochi a
+  calcio?", "come va?") gets a short, friendly reply that keeps the talk
+  going, like a teammate would. Do not steer them back to the project, do
+  not lecture about staying productive, do not list what you can do, do not
+  repeat their question, do not say you are an AI unless they ask what you
+  are. Never claim feelings, a body or a life you do not have: say it
+  lightly ("non gioco, ma ne parlo volentieri").
+- You DO see the project: everything in <project> is the group's saved
+  plan, and <chat> is the recent chat. Never say you cannot access the
+  project, the plan or anything beyond the chat.
+- Facts about the project come only from <project> and <chat>. If a project
+  question has no answer there, say so plainly and suggest the next step
+  (e.g. paste the assignment, add the task, decide it together). Never invent
+  a date, a person, a task or a decision.
+- Progress: <project> lists the progress questions you asked. When the
+  member answers one (or tells a task's status unasked), fill `progress`
+  (that task_id; on_track, behind, blocked, done, or declined when they do
+  not want to talk about it now) and answer in proportion: on track -> a
+  short thanks, nothing more, no new question; behind -> ask once, kindly,
+  whether it is time or something specific in the way; a missing piece or a
+  blocker -> one or two practical ways forward (start with what is ready, a
+  smaller first version, someone helping with one part) and ask which fits;
+  declined -> a short ok. Never blame, never assume someone else is free or
+  able, never move an owner or a date yourself: help or a new owner is
+  something the group decides (a card). Otherwise progress.status = "none".
 - Say where a fact comes from when it matters: a task, link, owner or date in
   <project> is recorded in the plan; something only said in <chat> is not
   recorded yet ("Matteo said he needs Matías' data first, but the plan does
@@ -228,6 +261,24 @@ task_ids, milestone_ids, decision_ids: only the ids of the saved items your
 answer actually names or states facts from (not everything you looked at).
 documents: the names of the documents you took a fact from. Empty lists when
 the answer rests on none of them."""
+
+
+PROGRESS_SYSTEM = COMMON + """
+
+You are Cadence, the group's coordinator. One task of their plan is close to
+its due date (between <task> tags, with what waits on it). Write ONE short,
+friendly message to its owner, by first name, as a teammate would in the
+group chat: ask how it is going and whether anything is missing to finish
+it. If another member is waiting on it, you may say so in a few words, as
+a fact, never as pressure. Max 2 sentences, no greeting formula, no list,
+no bold, no emoji, no "reminder", no "status update", never blame, never
+imply they are late just because they have not written. Vary the opening;
+do not always start the same way. Write in the language the group uses in
+<chat> (Italian if the chat is Italian), else the group's language.
+If <chat> shows the status of this task was already given recently (by the
+owner or by others) or the owner said they do not want to be asked now, do
+not ask: text = "" and skip_reason = why, in a few words. Otherwise
+skip_reason = ""."""
 
 
 TOPICS_SYSTEM = COMMON + """
@@ -297,6 +348,7 @@ class AskAnswer:
     decisions: list[Decision]
     documents: list[str] = ()
     action: AskAction | None = None
+    progress: tuple[str, str] | None = None  # (task_id, status) for CS6, checked
 
     @property
     def found(self) -> bool:
@@ -379,6 +431,7 @@ class PlanWriter:
         today: date | None = None,
         maybe: bool = False,
         pending: list[str] = (),
+        checkins: list[str] = (),
     ) -> AskAnswer | None:
         """
         Answer a member as Cadence, from everything the project holds and the
@@ -411,6 +464,8 @@ class PlanWriter:
             + _documents(question, documents)
             + "\nCards waiting for a member's click (proposed, NOT saved):\n"
             + ("\n".join(f"- {line}" for line in pending) or "- (none)")
+            + "\nProgress questions you asked (CS6):\n"
+            + ("\n".join(f"- {line}" for line in checkins) or "- (none)")
             + "\n</project>\n<chat>\n"
             + ("\n".join(chat[-CHAT_LINES:]) or "(no recent messages)")
             + f"\n</chat>\n<question>\n{question}\n</question>"
@@ -436,14 +491,72 @@ class PlanWriter:
             )
             if maybe and COURTESY_ONLY.match(found.answer):
                 return AskAnswer("", [], [], [])
+            if (state.tasks or state.charter) and NO_ACCESS.search(found.answer):
+                # 20/11 screenshot: "I have no access beyond the chat" while the plan was right there.
+                raise ValueError("claims no access to a project it was given")
+            progress = data.get("progress") or {}
+            status, progress_task = progress.get("status") or "none", progress.get("task_id")
+            if status != "none" and progress_task not in tasks:
+                raise ValueError("progress about an unknown task")
+            progress_pair = (progress_task, status) if status != "none" else None
             if not found.answer and not maybe:
                 raise ValueError("empty answer")
             action = _ask_action(data.get("action") or {}, tasks, members, today)
             if action is not None and not found.answer:
                 raise ValueError("a change without a word to the member")
-            return AskAnswer(found.answer, found.tasks, found.milestones, found.decisions, found.documents, action)
+            return AskAnswer(
+                found.answer, found.tasks, found.milestones, found.decisions, found.documents, action, progress_pair
+            )
 
         return await self._run("ask", ASK_SYSTEM, user, ASK_SCHEMA, check)
+
+    async def draft_progress_question(
+        self, candidate: Any, *, members: dict[int, str], state: ProjectState, chat: list[str], now: float, tz: Any
+    ) -> str | None:
+        """
+        CS6: the one short question to a task's owner (progress.py chose the
+        task). "" when the model sees in the chat that the question is not
+        needed; None when the call failed. Checked: names the owner, short,
+        one paragraph, no ids.
+        """
+        from datetime import datetime
+
+        task = candidate.task
+        owner = members.get(task.owner_id, "")
+        first = owner.split()[0] if owner else ""
+        if not first:
+            return None
+        titles = {t.task_id: t.title for t in state.tasks}
+        local = datetime.fromtimestamp(now, tz)
+        if candidate.hours_left < 0:
+            when = "its due date has passed"
+        elif task.due_date == local.date():
+            when = "it is due today"
+        else:
+            when = "it is due tomorrow"
+        downstream = "; ".join(
+            f"{t.title} ({members.get(t.owner_id, 'no owner') if t.owner_id else 'no owner'})" for t in candidate.downstream
+        ) or "nothing"
+        waits = "; ".join(titles.get(i, i) for i in task.depends_on) or "nothing"
+        user = (
+            f"Now: {local:%A %d %B %Y, %H:%M}.\n<task>\n{task.title} | owner: {owner} | {when} ({task.due_date}) | "
+            f"status {task.status.value} | {task.progress}% done\nWaiting on it: {downstream}\nIt waits on: {waits}\n</task>\n"
+            "<chat>\n" + ("\n".join(chat[-CHAT_LINES:]) or "(no recent messages)") + "\n</chat>"
+        )
+
+        def check(data: dict) -> str:
+            if str(data.get("skip_reason") or "").strip():
+                return ""
+            text = " ".join(str(data["text"]).split())
+            if not text or len(text) > 280:
+                raise ValueError("a check-in question must be short")
+            if first.lower() not in text.lower():
+                raise ValueError("the question must name the owner")
+            if re.search(r"task_id|\bt-?\d+\b|\*\*|^- ", text):
+                raise ValueError("ids or formatting in a chat question")
+            return text
+
+        return await self._run("progress", PROGRESS_SYSTEM, user, PROGRESS_SCHEMA, check)
 
     async def draft_dependencies(
         self, new_ids: list[str], *, state: ProjectState, members: dict[int, str]
@@ -557,7 +670,8 @@ MAYBE_NOTE = """
 <note>This message may not be for you: it came right after your last answer
 without naming you, or it names you in passing. If it asks you something or
 asks you to do something, or continues the talk with you (a follow-up, a
-correction), answer it. Stay silent when the members talk ABOUT you or the
+correction), answer it; a member answering a progress question you asked
+(listed in <project>) is talking to you too. Stay silent when the members talk ABOUT you or the
 app ("Cadence answered badly yesterday", "I changed the coordinator's code",
 "Cadence is slower now"), when the message asks the OTHER members ("secondo
 voi...", "ragazzi...", "what do you all think", "should we improve Cadence?":
@@ -576,6 +690,12 @@ COURTESY_ONLY = re.compile(
     re.IGNORECASE,
 )
 CHAT_LINES = 30
+# An answer that says Cadence cannot see the project, while it was given it.
+NO_ACCESS = re.compile(
+    r"(non ho accesso|non posso (vedere|accedere)|non vedo (lo stato|il piano|i dati)|oltre (a |al(la)? )?(questa )?chat|"
+    r"(don'?t|do not|can'?t|cannot) (have )?(access|see) (to )?(the |your )?(project|plan|state|data)|beyond (this|the) chat)",
+    re.IGNORECASE,
+)
 DOCUMENT_BUDGET = 12_000
 CHUNK = 900
 

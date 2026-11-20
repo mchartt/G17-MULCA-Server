@@ -56,6 +56,7 @@ from ...protocol.coordinator import (
     CoordinatorStateMessage,
     ProposalResponseMessage,
 )
+from ...protocol.outgoing import AssistantTextMessage
 from .card_requests import CardRequests
 from .catchup import CatchUp, channel_of, summary_line
 from .checkin_timer import CheckinTimer
@@ -74,6 +75,8 @@ from .models import (
 from .opener import PlanOpener
 from .plan_commands import PlanCommands
 from .plan_writer import PlanWriter
+from .plan_writes import topic_key
+from .progress import ProgressMonitor, timezone_from
 from .proactive import ProactiveBridge
 from .proactive_writer import ProactiveWriter
 from .wording import italian, localize
@@ -105,6 +108,8 @@ class CoordinatorRouter:
         links: GroupLinks | None = None,
         live: LiveGroups | None = None,
         catchup: CatchUp | None = None,
+        progress_checkins: bool = False,
+        timezone: str = "",
     ) -> None:
         # Set first: __getattr__ below reads it.
         self._conversation = conversation
@@ -145,11 +150,12 @@ class CoordinatorRouter:
             else None
         )
         # M4: planning, checkin, task, why (plan_commands.py).
+        plan_writer = PlanWriter(writer)
         self._plan = PlanCommands(
             participants=self._roster,
             store=self._store_now,
             service=self._service,
-            writer=PlanWriter(writer),
+            writer=plan_writer,
             send_proposal=self._send_proposal,
             notice=self._notice,
             send_state=self._send_state,
@@ -171,12 +177,29 @@ class CoordinatorRouter:
             language=self._language,
             send_proposal=self._send_proposal,
         )
+        # CS6: one short progress question when a deadline is close (progress.py).
+        self.progress = (
+            ProgressMonitor(
+                conversation,
+                store=self._store_now,
+                members=self._roster,
+                write=plan_writer.draft_progress_question,
+                say=self._say,
+                chat=self._recent_timed,
+                busy=self._busy,
+                open_card_titles=self._open_card_titles,
+                tz=timezone_from(timezone),
+            )
+            if progress_checkins and catchup is not None
+            else None
+        )
         # FR15: the check-in on time, while the session is open (off when 0).
         self.checkin_timer = CheckinTimer(
             conversation,
             interval_seconds=checkin_interval_seconds,
             store=self._store_now,
-            run_checkin=self._plan.timed_checkin,
+            run_checkin=self._timed_checkin,
+            run_progress=self.progress.sweep if self.progress is not None else None,
         )
 
     def __getattr__(self, name: str) -> Any:
@@ -258,6 +281,10 @@ class CoordinatorRouter:
             elif message.command == "kickoff":
                 await self._start_kickoff(message)
             elif message.command in ("planning", "checkin", "task", "milestone", "why", "ask"):
+                if message.command == "ask" and message.args.get("maybe") is True and self.proactive is not None:
+                    # R10: this message is Cadence's to answer (or to leave
+                    # unanswered); the lab's agent must not reply to it too.
+                    self.proactive.claim(str(message.args.get("question", "")))
                 await self._plan.handle(message)
             elif message.command == "language":
                 await self._on_language(message)
@@ -621,6 +648,60 @@ class CoordinatorRouter:
                 ok=True, text=summary_line(result), request_id=message.request_id, catchup=result
             )
         )
+
+    def _busy(self) -> str:
+        """Why a time-driven message must wait (a card draft, the opener, a member's request), or ""."""
+        if self.proactive is not None:
+            reason = self.proactive.busy()
+            if reason:
+                return reason
+        if self.opener.listening:
+            return "R8 the plan opener is listening"
+        if self._plan.busy:
+            return "a member's request is running"
+        return ""
+
+    async def _timed_checkin(self) -> bool:
+        """
+        The interval check-in card, under the same shared budget as every
+        unsolicited message: it waits while something else runs, and once
+        posted it counts for the cards' spacing (R4) like any proactive card.
+        """
+        if self._busy():
+            return False
+        posted = await self._plan.timed_checkin()
+        if posted:
+            store = self._store_now()
+            previous = await store.mark("proactive")
+            await store.save_mark("proactive", previous[0] if previous else 0, time.time())
+        return posted
+
+    async def _open_card_titles(self) -> set[str]:
+        """Titles and topics of the cards waiting for a click (CS6 asks nothing a card already covers)."""
+        keys: set[str] = set()
+        for card in await self._store_now().open_proposals(time.time()):
+            payload = card.payload or {}
+            for value in (payload.get("title"), (payload.get("context") or {}).get("topic")):
+                if value:
+                    keys.add(topic_key(str(value)))
+        return keys
+
+    async def _say(self, text: str) -> None:
+        """Cadence speaks unasked in the group chat (a CS6 question): shown, remembered, heard by the observer."""
+        if getattr(self._conversation, "is_answering", False):
+            # Never in the middle of the main agent's answer: the two texts would mix.
+            wait_until_idle = getattr(self._conversation, "wait_until_idle", None)
+            if wait_until_idle is not None:
+                await wait_until_idle()
+        await self._outbound.put(AssistantTextMessage(text=text, is_final=True, modality="text"))
+        if self._catchup is not None:
+            await self._catchup.remember(self._conversation.conversation_id, "Cadence", "", text)
+        tell_observers = getattr(self._conversation, "tell_observers", None)
+        if tell_observers is not None:
+            await tell_observers(f"Cadence: {text}")
+
+    async def _recent_timed(self) -> list[tuple[float, str]]:
+        return await self._catchup.recent_timed(self._conversation.conversation_id)
 
     async def _recent_chat(self) -> list[str]:
         """This channel's last lines, so Cadence answers within the conversation."""

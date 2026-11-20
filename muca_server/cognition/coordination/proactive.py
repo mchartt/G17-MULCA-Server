@@ -34,6 +34,12 @@ rules 4.3 and 11, spec NFR3, GL4, GL10):
         ("I take the API") are answers, not gaps to fill
     R9  no second card while one on the same thing (kind and topic, or task
         title) is still waiting for a click
+    R10 one responder per message: a message the client already sent to
+        Cadence's ask (a web follow-up offered as "maybe") is not answered a
+        second time by the lab's solicited strategies (respond_when_addressed,
+        remember, provide_summary). Before this, such a follow-up could get
+        two replies, the second in English from an agent that cannot see the
+        plan ("I have no access beyond the chat", 20/11 screenshots)
 
 R3 and R4 count only cards actually posted: a draft that fails or is
 dropped does not silence the group. Their marker is saved in the group's
@@ -85,6 +91,15 @@ PRIORITY = {
 }
 
 
+# The lab's strategies that answer a member with free text (R10).
+SOLICITED = frozenset({"respond_when_addressed", "remember", "provide_summary", "always_reply"})
+CLAIM_SECONDS = 120
+
+
+def claim_key(text: str) -> str:
+    return " ".join((text or "").lower().split())[:300]
+
+
 class Verdict(StrEnum):
     NOT_MINE = "not_mine"
     VETOED = "vetoed"
@@ -126,6 +141,8 @@ class ProactiveBridge:
         self._last_count: int | None = None
         self._last_at: float | None = None
         self._mark_loaded = False
+        # R10: texts the client sent to Cadence's ask, and when.
+        self._claimed: dict[str, float] = {}
         # K1: the project memory last told to the observer, and when.
         self._memory_sent: str | None = None
         self._memory_sent_at_count = 0
@@ -144,6 +161,9 @@ class ProactiveBridge:
     ) -> Verdict:
         """Decide at once (the turn is waiting); the draft runs in the background."""
         if strategy_id not in STRATEGY_KINDS:
+            if strategy_id in SOLICITED and history and self.is_claimed(history[-1].content):
+                logger.info("%s coordinator: R10 Cadence's ask already has this message", self._conversation.conversation_id)
+                return Verdict.VETOED
             return Verdict.NOT_MINE
         await self._load_mark()
         if self._preempt(strategy_id):
@@ -159,6 +179,24 @@ class ProactiveBridge:
         ]
         self._task = asyncio.create_task(self._post(strategy_id, chat, message_count))
         return Verdict.TAKEN
+
+    def claim(self, text: str) -> None:
+        """R10: the client sent this message to Cadence's ask; the lab's agent must not answer it too."""
+        now = self._clock()
+        self._claimed = {k: at for k, at in self._claimed.items() if now - at < CLAIM_SECONDS}
+        self._claimed[claim_key(text)] = now
+
+    def is_claimed(self, text: str) -> bool:
+        at = self._claimed.get(claim_key(text))
+        return at is not None and self._clock() - at < CLAIM_SECONDS
+
+    def busy(self) -> str:
+        """For time-driven messages (CS6, timed check-in): R2 and R8 of this bridge, or ""."""
+        if self._task is not None and not self._task.done():
+            return "R2 a card draft is running"
+        if self._listening():
+            return "R8 the plan opener is listening"
+        return ""
 
     async def observer_note(self, message_count: int) -> str:
         """
