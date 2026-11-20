@@ -628,3 +628,44 @@ async def test_a_new_question_does_not_open_like_one_cadence_already_asked(tmp_p
     text = await plan.draft_progress_question(candidate, members=MEMBERS, state=tasks, chat=chat, now=at(24, 14), tz=ROME)
     assert text.startswith("Bruno, a che punto sei")
     assert "do not start like these: come sta andando" in client.calls[0]["messages"][-1]["content"]
+
+
+async def test_a_late_reply_that_asks_for_a_change_gets_its_card_live_bug_of_20_11(tmp_path):
+    """Live run 20/11: "fatto! l'ho appena caricato" -> a card; the late path crashed (no `channel`)."""
+    import time as clock
+
+    from muca_server.protocol import AssistantTextMessage, CoordinatorProposalMessage
+
+    done = {"kind": "update_task", "task_id": "t1", "title": "", "owner_id": None, "due_date": None, "status": "done",
+            "progress": None, "items": [], "depends_on_task_id": None, "depends_on_title": "", "depends_on_owner_id": None}
+    group, web, queue = _router_with_progress(
+        tmp_path,
+        answer("Ottimo! Ti preparo la card per segnarla come fatta.", action=done, progress={"task_id": "t1", "status": "done"}),
+    )
+    store = group.store_for(WEB)
+    await store.add_task_by_hand("t1", "Dashboard", 100_000_002, "2026-11-25")
+    await store.claim_progress_checkin("t1", "2026-11-25", 100_000_002, clock.time() - 6 * 3600)
+    await web.route_user_text(SimpleNamespace(text="fatto! l'ho appena caricato", speaker=100_000_002, speaker_name="Bruno"))
+    await web.wait_for_background()
+    out = await drain(queue)
+    assert [m.text for m in out if isinstance(m, AssistantTextMessage)] == ["Ottimo! Ti preparo la card per segnarla come fatta."]
+    assert len([m for m in out if isinstance(m, CoordinatorProposalMessage)]) == 1
+    # The plan is unchanged until a member clicks.
+    assert (await store.load_state()).tasks[0].status is TaskStatus.TODO
+
+
+async def test_a_thanks_to_an_on_track_reply_has_no_sources_line(tmp_path):
+    import time as clock
+
+    from muca_server.protocol import AssistantTextMessage
+
+    group, web, queue = _router_with_progress(
+        tmp_path,
+        answer("Grazie Bruno, ricevuto!", task_ids=["t1"], action=none_action(), progress={"task_id": "t1", "status": "on_track"}),
+    )
+    store = group.store_for(WEB)
+    await store.add_task_by_hand("t1", "Dashboard", 100_000_002, "2026-11-25")
+    await store.claim_progress_checkin("t1", "2026-11-25", 100_000_002, clock.time() - 3600)
+    await web.route_user_text(SimpleNamespace(text="procede, stasera lo chiudo", speaker=100_000_002, speaker_name="Bruno"))
+    await web.wait_for_background()
+    assert [m.text for m in await drain(queue) if isinstance(m, AssistantTextMessage)] == ["Grazie Bruno, ricevuto!"]

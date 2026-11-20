@@ -348,7 +348,7 @@ class PlanCommands:
             return False
         message = SimpleNamespace(
             event="coordinator_command", command="ask", member_id=member_id, request_id="",
-            args={"question": text, "maybe": True},
+            channel="group", args={"question": text, "maybe": True},
         )
 
         async def quiet() -> None:  # a failure on a message not sent to Cadence is never announced
@@ -405,6 +405,9 @@ class PlanCommands:
             due = task.due_date.isoformat() if task.due_date else ""
             await store.record_progress(task.task_id, due, answer.progress[1], now)
         text = ask_text(answer, members, it=italian(state.language, f"{question} {answer.answer}"))
+        if answer.progress is not None and answer.progress[1] in ("on_track", "declined") and answer.action is None:
+            # A short "grazie" or "ok" to a progress reply needs no sources line.
+            text = answer.answer
         card = None
         if answer.action is not None:
             # The member asked for a change: it becomes a card a member confirms,
