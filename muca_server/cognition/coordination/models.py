@@ -277,6 +277,9 @@ class PlanItem(_Model):
     owner_id: int | None = None
     reason: str = Field(default="", max_length=MAX_QUOTE)
     due_date: date | None = None
+    # "Find owners" (planning with args.owners): the plan task this item gives
+    # an owner to; None = a new task (the usual /planning list).
+    task_id: str | None = None
 
 
 class PlanPayload(_Model):

@@ -195,7 +195,14 @@ def plan_applier(payload: PlanPayload, *, new_id) -> Applier:
 
     async def apply(db) -> None:
         for item in payload.items:
-            await add_task(db, task_id=new_id(), title=item.title, owner_id=item.owner_id, due_date=item.due_date)
+            if item.task_id is None:
+                await add_task(db, task_id=new_id(), title=item.title, owner_id=item.owner_id, due_date=item.due_date)
+                continue
+            # "Find owners": a task already in the plan gets the suggested owner,
+            # unless it is gone or someone took it since (then it is left alone).
+            exists, owner = await task_owner(db, item.task_id)
+            if exists and owner is None and item.owner_id is not None:
+                await update_task(db, task_id=item.task_id, owner_id=item.owner_id)
 
     return apply
 

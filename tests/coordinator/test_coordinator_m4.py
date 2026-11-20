@@ -401,3 +401,42 @@ async def test_r7_no_cs7_card_for_a_task_already_blocked(store):
     draft = ProactiveDraft(ProposalKind.BLOCKER, payload, "r")
     assert _dropped(draft, [], [Task(task_id="ui", title="UI", status="blocked")]).startswith("R7")
     assert _dropped(draft, [], [Task(task_id="ui", title="UI")]) == ""
+
+
+# ----------------------------------------------------------------------
+# Find owners (Matteo, 20/11): owners suggested for the open tasks with none
+# ----------------------------------------------------------------------
+
+
+async def test_find_owners_suggests_an_owner_for_each_open_task_with_none(store):
+    await seed(
+        store,
+        {"task_id": "a", "title": "Server", "owner_id": None, "due_date": date(2026, 11, 28)},
+        {"task_id": "b", "title": "Slides", "owner_id": None, "due_date": None},
+        {"task_id": "c", "title": "Report", "owner_id": 2, "due_date": None},
+    )
+    router, queue = make_router(store, PLAN)
+    await run(router, command("planning", owners=True))
+    sent = await drain(queue)
+    (card,) = [m for m in sent if isinstance(m, CoordinatorProposalMessage)]
+    items = card.proposal["payload"]["items"]
+    assert [(i["task_id"], i["title"], i["owner_id"]) for i in items] == [("a", "Server", 1), ("b", "Slides", None)]
+    user = router._plan._writer._writer._client.calls[0]["messages"][-1]["content"]
+    assert "Server" in user and "Slides" in user and "Report" not in user  # Report already has an owner
+
+    # Someone takes the slides before the card is confirmed: confirming leaves them alone.
+    db = await store._connect()
+    try:
+        await db.execute("UPDATE coord_task SET owner_id = 3 WHERE task_id = 'b'")
+    finally:
+        await db.close()
+    await run(router, click(card.proposal["proposal_id"], "confirm"))
+    owners = {t.task_id: t.owner_id for t in (await store.load_state()).tasks}
+    assert owners == {"a": 1, "b": 3, "c": 2}  # no new task either
+
+
+async def test_find_owners_with_every_task_owned_asks_no_model(store):
+    await seed(store, {"task_id": "a", "title": "Server", "owner_id": 1, "due_date": None})
+    router, queue = make_router(store)
+    await run(router, command("planning", owners=True))
+    assert (await drain(queue))[-1].text == "Every open task already has an owner."

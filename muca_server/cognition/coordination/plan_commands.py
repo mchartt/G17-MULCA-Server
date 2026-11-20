@@ -199,6 +199,9 @@ class PlanCommands:
     # ------------------------------------------------------------------
 
     async def _planning(self, message) -> None:
+        if message.args.get("owners") is True:
+            await self._find_owners(message)
+            return
         members = self._participants()
         chosen: list[PlanItem] = []  # tasks whose owner the members already chose
         text = str(message.args.get("text", "")).strip()[:MAX_TASKS_TEXT]
@@ -243,6 +246,34 @@ class PlanCommands:
         )
         await self._send_proposal(proposal)
         await self._notice(True, "Plan card posted: any member can confirm or reject it.", message.request_id)
+
+    async def _find_owners(self, message) -> None:
+        """
+        "Find owners" (Matteo, 20/11): every open task with no owner, and the
+        member Cadence suggests for each from the profiles, in one plan card.
+        Confirming gives each task that owner (a task someone took meanwhile
+        is left alone). Nothing changes before a member confirms.
+        """
+        members = self._participants()
+        state = await self._store().load_state()
+        ownerless = [t for t in state.tasks if t.owner_id is None and t.status != TaskStatus.DONE][:15]
+        if not ownerless:
+            await self._notice(True, "Every open task already has an owner.", message.request_id)
+            return
+        text = "\n".join(t.title for t in ownerless)
+        draft = await self._writer.draft_plan(text, members=members, state=state, today=self._today())
+        if draft is None or len(draft.payload.items) != len(ownerless):
+            await self._unavailable(message.event, message.request_id)
+            return
+        items = [
+            PlanItem(title=task.title, owner_id=item.owner_id, reason=item.reason, due_date=task.due_date, task_id=task.task_id)
+            for task, item in zip(ownerless, draft.payload.items)
+        ]
+        proposal = await self._service().create(
+            ProposalKind.PLAN, PlanPayload(items=items), rationale=draft.rationale, origin_channel=message.channel
+        )
+        await self._send_proposal(proposal)
+        await self._notice(True, "Cadence suggested owners in a card: any member can confirm it.", message.request_id)
 
     async def _checkin(self, message) -> None:
         await self.run_checkin(message.channel, message.request_id, quiet=False)
