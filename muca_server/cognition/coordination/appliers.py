@@ -15,7 +15,7 @@ One builder per kind (Strategy-like table in proposals.py chooses it):
     decision_applier     DECISION    write the chosen option to the decision log
     snooze_applier       any proactive card, "Not now"
     plan_applier         PLAN        add every task of the /planning list
-    checkin_applier      CHECKIN     change one task (date, owner) or drop it
+    checkin_applier      CHECKIN     change one task (date, owner, status, progress) or drop it
     blocker_applier      BLOCKER     mark a task blocked, record what it waits on
     approach_applier     APPROACH    write how the group plans the work to the decision log
 """
@@ -218,7 +218,14 @@ def checkin_applier(option: CheckinOption) -> Applier:
         if option.drop:
             await delete_task(db, option.task_id)
             return
-        await update_task(db, task_id=option.task_id, due_date=option.new_due_date, owner_id=option.new_owner_id)
+        await update_task(
+            db,
+            task_id=option.task_id,
+            due_date=option.new_due_date,
+            owner_id=option.new_owner_id,
+            status=option.new_status,
+            progress=option.new_progress,
+        )
 
     return apply
 

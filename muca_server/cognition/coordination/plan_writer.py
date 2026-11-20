@@ -27,7 +27,6 @@ from pydantic import ValidationError
 
 from .checkin import Finding
 from .models import (
-    MAX_TITLE,
     CheckinPayload,
     Decision,
     MemberProfile,
@@ -37,6 +36,7 @@ from .models import (
     Task,
     TaskStatus,
 )
+from .ask_action import ACTION_SCHEMA, AskAction, ask_action as _ask_action
 from .writer import ATTEMPTS, ProposalWriter, check_rationale
 
 logger = logging.getLogger(__name__)
@@ -100,22 +100,7 @@ ASK_SCHEMA = _strict(
         "documents": _IDS,
         # A change of the plan the member asked for, drafted as a card a
         # member confirms; kind "none" when the message asks for no change.
-        "action": {
-            "type": "object",
-            "properties": {
-                "kind": {"type": "string", "enum": ["none", "new_task", "dependency"]},
-                "task_id": {"type": ["string", "null"]},
-                "title": {"type": "string"},
-                "owner_id": {"type": ["integer", "null"]},
-                "due_date": {"type": ["string", "null"]},
-                "depends_on_task_id": {"type": ["string", "null"]},
-                "depends_on_title": {"type": "string"},
-                "depends_on_owner_id": {"type": ["integer", "null"]},
-            },
-            "required": ["kind", "task_id", "title", "owner_id", "due_date", "depends_on_task_id",
-                         "depends_on_title", "depends_on_owner_id"],
-            "additionalProperties": False,
-        },
+        "action": ACTION_SCHEMA,
     },
 )
 
@@ -167,7 +152,9 @@ server, they are true). Propose 1 to 3 different options to fix the most
 important one(s). Each option changes ONE task of the plan (task_id from the
 plan): a new due date (YYYY-MM-DD, not in the past), a new owner (a member id),
 or drop it (only if it is not essential). Say the consequence in the label
-(max 15 words). rationale: one sentence starting with "Stepping in because"."""
+(max 15 words). rationale: one sentence starting with "Stepping in because" (or
+the same in the group's language, e.g. "Intervengo perché"). Write the labels
+and the rationale in the language of the group."""
 
 WHY_SYSTEM = COMMON + """
 
@@ -213,25 +200,39 @@ How to answer:
   not depend on it, a smaller first version, swapping the order, asking the
   person concerned when it can arrive. Never blame anyone, never treat silence
   as a delay, never move a fixed deadline on your own.
-- You never change the plan yourself. When the member asks you to change it
-  (create or add a task, link two tasks, add a prerequisite), or answers yes to
-  your own offer to do so in <chat> ("sì, fallo", "yes please"), fill `action`
-  and say in `answer` that the change is ready on a card to confirm (never
-  that it is saved). If a card waiting for a click (in <project>) already
-  proposes that change, do not draft it again: action.kind = "none" and tell
-  them to confirm that card with its button. Otherwise action.kind = "none".
+- You never change the plan yourself, but you can always propose the change:
+  never answer that you cannot do it, that they must do it themselves or that
+  you cannot save it. When the member asks you to change the plan (create one
+  or several tasks, give a task an owner or a date, mark progress or a status,
+  link two tasks, add a prerequisite), or tells you a fact that changes it and
+  asks you to record it ("ho fatto il 50% del prototipo, segnalo"), or answers
+  yes to your own offer in <chat> ("sì, fallo", "yes please"), fill `action`
+  and say in `answer`, in one sentence, that the change is ready on a card to
+  confirm (never that it is saved). If a card waiting for a click (in
+  <project>) already proposes that change, do not draft it again:
+  action.kind = "none" and tell them to confirm that card with its button.
+  Otherwise action.kind = "none".
 action (ids only from <project>, member ids only from the member list; names
 may be spelled differently in the chat: Mathias = Matías, match them to the
 member list; if a name or task matches nothing or more than one, use
 kind "none" and ask one precise question instead):
-- "new_task": title (short, concrete), owner_id (the member it is for, if
-  said, else null), due_date (YYYY-MM-DD if said, else null); task_id null.
+- "new_task": ONE new task: title (short, concrete), owner_id (the member it
+  is for, if said, else null), due_date (YYYY-MM-DD if said, else null);
+  task_id null.
+- "plan": TWO OR MORE new tasks asked at once: items, one per task, each with
+  title, owner_id and due_date as for new_task (at most 8). title = "".
+- "update_task": an existing task changes: task_id (from <project>) and only
+  what changes: owner_id (new owner), due_date (new date), status ("todo",
+  "doing", "done", "blocked") and/or progress (0-100, "a metà" = 50); the
+  rest null. "Ho finito X" = status "done".
 - "dependency": task_id = the task that WAITS (or null if it is new: then
   title = its name); the work it waits on is depends_on_task_id (a plan task)
   or, if not in the plan, depends_on_title (its name) with depends_on_owner_id
   = the member who must deliver it, if named. Direction: if A needs B first,
   task_id = A, depends_on = B. Never the same task on both sides.
-- "none": every other field null or "".
+- "none": every other field null, "" or [].
+- items is [] unless kind is "plan"; status and progress are null unless kind
+  is "update_task".
 - Use the members' names, never their ids. Dates as people say them.
 task_ids, milestone_ids, decision_ids: only the ids of the saved items your
 answer actually names or states facts from (not everything you looked at).
@@ -296,20 +297,6 @@ class Drafted:
 class WhyAnswer:
     answer: str
     decisions: list[Decision]
-
-
-@dataclass(frozen=True, slots=True)
-class AskAction:
-    """A plan change a member asked Cadence for, checked against the plan; it becomes a card."""
-
-    kind: str  # "new_task" | "dependency"
-    task_id: str | None
-    title: str
-    owner_id: int | None = None
-    due_date: date | None = None
-    depends_on_task_id: str | None = None
-    depends_on_title: str = ""
-    depends_on_owner_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -548,47 +535,6 @@ class PlanWriter:
             except Exception:
                 logger.exception("%s draft call failed (attempt %d)", name, attempt)
         return None
-
-
-def _ask_action(data: dict, tasks: dict[str, Task], members: dict[int, str], today: date | None) -> AskAction | None:
-    """The `action` of an ask answer, checked; None when it asks for no change. Raises on a bad one (retry)."""
-    kind = data.get("kind") or "none"
-    if kind == "none":
-        return None
-    title = " ".join(str(data.get("title") or "").split())[:MAX_TITLE]
-    for key in ("owner_id", "depends_on_owner_id"):
-        if data.get(key) is not None and data[key] not in members:
-            raise ValueError(f"{key} is not a member")
-    for key in ("task_id", "depends_on_task_id"):
-        if data.get(key) is not None and data[key] not in tasks:
-            raise ValueError(f"{key} is not a plan task")
-    if kind == "new_task":
-        if not title:
-            raise ValueError("a new task needs a title")
-        due = date.fromisoformat(data["due_date"]) if data.get("due_date") else None
-        if due is not None and today is not None and due < today:
-            raise ValueError("due date in the past")
-        return AskAction("new_task", None, title, owner_id=data.get("owner_id"), due_date=due)
-    if kind != "dependency":
-        raise ValueError("unknown action")
-    task_id, depends_on = data.get("task_id"), data.get("depends_on_task_id")
-    depends_title = " ".join(str(data.get("depends_on_title") or "").split())[:MAX_TITLE]
-    if task_id is not None:
-        title = tasks[task_id].title
-    if not title or not (depends_on or depends_title):
-        raise ValueError("a dependency needs both sides")
-    if task_id is not None and task_id == depends_on:
-        raise ValueError("a task cannot wait on itself")
-    if depends_on is not None:
-        depends_title = tasks[depends_on].title
-    return AskAction(
-        "dependency",
-        task_id,
-        title,
-        depends_on_task_id=depends_on,
-        depends_on_title=depends_title,
-        depends_on_owner_id=None if depends_on is not None else data.get("depends_on_owner_id"),
-    )
 
 
 # A message that may or may not be for Cadence: right after it answered without
