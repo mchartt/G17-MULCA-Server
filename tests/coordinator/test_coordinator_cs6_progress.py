@@ -669,3 +669,19 @@ async def test_a_thanks_to_an_on_track_reply_has_no_sources_line(tmp_path):
     await web.route_user_text(SimpleNamespace(text="procede, stasera lo chiudo", speaker=100_000_002, speaker_name="Bruno"))
     await web.wait_for_background()
     assert [m.text for m in await drain(queue) if isinstance(m, AssistantTextMessage)] == ["Grazie Bruno, ricevuto!"]
+
+
+async def test_a_reply_already_offered_as_a_web_follow_up_is_not_read_twice(tmp_path):
+    import time as clock
+
+    group, web, queue = _router_with_progress(
+        tmp_path, answer("Grazie Bruno!", action=none_action(), progress={"task_id": "t1", "status": "on_track"}),
+    )
+    store = group.store_for(WEB)
+    await store.add_task_by_hand("t1", "Dashboard", 100_000_002, "2026-11-25")
+    await store.claim_progress_checkin("t1", "2026-11-25", 100_000_002, clock.time() - 600)
+    # The web sends the maybe-ask first, then the same line as user_text.
+    await web.route_coordinator(command("ask", 100_000_002, question="tutto ok", maybe=True))
+    await web.route_user_text(SimpleNamespace(text="tutto ok", speaker=100_000_002, speaker_name="Bruno"))
+    await web.wait_for_background()
+    assert len(group.writer._client.calls) == 1

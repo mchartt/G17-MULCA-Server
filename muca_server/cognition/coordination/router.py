@@ -724,6 +724,8 @@ class CoordinatorRouter:
         speaker = getattr(message, "speaker", None)
         if not text or speaker is None:
             return False
+        if self.proactive is not None and self.proactive.is_claimed(text):
+            return False  # the web already offered it to ask as a follow-up: read once
         now = time.time()
         rows = [
             r for r in await self._store_now().progress_checkins()
