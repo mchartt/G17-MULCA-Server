@@ -128,6 +128,7 @@ SCHEMAS: dict[ProposalKind, dict[str, Any]] = {
             "title": {"type": "string"},
             "depends_on_task_id": NULLABLE_STRING,
             "depends_on_title": {"type": "string"},
+            "depends_on_owner_id": {"type": ["integer", "null"]},
             "helper_id": {"type": ["integer", "null"]},
             "question": {"type": "string"},
             "certainty": {"type": "string", "enum": ["blocked", "possible"]},
@@ -184,13 +185,23 @@ because it needs other work that is not ready, and a date is at risk. Either a
 member said so ("I can't start the UI until the API is ready"), or the chat and
 the plan together show it (Sara says she tests on Friday; the plan or the chat
 shows the API she needs is not done, or is due after Friday).
-- certainty: "blocked" only if a member said they are stuck or waiting;
-  "possible" if you infer the dependency and nobody confirmed it.
+- certainty: "blocked" only if a member said the work has stopped now and
+  cannot go on ("I'm stuck", "still waiting, I can't continue"). "possible" in
+  every other case: you infer the dependency, OR a member states a
+  prerequisite for work they have not started or can still progress on
+  ("Mathias must first send me the data the RASD is based on"). "possible"
+  records the link without marking the task blocked.
 - task_id: the plan task that is (or may be) held up, or null if it is not in the plan.
 - title: that task, short (e.g. "Usability test").
 - depends_on_task_id: the plan task it waits on, or null.
 - depends_on_title: if depends_on_task_id is null, the work it waits on as said
   in the chat (e.g. "API integration"); else "". Required for "possible".
+- depends_on_owner_id: when depends_on_task_id is null, the member the chat
+  names as the one who must deliver that work ("Mathias must send me the
+  data" -> Mathias). Match names to the member list even with a different
+  spelling, accent or nickname (Mathias = Matías); null if nobody is named,
+  if the name matches no member or more than one, or if it is a guess.
+  Never the person who is waiting.
 - helper_id: the member who can unblock it (the owner of the work it waits on,
   or whose skills fit), only ids from the member list, or null.
 - question: ONE short question for the group. For "possible", ask whether the
@@ -340,6 +351,11 @@ def _validate(kind, strategy_id, data, chat, members, tasks, today, decisions=()
             raise ValueError("a task cannot wait on itself")
         if data["helper_id"] is not None and data["helper_id"] not in members:
             raise ValueError("helper is not a member")
+        data.setdefault("depends_on_owner_id", None)
+        if data["depends_on_owner_id"] is not None and data["depends_on_owner_id"] not in members:
+            raise ValueError("the owner of the work it waits on is not a member")
+        if data["depends_on_task_id"] is not None:
+            data["depends_on_owner_id"] = None  # an existing task keeps its own owner
         # Older answers (and the M4 tests) have no certainty: a stated blocker.
         data.setdefault("certainty", "blocked")
         data.setdefault("ways_forward", [])

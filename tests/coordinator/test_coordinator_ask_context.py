@@ -83,7 +83,7 @@ async def test_a_follow_up_that_is_not_for_cadence_gets_silence(tmp_path):
     await web.wait_for_background()
     (notice,) = [m for m in await drain(web_q) if isinstance(m, CoordinatorNoticeMessage)]
     assert notice.ok and notice.text == ""
-    assert "does not name you" in prompt(group)
+    assert "may not be for you" in prompt(group)
     # Nothing was said, so nothing joins the chat's memory.
     await web.route_coordinator(command("catchup", 100_000_001, peek=True))
     catchup = [m for m in await drain(web_q) if getattr(m, "catchup", None)][-1].catchup

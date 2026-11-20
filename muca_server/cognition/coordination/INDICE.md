@@ -129,13 +129,15 @@ created on first use in the **conversation's own SQLite file**.
 | `snooze_applier(strategy_id=, topic=, until=)` | Writes the "Not now" row. |
 | `plan_applier(payload, new_id=)` | M4: every task of the /planning list enters the plan. |
 | `checkin_applier(option)` | M4: the chosen option changes one task or drops it; stale if the task is gone. |
-| `blocker_applier(payload, new_task_id=)` | M4: task marked blocked (added if missing) and the dependency recorded. |
+| `blocker_applier(payload, new_task_id=, source=)` | M4: task marked blocked (added if missing) and the dependency recorded with its origin; new prerequisite work gets `depends_on_owner_id` as owner; a loop closes the card (StaleProposal). |
 
 ## `plan_writes.py` — writes used inside the transaction
 
 `topic_key(topic)` (lower case, letters and digits, single spaces, ≤ 60
 characters: the deterministic key of "Not now"), `task_owner`, `add_task`,
-`assign_task`, `update_task`, `delete_task`, `add_dependency`, `add_decision`,
+`assign_task`, `update_task`, `delete_task`, `add_dependency` (checked by
+`check_dependencies`: no self link, no loop, the one check for cards and by-hand
+edits; `DependencyError` lives here), each link with its `source`, `add_decision`,
 `add_snooze`. None of them commits. `store.set_task_status` is the one direct
 write outside a proposal: a member updating a task (their own action).
 
@@ -157,6 +159,7 @@ write outside a proposal: a member updating a task (their own action).
 |---|---|
 | `Verdict` | `not_mine` (a lab strategy: normal path), `vetoed` (silence), `taken` (silence now, card later). |
 | `offer(strategy_id, history=, message_count=, assistant_id=)` | Called by `CoalaPolicy`; answers at once, drafts in the background. |
+| `_preempt(...)` | R2 by `PRIORITY` (CS7 > CS3 > CS5 > CS2): a more urgent strategy cancels a draft still in its model call. |
 | `_veto(...)` | R1 group only, R2 one draft at a time, R3 ≥ 10 messages and R4 ≥ 5 minutes since the last card posted, R5 never right after the agent. |
 | `_post(...)` | Draft, then R6 (topic silenced by "Not now") and R7 (CS5 on a task that already has an owner; CS7 on a task already blocked), then a pending proposal and the card. Any error is logged, the chat goes on. |
 | `wait()` | Waits for a running draft (tests). |
@@ -227,3 +230,13 @@ plugs the router's bridge into the session's `CoalaPolicy` (read as
 New outside this folder: `protocol/coordinator.py` (the five events),
 `agents/openai/client_config.py` (OpenAI or Azure client),
 `cognition/config/tasks/group_coordinator.yaml` (the task text).
+
+## Conversational optimization (20/11)
+
+`plan_writer.answer_question` may return an `AskAction` (`new_task` |
+`dependency`), checked by `_ask_action`; `plan_commands._action_card` turns
+it into a pending `task_owner` or `blocker` card (refused: link already
+recorded, loop via `_reaches`, same card already open). A "maybe" that is only
+a thanks is silent without a model call (`ACK_ONLY`, `COURTESY_ONLY`).
+Evidence: `docs/coordinator/CONVERSATION_EVAL.md`.
+`wording.py`: the server's own sentences in the group's language — `italian(language, sample)`, `localize(text, it)` for click notices and the busy notice, `sources_label(it)` for the "From:"/"Fonti:" line of an answer.

@@ -76,6 +76,7 @@ from .plan_commands import PlanCommands
 from .plan_writer import PlanWriter
 from .proactive import ProactiveBridge
 from .proactive_writer import ProactiveWriter
+from .wording import italian, localize
 from .proposals import ProposalService, new_id
 from .reflection import build_reflection, week_of
 from .store import CoordinationStore
@@ -479,7 +480,9 @@ class CoordinatorRouter:
         if outcome.proposal is not None:
             # Every channel redraws the card (applied, rejected, expired...).
             await self._send_proposal(outcome.proposal)
-        await self._notice(outcome.ok, outcome.message, message.request_id)
+        language = await self._store_now().setting("language")
+        said = outcome.proposal.rationale if outcome.proposal is not None else ""
+        await self._notice(outcome.ok, localize(outcome.message, italian(language, said)), message.request_id)
         if outcome.ok:
             await self._send_state("")
             proposal = outcome.proposal

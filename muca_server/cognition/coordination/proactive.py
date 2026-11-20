@@ -16,7 +16,11 @@ Deterministic rules, checked in code and never left to the model (project
 rules 4.3 and 11, spec NFR3, GL4, GL10):
 
     R1  only in a group conversation, never in a DM
-    R2  one draft at a time per group
+    R2  one draft at a time per group; a more urgent strategy (PRIORITY) that
+        fires while a less urgent one is still being drafted replaces it,
+        only before that draft is saved (in the 20/11 live run a CS5 card on
+        "I'll look at it tonight" made the CS7 on "Mathias must first send me
+        the data for the RASD" be dropped 7 s later)
     R3  at least MIN_MESSAGES_BETWEEN messages since the last proactive card
     R4  at least MIN_SECONDS_BETWEEN since the last proactive card
     R5  never right after the agent's own message (no two in a row)
@@ -58,7 +62,7 @@ from enum import StrEnum
 from typing import Any
 
 from .models import BlockerCertainty, BlockerPayload, Proposal, ProposalKind, TaskAssignmentPayload, TaskStatus
-from .plan_writes import topic_key
+from .plan_writes import known_prerequisite, topic_key
 from .project_memory import RESEND_EVERY, project_memory
 from .proactive_writer import STRATEGY_KINDS, ChatLine, ProactiveDraft, ProactiveWriter
 from .proposals import ProposalService
@@ -69,6 +73,16 @@ logger = logging.getLogger(__name__)
 MIN_MESSAGES_BETWEEN = 10  # NFR3: one unsolicited intervention every 10 messages at most
 MIN_SECONDS_BETWEEN = 5 * 60  # NFR3: ... and every 5 minutes at most
 CHAT_WINDOW = 20  # recent messages the writer sees
+# R2: which draft wins when two strategies fire close together. A stated
+# blocker with a date at risk matters more than an open decision, which
+# matters more than a missing owner or a simple task to hand out.
+PRIORITY = {
+    "cs7_blockers_dependencies": 3,
+    "cs3_close_decision": 2,
+    "cs3_reopened_decision": 2,
+    "cs5_owner_and_date": 1,
+    "cs2_delegate_simple_task": 0,
+}
 
 
 class Verdict(StrEnum):
@@ -105,6 +119,9 @@ class ProactiveBridge:
         self._today = today
         self._clock = clock
         self._task: asyncio.Task | None = None
+        # R2: the strategy being drafted, and whether its draft is still only
+        # a model call (it can then be replaced; once saving starts, never).
+        self._drafting: str | None = None
         # Message count and time of the last card posted (R3, R4).
         self._last_count: int | None = None
         self._last_at: float | None = None
@@ -129,6 +146,8 @@ class ProactiveBridge:
         if strategy_id not in STRATEGY_KINDS:
             return Verdict.NOT_MINE
         await self._load_mark()
+        if self._preempt(strategy_id):
+            logger.info("%s coordinator: %s replaces a draft still being written", self._conversation.conversation_id, strategy_id)
         reason = self._veto(history, message_count, assistant_id)
         if reason:
             logger.info("%s coordinator vetoed %s: %s", self._conversation.conversation_id, strategy_id, reason)
@@ -191,6 +210,18 @@ class ProactiveBridge:
     # Rules and drafting
     # ------------------------------------------------------------------
 
+    def _preempt(self, strategy_id: str) -> bool:
+        """R2: cancel a running draft of a less urgent strategy, if it is still only a model call."""
+        running = self._drafting
+        if self._task is None or self._task.done() or running is None:
+            return False
+        if PRIORITY.get(strategy_id, 0) <= PRIORITY.get(running, 0):
+            return False
+        self._task.cancel()
+        self._task = None
+        self._drafting = None
+        return True
+
     def _veto(self, history: list, message_count: int, assistant_id: int) -> str:
         """The first rule (R1-R5, R8) that says no, or "" if none does."""
         if self._conversation.is_private or self._conversation.is_ephemeral:
@@ -218,6 +249,7 @@ class ProactiveBridge:
             snoozes = await store.active_snoozes(self._clock())
             silenced = sorted(topic for sid, topic in snoozes if sid == strategy_id)
             members = dict(self._members())
+            self._drafting = strategy_id
             draft = await self._writer.draft(
                 strategy_id,
                 chat=chat,
@@ -228,6 +260,7 @@ class ProactiveBridge:
                 today=self._today(),
                 decisions=state.decisions,
             )
+            self._drafting = None  # from here on the draft is saved or dropped, never replaced
             if draft is None:
                 logger.warning("%s coordinator: no valid %s draft, staying silent", conversation_id, strategy_id)
                 return
@@ -248,9 +281,15 @@ class ProactiveBridge:
             await store.save_mark("proactive", self._last_count, self._last_at)
             await store.save_mark(self._count_mark, self._last_count, self._last_at)
             await self._send_proposal(proposal)
+        except asyncio.CancelledError:
+            logger.info("%s coordinator: %s draft replaced by a more urgent one", conversation_id, strategy_id)
+            raise
         except Exception:
             # Project rule: a model or database error never breaks the chat.
             logger.exception("%s coordinator failed on %s", conversation_id, strategy_id)
+        finally:
+            if self._drafting == strategy_id:
+                self._drafting = None
 
 
 def _duplicate(draft: ProactiveDraft, open_cards: list[Proposal]) -> str:
@@ -290,6 +329,10 @@ def _dropped(draft: ProactiveDraft, silenced: list[str], tasks, decisions=()) ->
             return "R7 the task is already marked blocked"
         if task is not None and payload.depends_on_task_id is not None and payload.depends_on_task_id in task.depends_on:
             return "R7 the plan already records this dependency"
+        if payload.depends_on_task_id is None and known_prerequisite(
+            task, payload.depends_on_title, payload.depends_on_owner_id, tasks
+        ):
+            return "R7 the plan already records this prerequisite"
     if draft.kind is ProposalKind.REVISIT:
         decision = next((d for d in decisions if d.decision_id == draft.payload.decision_id), None)
         if decision is None or decision.reopened_at is not None:

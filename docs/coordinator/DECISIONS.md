@@ -2,6 +2,28 @@
 
 Newest first. Each entry: date, decision, alternatives, reason, status.
 
+## 2026-11-20 · Conversational optimization (taken by Claude, to confirm by Matteo)
+
+Evidence and runs: `CONVERSATION_EVAL.md`.
+
+- **Asked in words, drafted as a card.** "Aggiungi la dipendenza", "crea una
+  task per Matías", "sì, fallo" make the `ask` answer carry an `action`; the
+  server checks it and posts an ordinary `blocker` (possible) or `task_owner`
+  card. A typed "yes" never saves anything: the click does.
+  Alternative: apply on a typed yes. Rejected: the confirmation model is a
+  click by a member (project rule), and a typed yes in a group is ambiguous.
+- **A CS7 card may name who delivers new prerequisite work**
+  (`depends_on_owner_id`), only when the chat names a member; confirming gives
+  that new task its owner. Like CS5's suggested owner, unlike CS2 (which never
+  assigns). The old docstring "the card never assigns" is superseded.
+- **R2 by priority.** CS7 > CS3 > CS5 > CS2: a more urgent strategy replaces a
+  draft still in its model call; once saving starts it is never replaced.
+  NFR3 (R3/R4) unchanged: still one card at a time.
+- **Every link keeps its origin** (`coord_task_dependency.source`, additive).
+- **Routing in two levels** (client `addressing.py`): a clear call is
+  answered; a passing mention is offered as "maybe" (Cadence may stay silent);
+  a message to the group ("secondo voi…") is never offered.
+
 ## 2026-11-15 · Kickoff runs in the background
 
 - **Decision:** `kickoff` starts a task and returns at once; one kickoff per

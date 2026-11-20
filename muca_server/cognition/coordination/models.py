@@ -95,6 +95,9 @@ class Task(_Model):
     due_date: date | None = None
     status: TaskStatus = TaskStatus.TODO
     depends_on: list[str] = Field(default_factory=list)  # other task_ids
+    # Where each link came from (task_id it waits on -> "card <id>: <chat line>",
+    # "by hand (<member>)"); a link missing here has no known origin.
+    dependency_sources: dict[str, str] = Field(default_factory=dict)
     # Written by a member by hand (the "New task" popup); cards never set it.
     description: str = Field(default="", max_length=MAX_TEXT)
     # How far along it is, 0-100, set by a member; 100 once done.
@@ -348,6 +351,9 @@ class BlockerPayload(_Model):
     `ways_forward`: up to three concrete options taken from the chat and the
     plan (mock data, a minimal version first, another order). Shown on the
     card as suggestions: choosing one changes nothing by itself.
+    `depends_on_owner_id`: when the work it waits on is new, the member the
+    chat names as the one who delivers it ("Mathias must send me the data");
+    it becomes that new task's owner on confirmation. Never a guess.
     """
 
     context: ProactiveContext
@@ -355,6 +361,7 @@ class BlockerPayload(_Model):
     title: str = Field(min_length=1, max_length=MAX_TITLE)
     depends_on_task_id: str | None = None
     depends_on_title: str = Field(default="", max_length=MAX_TITLE)
+    depends_on_owner_id: int | None = None
     helper_id: int | None = None
     question: str = Field(default="", max_length=MAX_QUOTE)
     certainty: BlockerCertainty = BlockerCertainty.BLOCKED

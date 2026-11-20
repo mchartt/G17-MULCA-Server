@@ -306,11 +306,25 @@ class ProposalService:
         if kind is ProposalKind.BLOCKER and action == "confirm":
             assert isinstance(payload, BlockerPayload)
             what = f"\u201c{payload.depends_on_title.strip()}\u201d" if payload.depends_on_title.strip() else "the task on the card"
+            owner = payload.depends_on_owner_id if payload.depends_on_task_id is None else None
+            if owner is not None and owner not in participants:
+                return "The member named on the card is not in this group any more.", None, ""
             if payload.certainty is BlockerCertainty.POSSIBLE:
                 message = f"Dependency saved: \u201c{payload.title}\u201d waits on {what}."
             else:
                 message = f"Marked as blocked: \u201c{payload.title}\u201d."
-            return "", blocker_applier(payload, new_task_id=new_id(), new_dependency_id=new_id()), message
+            if owner is not None:
+                message += f" {participants[owner]} owns {what}."
+            # Kept with the link, so "why are these linked?" has an answer.
+            line = payload.context.evidence[-1] if payload.context.evidence else None
+            if line is not None and line.speaker == "Plan":
+                # Suggested by Cadence when tasks were added, not said in the chat.
+                source = f"card {proposal.proposal_id}, suggested by Cadence when the tasks were added: {payload.question}"
+            else:
+                source = f"card {proposal.proposal_id}" + (f": \u201c{line.text}\u201d ({line.speaker})" if line else "")
+            return "", blocker_applier(
+                payload, new_task_id=new_id(), new_dependency_id=new_id(), source=source[:300]
+            ), message
 
         if kind is ProposalKind.REVISIT and action == "choose":
             assert isinstance(payload, RevisitPayload)

@@ -139,7 +139,7 @@ async def test_tasks_dependencies_and_decisions_are_read_back(store):
     async with aiosqlite.connect(store._db_path) as db:
         await db.execute("INSERT INTO coord_task (task_id, title, owner_id, status) VALUES ('t1','Mockup',1,'doing')")
         await db.execute("INSERT INTO coord_task (task_id, title) VALUES ('t2','Tests')")
-        await db.execute("INSERT INTO coord_task_dependency VALUES ('t2','t1')")
+        await db.execute("INSERT INTO coord_task_dependency (task_id, depends_on) VALUES ('t2','t1')")
         await db.execute(
             "INSERT INTO coord_decision (decision_id, question, choice, reason, decided_by, decided_at, source) VALUES ('d1','Framework?','React','team knows it',2,9.0,'proposal:p1')"
         )
