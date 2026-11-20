@@ -156,8 +156,24 @@ messages for Cadence to the coordinator like the web app (one rule,
 `addressing.for_cadence`); a message to Cadence is still mirrored to the
 group's linked channels (`args.said`).
 
-Not done here (decisions needed): soft delete / restore of tasks (schema
-change), reverting a confirmed change, milestone reschedule and dependency
-removal by chat, cancelling a pending card by chat. Pre-existing flaky test:
+After review: Discord says "unavailable" when the server fails (it said the
+answer would come); Discord and Slack give up visibly on a late answer after
+180 s, like the web; the web banner is reset by the server on reconnect
+(`hello.thinking`); the web answers in the background, one group's answers in
+order, so a message typed under the banner is shown at once.
+
+Known limits (decisions for Matteo):
+- Discord/Slack: a message that names Cadence, or comes within 180 s of its
+  answer, now goes to the coordinator only. The proactive judge (CS5/CS7) and
+  the lab agent (web search included) no longer see it: an @mention of the bot
+  no longer reaches the lab agent. Already true on the web before this change.
+- Silence on talk ABOUT Cadence rests on the prompt (MAYBE_NOTE): NOT VERIFIED
+  with a real model. Earlier corpora showed the prompt alone did not always
+  hold such rules.
+
+NOT IMPLEMENTED (fit the existing action → card → click pattern): milestone
+reschedule by chat, dependency removal by chat, cancelling a pending card by
+chat ("annulla la proposta"), reverting the last confirmed change ("annulla
+l'ultima modifica"). Need a data decision: soft delete / restore of tasks. Pre-existing flaky test:
 `test_a_blocker_replaces_an_owner_card_still_being_drafted` (sleep 0.05 s)
 fails only under load; 12/12 sequential on HEAD and on this branch.
