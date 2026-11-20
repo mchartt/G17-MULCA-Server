@@ -300,11 +300,11 @@ def check_action(case: Case, action) -> list[str]:
     if kind == "none":
         return [] if got == "none" else [f"drafted a {got} action, expected none"]
     if kind == "none_or_server_refused":
-        # The model may draft it; the server (plan_commands._reaches) must then refuse it.
+        # The model may draft it; the server (ask_cards.reaches) must then refuse it.
         if got == "none":
             return []
         tasks = {t.task_id: t for t in STATE.tasks}
-        from muca_server.cognition.coordination.plan_commands import _reaches
+        from muca_server.cognition.coordination.ask_cards import reaches as _reaches
 
         loops = action.task_id and action.depends_on_task_id and _reaches(tasks, action.depends_on_task_id, action.task_id)
         return [] if loops else ["drafted a link the server would not refuse"]

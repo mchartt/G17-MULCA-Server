@@ -75,14 +75,17 @@ async def update_task(
     due_date: date | None = None,
     owner_id: int | None = None,
     status: TaskStatus | None = None,
+    progress: int | None = None,
 ) -> None:
-    """Change only the given fields of a task (check-in options, blockers, status)."""
+    """Change only the given fields of a task (check-in options, blockers, status, progress)."""
     if due_date is not None:
         await db.execute("UPDATE coord_task SET due_date = ? WHERE task_id = ?", (due_date.isoformat(), task_id))
     if owner_id is not None:
         await db.execute("UPDATE coord_task SET owner_id = ? WHERE task_id = ?", (owner_id, task_id))
     if status is not None:
         await db.execute("UPDATE coord_task SET status = ? WHERE task_id = ?", (status.value, task_id))
+    if progress is not None:
+        await db.execute("UPDATE coord_task SET progress = ? WHERE task_id = ?", (progress, task_id))
 
 
 async def delete_task(db: aiosqlite.Connection, task_id: str) -> None:
