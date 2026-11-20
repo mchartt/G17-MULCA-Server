@@ -587,6 +587,13 @@ class CoordinatorRouter:
         if self._catchup is None:
             await self._notice(False, "Catch up is not available on this server.", message.request_id)
             return
+        if message.args.get("seen") is True:
+            # The member closed the catch-up (web): the next one starts now.
+            await self._catchup.seen(
+                store=self._store_now(), conversation_id=self._conversation.conversation_id, member_id=message.member_id
+            )
+            await self._notice(True, "You are caught up.", message.request_id)
+            return
         since = message.args.get("since")
         group = self._links.group(self._home()) if self._links is not None else [self._home()]
         result = await self._catchup.build(
@@ -595,6 +602,7 @@ class CoordinatorRouter:
             group=group,
             member_id=message.member_id,
             since=float(since) if isinstance(since, (int, float)) else None,
+            move_mark=message.args.get("peek") is not True,
         )
         await self._outbound.put(
             CoordinatorNoticeMessage(
