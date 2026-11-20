@@ -38,6 +38,8 @@ from .appliers import (
     StaleProposal,
     approach_applier,
     blocker_applier,
+    keep_applier,
+    revisit_applier,
     charter_applier,
     checkin_applier,
     decision_applier,
@@ -47,6 +49,7 @@ from .appliers import (
 )
 from .models import (
     ApproachPayload,
+    BlockerCertainty,
     BlockerPayload,
     CharterPayload,
     CheckinPayload,
@@ -55,6 +58,9 @@ from .models import (
     Proposal,
     ProposalKind,
     ProposalStatus,
+    REVISIT_KEEP,
+    REVISIT_REOPEN,
+    RevisitPayload,
     TaskAssignmentPayload,
 )
 from .store import Applier, CoordinationStore
@@ -94,6 +100,10 @@ class ProposalService:
         self._store = store
         self._ttl = ttl_seconds
         self._clock = clock
+
+    def now(self) -> float:
+        """The service's clock (tests set it), for callers that check expiry and snoozes."""
+        return self._clock()
 
     async def create(
         self,
@@ -295,7 +305,23 @@ class ProposalService:
 
         if kind is ProposalKind.BLOCKER and action == "confirm":
             assert isinstance(payload, BlockerPayload)
-            return "", blocker_applier(payload, new_task_id=new_id()), f"Marked as blocked: \u201c{payload.title}\u201d."
+            what = f"\u201c{payload.depends_on_title.strip()}\u201d" if payload.depends_on_title.strip() else "the task on the card"
+            if payload.certainty is BlockerCertainty.POSSIBLE:
+                message = f"Dependency saved: \u201c{payload.title}\u201d waits on {what}."
+            else:
+                message = f"Marked as blocked: \u201c{payload.title}\u201d."
+            return "", blocker_applier(payload, new_task_id=new_id(), new_dependency_id=new_id()), message
+
+        if kind is ProposalKind.REVISIT and action == "choose":
+            assert isinstance(payload, RevisitPayload)
+            if option == REVISIT_KEEP:
+                return "", keep_applier(), f"Kept: \u201c{payload.choice}\u201d stays the decision."
+            if option == REVISIT_REOPEN:
+                return "", revisit_applier(payload, member_id=member_id, now=now), (
+                    f"Reopened: \u201c{payload.question}\u201d is open again. "
+                    "The old choice and its reason stay in the log."
+                )
+            return "Choose Keep or Reopen.", None, ""
 
         if kind is ProposalKind.APPROACH and action == "confirm":
             assert isinstance(payload, ApproachPayload)

@@ -119,6 +119,15 @@ async def add_decision(db: aiosqlite.Connection, decision: Decision) -> None:
     )
 
 
+async def reopen_decision(db: aiosqlite.Connection, decision_id: str, *, member_id: int, now: float) -> bool:
+    """K3: mark a decision reopened (kept in the log). False if it is gone or already reopened."""
+    cursor = await db.execute(
+        "UPDATE coord_decision SET reopened_at = ?, reopened_by = ? WHERE decision_id = ? AND reopened_at IS NULL",
+        (now, member_id, decision_id),
+    )
+    return cursor.rowcount > 0
+
+
 async def add_snooze(
     db: aiosqlite.Connection,
     *,

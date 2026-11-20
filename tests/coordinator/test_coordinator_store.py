@@ -141,7 +141,7 @@ async def test_tasks_dependencies_and_decisions_are_read_back(store):
         await db.execute("INSERT INTO coord_task (task_id, title) VALUES ('t2','Tests')")
         await db.execute("INSERT INTO coord_task_dependency VALUES ('t2','t1')")
         await db.execute(
-            "INSERT INTO coord_decision VALUES ('d1','Framework?','React','team knows it',2,9.0,'proposal:p1')"
+            "INSERT INTO coord_decision (decision_id, question, choice, reason, decided_by, decided_at, source) VALUES ('d1','Framework?','React','team knows it',2,9.0,'proposal:p1')"
         )
         await db.commit()
     state = await store.load_state()

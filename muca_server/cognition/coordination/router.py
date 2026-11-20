@@ -60,13 +60,24 @@ from .card_requests import CardRequests
 from .catchup import CatchUp, channel_of, summary_line
 from .checkin_timer import CheckinTimer
 from .links import GroupLinks, LinkError, LiveGroups
-from .models import CharterPayload, MemberProfile, MilestoneDraft, Proposal, ProposalKind, ProposalStatus
+from .models import (
+    MAX_DOCUMENT_CHARS,
+    MAX_DOCUMENTS,
+    MAX_TITLE,
+    CharterPayload,
+    MemberProfile,
+    MilestoneDraft,
+    Proposal,
+    ProposalKind,
+    ProposalStatus,
+)
 from .opener import PlanOpener
 from .plan_commands import PlanCommands
 from .plan_writer import PlanWriter
 from .proactive import ProactiveBridge
 from .proactive_writer import ProactiveWriter
-from .proposals import ProposalService
+from .proposals import ProposalService, new_id
+from .reflection import build_reflection, week_of
 from .store import CoordinationStore
 from .writer import LANGUAGES, MAX_RATIONALE_CHARS, ProposalWriter
 
@@ -114,6 +125,8 @@ class CoordinatorRouter:
         self._home_id: str | None = None
         # The kickoff running in the background, if any (one per group).
         self._kickoff: asyncio.Task | None = None
+        # The reflection being built (it may ask the model for the week's topics).
+        self._reflecting: asyncio.Task | None = None
         # M3: proactive cards (CS5, CS2, CS3), plugged into the policy by wiring.py.
         self.proactive = (
             ProactiveBridge(
@@ -141,6 +154,8 @@ class CoordinatorRouter:
             send_state=self._send_state,
             unavailable=self._fail,
             today=today,
+            recent_chat=self._recent_chat if catchup is not None else None,
+            remember=self._remember if catchup is not None else None,
         )
         # Helpful and "send me this card again": no model, no state change.
         self._cards = CardRequests(store=self._store_now, notice=self._notice)
@@ -255,6 +270,10 @@ class CoordinatorRouter:
                 await self._on_catchup(message)
             elif message.command == "approach":
                 await self._on_approach(message)
+            elif message.command == "document":
+                await self._on_document(message)
+            elif message.command == "reflection":
+                await self._start_reflection(message)
             else:  # "state"
                 await self._send_state(request_id)
         except Exception:
@@ -264,6 +283,8 @@ class CoordinatorRouter:
         """Wait for a running kickoff or proactive draft (used by tests and at shutdown)."""
         if self._kickoff is not None:
             await asyncio.gather(self._kickoff, return_exceptions=True)
+        if self._reflecting is not None:
+            await asyncio.gather(self._reflecting, return_exceptions=True)
         if self.proactive is not None:
             await self.proactive.wait()
         await self._plan.wait()
@@ -325,6 +346,44 @@ class CoordinatorRouter:
         await self._notice(True, text, message.request_id)
         await self._send_state("")
 
+    async def _keep_document(self, name: str, text: str, member_id: int | None) -> str:
+        """
+        Keep one document's text; "" if kept, else why not. Names and text are
+        trimmed to the limits; empty ones and documents past MAX_DOCUMENTS are refused.
+        """
+        name = " ".join(name.split())[:MAX_TITLE]
+        text = text.strip()[:MAX_DOCUMENT_CHARS]
+        if not name or not text:
+            return "A document needs a name and some text."
+        store = self._store_now()
+        if len((await store.load_state()).documents) >= MAX_DOCUMENTS:
+            return f"A project keeps up to {MAX_DOCUMENTS} documents: remove one first."
+        await store.add_document(new_id(), name, text, member_id, time.time())
+        return ""
+
+    async def _on_document(self, message: CoordinatorCommandMessage) -> None:
+        """
+        A member adds or removes a document Cadence reads as project context
+        (Project settings > Documents). Their own action: no card, no model.
+        """
+        args = message.args
+        if isinstance(args.get("add"), dict):
+            name = str(args["add"].get("name", ""))
+            refused = await self._keep_document(name, str(args["add"].get("text", "")), message.member_id)
+            if refused:
+                await self._notice(False, refused, message.request_id)
+                return
+            await self._notice(True, f"Cadence now reads “{' '.join(name.split())[:MAX_TITLE]}”.", message.request_id)
+        elif args.get("remove"):
+            if not await self._store_now().remove_document(str(args["remove"])):
+                await self._notice(False, "No such document in this project.", message.request_id)
+                return
+            await self._notice(True, "Document removed: Cadence no longer reads it.", message.request_id)
+        else:
+            await self._notice(False, "Say which document to add or remove.", message.request_id)
+            return
+        await self._send_state("")
+
     async def _on_charter(self, message: CoordinatorCommandMessage) -> None:
         """
         A member edits the charter by hand: goal and deliverables as they
@@ -373,6 +432,14 @@ class CoordinatorRouter:
         if self._kickoff is not None and not self._kickoff.done():
             await self._notice(False, KICKOFF_RUNNING, message.request_id)
             return
+        # The description and the documents of the setup desk stay as project
+        # context, so Cadence can read them again when someone asks later.
+        description = str(message.args.get("description", "")).strip()
+        if description:
+            await self._keep_document("Project description", description, message.member_id)
+        for document in message.args.get("documents") or []:
+            if isinstance(document, dict):
+                await self._keep_document(str(document.get("name", "")), str(document.get("text", "")), message.member_id)
         self._kickoff = asyncio.create_task(self._run_kickoff(message, text))
 
     async def _run_kickoff(self, message: CoordinatorCommandMessage, text: str) -> None:
@@ -401,6 +468,7 @@ class CoordinatorRouter:
         )
 
     async def _on_response(self, message: ProposalResponseMessage) -> None:
+        before = {t.task_id for t in (await self._store_now().load_state()).tasks}
         outcome = await self._service().respond(
             message.proposal_id,
             action=message.action,
@@ -418,6 +486,10 @@ class CoordinatorRouter:
             if proposal is not None and proposal.kind is ProposalKind.CHARTER and proposal.status is ProposalStatus.APPLIED:
                 # In the background: the click's answer and state go out first.
                 self.opener.after_charter(message.channel)
+            if proposal is not None and proposal.kind is ProposalKind.PLAN and proposal.status is ProposalStatus.APPLIED:
+                # A confirmed plan adds tasks: look for likely dependencies among them, in the background.
+                added = [t.task_id for t in (await self._store_now().load_state()).tasks if t.task_id not in before]
+                self._plan.suggest_dependencies(added, message.channel)
 
     async def _on_approach(self, message: CoordinatorCommandMessage) -> None:
         """"Plan together": ask how the group plans the work, now (a member's action)."""
@@ -524,6 +596,13 @@ class CoordinatorRouter:
         if self._catchup is None:
             await self._notice(False, "Catch up is not available on this server.", message.request_id)
             return
+        if message.args.get("seen") is True:
+            # The member closed the catch-up (web): the next one starts now.
+            await self._catchup.seen(
+                store=self._store_now(), conversation_id=self._conversation.conversation_id, member_id=message.member_id
+            )
+            await self._notice(True, "You are caught up.", message.request_id)
+            return
         since = message.args.get("since")
         group = self._links.group(self._home()) if self._links is not None else [self._home()]
         result = await self._catchup.build(
@@ -532,12 +611,57 @@ class CoordinatorRouter:
             group=group,
             member_id=message.member_id,
             since=float(since) if isinstance(since, (int, float)) else None,
+            move_mark=message.args.get("peek") is not True,
         )
         await self._outbound.put(
             CoordinatorNoticeMessage(
                 ok=True, text=summary_line(result), request_id=message.request_id, catchup=result
             )
         )
+
+    async def _recent_chat(self) -> list[str]:
+        """This channel's last lines, so Cadence answers within the conversation."""
+        return await self._catchup.recent_lines(self._conversation.conversation_id)
+
+    async def _remember(self, member_id: int, said: str, answer: str) -> None:
+        name = self._roster().get(member_id, "member")
+        await self._catchup.remember(self._conversation.conversation_id, name, said, answer)
+
+    async def _start_reflection(self, message: CoordinatorCommandMessage) -> None:
+        """
+        The week's reflection (reflection.py). It may call the model for the
+        topics, so it runs in the background: the session must never wait.
+        """
+        if self._catchup is None:
+            await self._notice(False, "Reflection is not available on this server.", message.request_id)
+            return
+        week = str(message.args.get("week", "")).strip()
+        try:
+            day = date.fromisoformat(week) if week else self._today()
+        except ValueError:
+            await self._notice(False, "Write the week as a day, YYYY-MM-DD.", message.request_id)
+            return
+        if self._reflecting is not None and not self._reflecting.done():
+            await self._notice(False, "Cadence is already looking at this week.", message.request_id)
+            return
+        self._reflecting = asyncio.create_task(self._run_reflection(message, day))
+
+    async def _run_reflection(self, message: CoordinatorCommandMessage, day: date) -> None:
+        try:
+            group = self._links.group(self._home()) if self._links is not None else [self._home()]
+            result = await build_reflection(
+                store=self._store_now(),
+                group=group,
+                monday=week_of(day),
+                today=self._today(),
+                read_channel=self._catchup.read,
+                draft_topics=PlanWriter(self._writer).draft_topics,
+            )
+            await self._outbound.put(
+                CoordinatorNoticeMessage(ok=True, text="", request_id=message.request_id, reflection=result)
+            )
+        except Exception:
+            await self._fail(message.event, message.request_id)
 
     def _service(self) -> ProposalService:
         return ProposalService(self._store_now(), ttl_seconds=self._ttl)

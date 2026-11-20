@@ -269,13 +269,13 @@ async def add_decision(db_dir, at):
     await store.load_state()  # creates the tables
     async with aiosqlite.connect(db_path_for(WEB, base_dir=db_dir)) as db:
         await db.execute(
-            "INSERT INTO coord_decision VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO coord_decision (decision_id, question, choice, reason, decided_by, decided_at, source) VALUES (?, ?, ?, ?, ?, ?, ?)",
             ("d1", "Which lab slot?", "Tuesday 17:00", "Everyone is free", 9001, at, "card p1"),
         )
         await db.commit()
 
 
-async def test_catch_up_on_the_web_shows_what_discord_said_and_decided(tmp_path):
+async def test_catch_up_on_the_web_shows_the_web_chat_and_what_discord_said_and_decided(tmp_path):
     now = [1_000_000.0]
     group = Group(tmp_path, clock=lambda: now[0])
     web, web_q = await open_web_space(group)
@@ -286,16 +286,19 @@ async def test_catch_up_on_the_web_shows_what_discord_said_and_decided(tmp_path)
 
     await say(tmp_path, DISCORD, "Chiara", "Shall we book the lab for Tuesday?", now[0] - 3600)
     await say(tmp_path, DISCORD, "Dario", "Yes,   Tuesday 17:00 works", now[0] - 3000)
-    await say(tmp_path, WEB, "Ada", "web chat is not part of the web's catch-up", now[0] - 2000)
+    await say(tmp_path, WEB, "Bruno", "I pushed the slides draft", now[0] - 2000)
     await say(tmp_path, "dm:9001", "Chiara", "a private message", now[0] - 1000)
     await add_decision(tmp_path, now[0] - 2900)
 
     await web.route_coordinator(command("catchup", 100_000_001))
     (notice,) = await drain(web_q)
     assert notice.ok and notice.request_id == "r1"
-    assert notice.text == "Since your last catch-up: 1 decision, 2 messages on Discord."
+    # Matteo, 20/11: the group chat of this channel is part of the catch-up too.
+    assert notice.text == "Since your last catch-up: 1 decision, 1 message here, 2 messages on Discord."
     result = notice.catchup
     assert [d["choice"] for d in result["decisions"]] == ["Tuesday 17:00"]
+    assert result["here"]["channel"] == "web"
+    assert [(m["speaker"], m["text"]) for m in result["here"]["messages"]] == [("Bruno", "I pushed the slides draft")]
     (place,) = result["elsewhere"]
     assert place["channel"] == "discord"
     assert [(m["speaker"], m["text"]) for m in place["messages"]] == [
@@ -309,7 +312,7 @@ async def test_catch_up_on_the_web_shows_what_discord_said_and_decided(tmp_path)
     now[0] += 60
     await web.route_coordinator(command("catchup", 100_000_001))
     (notice,) = await drain(web_q)
-    assert notice.text == "Nothing new in the other channels since your last catch-up."
+    assert notice.text == "Nothing new since your last catch-up."
 
 
 async def test_catch_up_works_from_discord_too_and_without_a_link(tmp_path):
@@ -319,6 +322,47 @@ async def test_catch_up_works_from_discord_too_and_without_a_link(tmp_path):
     (notice,) = await drain(discord_q)
     assert notice.ok and not notice.catchup["linked"]
     assert "not linked" in summary_line(notice.catchup)
+
+
+async def test_a_peek_keeps_the_mark_until_the_member_closes_the_catch_up(tmp_path):
+    """The web shows the catch-up, and moves the mark only when the member closes it."""
+    now = [1_000_000.0]
+    group = Group(tmp_path, clock=lambda: now[0])
+    web, web_q = await open_web_space(group)
+    await say(tmp_path, WEB, "Bruno", "Slides are in the drive", now[0] - 600)
+
+    await web.route_coordinator(command("catchup", 100_000_001, peek=True))
+    (notice,) = await drain(web_q)
+    assert notice.catchup["here"]["total"] == 1
+    now[0] += 60
+    await web.route_coordinator(command("catchup", 100_000_001, peek=True))
+    (notice,) = await drain(web_q)
+    assert notice.catchup["here"]["total"] == 1  # opening it again still shows it
+
+    await web.route_coordinator(command("catchup", 100_000_001, seen=True))
+    (notice,) = await drain(web_q)
+    assert notice.ok and notice.catchup is None
+    now[0] += 60
+    await web.route_coordinator(command("catchup", 100_000_001, peek=True))
+    (notice,) = await drain(web_q)
+    assert notice.catchup["here"]["total"] == 0
+
+
+async def test_catch_up_lists_tasks_done_and_added_since_the_last_visit(tmp_path):
+    group = Group(tmp_path)
+    web, web_q = await open_web_space(group)
+    await web.route_coordinator(command("task", 100_000_001, add="Write the survey"))
+    await web.route_coordinator(command("task", 100_000_001, add="Book the lab"))
+    await drain(web_q)
+    store = CoordinationStore(db_path_for(WEB, base_dir=tmp_path))
+    first = next(t for t in (await store.load_state()).tasks if t.title == "Write the survey")
+    await store.edit_task(first.task_id, {"status": "done"})
+
+    await web.route_coordinator(command("catchup", 100_000_001))
+    notice = [m for m in await drain(web_q) if getattr(m, "catchup", None)][-1]
+    assert [t["title"] for t in notice.catchup["tasks_done"]] == ["Write the survey"]
+    assert [t["title"] for t in notice.catchup["tasks_added"]] == ["Book the lab"]
+    assert "1 task done, 1 new task" in notice.text
 
 
 # ----------------------------------------------------------------------

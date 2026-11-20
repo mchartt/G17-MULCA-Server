@@ -25,11 +25,14 @@ from pydantic import ValidationError
 
 from .models import (
     BlockerPayload,
+    Decision,
+    DecisionOption,
     DecisionPayload,
     Evidence,
     MemberProfile,
     ProactiveContext,
     ProposalKind,
+    RevisitPayload,
     Task,
     TaskAssignmentPayload,
 )
@@ -43,6 +46,7 @@ STRATEGY_KINDS: dict[str, ProposalKind] = {
     "cs2_delegate_simple_task": ProposalKind.DELEGATION,
     "cs3_close_decision": ProposalKind.DECISION,
     "cs7_blockers_dependencies": ProposalKind.BLOCKER,  # M4
+    "cs3_reopened_decision": ProposalKind.REVISIT,  # K3
 }
 MAX_EVIDENCE = 5
 
@@ -59,7 +63,7 @@ class ChatLine:
 @dataclass(frozen=True, slots=True)
 class ProactiveDraft:
     kind: ProposalKind
-    payload: TaskAssignmentPayload | DecisionPayload | BlockerPayload
+    payload: TaskAssignmentPayload | DecisionPayload | BlockerPayload | RevisitPayload
     rationale: str
 
 
@@ -123,8 +127,18 @@ SCHEMAS: dict[ProposalKind, dict[str, Any]] = {
             "task_id": NULLABLE_STRING,
             "title": {"type": "string"},
             "depends_on_task_id": NULLABLE_STRING,
+            "depends_on_title": {"type": "string"},
             "helper_id": {"type": ["integer", "null"]},
             "question": {"type": "string"},
+            "certainty": {"type": "string", "enum": ["blocked", "possible"]},
+            "ways_forward": {"type": "array", "items": {"type": "string"}},
+        },
+    ),
+    ProposalKind.REVISIT: _schema(
+        "reopened_decision",
+        {
+            "decision_id": {"type": "string"},
+            "new_point": {"type": "string"},
         },
     ),
 }
@@ -165,15 +179,46 @@ does not close it.
   (a few words) and `argument` (one sentence: what was said for it, in the
   members' terms, with its main drawback if one was said).""",
     ProposalKind.BLOCKER: """\
-Situation: a member is blocked or waiting on someone else's work, or a task is
-past its date with no update, and a deadline is at risk.
-- task_id: the plan task that is blocked, or null if it is not in the plan.
-- title: that task, short.
-- depends_on_task_id: the plan task it waits on, or null if none is named.
-- helper_id: the member who can unblock it (the owner of the task it waits on,
-  or the member whose skills fit), only ids from the member list, or null.
-- question: one short question to the blocked member about what blocks them.""",
+Situation: a piece of project work cannot go on, or may not be able to go on,
+because it needs other work that is not ready, and a date is at risk. Either a
+member said so ("I can't start the UI until the API is ready"), or the chat and
+the plan together show it (Sara says she tests on Friday; the plan or the chat
+shows the API she needs is not done, or is due after Friday).
+- certainty: "blocked" only if a member said they are stuck or waiting;
+  "possible" if you infer the dependency and nobody confirmed it.
+- task_id: the plan task that is (or may be) held up, or null if it is not in the plan.
+- title: that task, short (e.g. "Usability test").
+- depends_on_task_id: the plan task it waits on, or null.
+- depends_on_title: if depends_on_task_id is null, the work it waits on as said
+  in the chat (e.g. "API integration"); else "". Required for "possible".
+- helper_id: the member who can unblock it (the owner of the work it waits on,
+  or whose skills fit), only ids from the member list, or null.
+- question: ONE short question for the group. For "possible", ask whether the
+  dependency is real and offer the cheapest way around it, e.g. "Is the API
+  needed for Friday's test, or could Sara use mock data?". For "blocked", ask
+  what exactly is missing. Never ask why someone is late, never suggest that
+  anyone is slow, lazy or struggling: talk about the work, not the people.
+- ways_forward: 0 to 3 concrete options, each under 15 words, that the chat or
+  the plan make realistic (mock data, a minimal version first, swap the order,
+  someone pairs for an hour). [] if nothing concrete is visible. Never "move the
+  deadline" unless the chat says the date can move.""",
+    ProposalKind.REVISIT: """\
+Situation: someone in the chat proposes again, or argues against, a choice the
+group already made (it is in the decision list with its reason).
+- decision_id: the id of that decision, only from the decision list.
+- new_point: one sentence with what is NEW in the chat compared with the
+  saved reason (new information, a new constraint, a test result), in the
+  members' terms; "" if the chat only repeats an argument the group already
+  weighed. Do not judge whether reopening is right: the group decides.""",
 }
+
+
+def revisit_options(choice: str) -> list[DecisionOption]:
+    """K3 buttons, in the order of REVISIT_KEEP and REVISIT_REOPEN."""
+    keep = f"Keep \u201c{choice}\u201d"
+    if len(keep) > 80:
+        keep = "Keep it"
+    return [DecisionOption(label=keep), DecisionOption(label="Reopen it")]
 
 
 class ProactiveWriter:
@@ -194,17 +239,21 @@ class ProactiveWriter:
         tasks: list[Task],
         silenced_topics: list[str],
         today: date,
+        decisions: list[Decision] = (),
     ) -> ProactiveDraft | None:
         """A validated card for this strategy, or None (model failed twice, or nothing to ground it)."""
         kind = STRATEGY_KINDS.get(strategy_id)
         if kind is None or not chat:
             return None
         system = f"{COMMON_RULES}\n\n{TASK_RULES[kind]}"
-        user = _context(chat, members, profiles, tasks, silenced_topics, today)
+        open_decisions = [d for d in decisions if d.reopened_at is None]
+        if kind is ProposalKind.REVISIT and not open_decisions:
+            return None  # nothing in the log to revisit: no model call
+        user = _context(chat, members, profiles, tasks, silenced_topics, today, open_decisions)
         for attempt in range(1, ATTEMPTS + 1):
             try:
                 data = await self._writer.call_json(system, user, SCHEMAS[kind])
-                return _validate(kind, strategy_id, data, chat, members, tasks, today)
+                return _validate(kind, strategy_id, data, chat, members, tasks, today, open_decisions)
             except (ValidationError, ValueError, KeyError, TypeError, IndexError) as exc:
                 logger.warning("%s draft invalid (attempt %d): %s", strategy_id, attempt, exc)
             except Exception:
@@ -212,7 +261,7 @@ class ProactiveWriter:
         return None
 
 
-def _context(chat, members, profiles, tasks, silenced_topics, today: date) -> str:
+def _context(chat, members, profiles, tasks, silenced_topics, today: date, decisions=()) -> str:
     """The user message: today, members with profiles, plan, silenced topics, chat."""
     by_id = {p.member_id: p for p in profiles}
     member_lines = []
@@ -230,20 +279,27 @@ def _context(chat, members, profiles, tasks, silenced_topics, today: date) -> st
     task_lines = [
         f"- task_id {t.task_id}: {t.title} | owner: {members.get(t.owner_id, '-') if t.owner_id else 'none'}"
         f" | due: {t.due_date or '-'} | {t.status.value}"
+        + (f" | waits on: {', '.join(t.depends_on)}" if t.depends_on else "")
         for t in tasks
     ] or ["- (no tasks yet)"]
     chat_lines = [f"[{n}] {line.speaker}: {line.text}" for n, line in enumerate(chat, start=1)]
     silenced = ", ".join(json.dumps(t, ensure_ascii=False) for t in silenced_topics) or "none"
+    decision_lines = [
+        f"- decision_id {d.decision_id}: {d.question} -> chose {json.dumps(d.choice, ensure_ascii=False)}"
+        f" | reason: {' '.join(d.reason.split()) or '-'}"
+        for d in decisions
+    ] or ["- (no decisions yet)"]
     return (
         f"Today is {today.isoformat()}.\n"
         f"Members:\n" + "\n".join(member_lines) + "\n"
         f"Plan:\n" + "\n".join(task_lines) + "\n"
+        f"Decisions already taken:\n" + "\n".join(decision_lines) + "\n"
         f"Topics the group asked you not to raise now (do not draft about them): {silenced}\n"
         f"<chat>\n" + "\n".join(chat_lines) + "\n</chat>"
     )
 
 
-def _validate(kind, strategy_id, data, chat, members, tasks, today) -> ProactiveDraft:
+def _validate(kind, strategy_id, data, chat, members, tasks, today, decisions=()) -> ProactiveDraft:
     """Turn the model's JSON into a payload, or raise (= one retry)."""
     numbers = data.pop("evidence")
     if not numbers:
@@ -259,13 +315,38 @@ def _validate(kind, strategy_id, data, chat, members, tasks, today) -> Proactive
 
     if kind is ProposalKind.DECISION:
         return ProactiveDraft(kind, DecisionPayload(context=context, **data), rationale)
+    if kind is ProposalKind.REVISIT:
+        decision = next((d for d in decisions if d.decision_id == data["decision_id"]), None)
+        if decision is None:
+            raise ValueError("decision_id is not an open decision of the log")
+        # What was decided and why comes from the log, never from the model.
+        payload = RevisitPayload(
+            context=context,
+            decision_id=decision.decision_id,
+            question=decision.question,
+            choice=decision.choice,
+            reason=decision.reason,
+            decided_at=decision.decided_at,
+            new_point=" ".join(data["new_point"].split()),
+            options=revisit_options(decision.choice),
+        )
+        return ProactiveDraft(kind, payload, rationale)
     if kind is ProposalKind.BLOCKER:
         ids = {t.task_id for t in tasks}
         for key in ("task_id", "depends_on_task_id"):
             if data[key] is not None and data[key] not in ids:
                 raise ValueError(f"{key} is not a plan task")
+        if data["task_id"] is not None and data["task_id"] == data["depends_on_task_id"]:
+            raise ValueError("a task cannot wait on itself")
         if data["helper_id"] is not None and data["helper_id"] not in members:
             raise ValueError("helper is not a member")
+        # Older answers (and the M4 tests) have no certainty: a stated blocker.
+        data.setdefault("certainty", "blocked")
+        data.setdefault("ways_forward", [])
+        data.setdefault("depends_on_title", "")
+        if data["depends_on_task_id"] is not None:
+            # The card names the work by the plan's own title, not the model's.
+            data["depends_on_title"] = next(t.title for t in tasks if t.task_id == data["depends_on_task_id"])
         return ProactiveDraft(kind, BlockerPayload(context=context, **data), rationale)
 
     due = data.get("due_date")

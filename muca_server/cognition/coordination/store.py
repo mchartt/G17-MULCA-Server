@@ -28,6 +28,7 @@ from .models import (
     Decision,
     MemberProfile,
     Milestone,
+    ProjectDocument,
     ProjectState,
     Proposal,
     ProposalStatus,
@@ -61,11 +62,15 @@ CREATE TABLE IF NOT EXISTS coord_milestone (
     position      INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS coord_task (
-    task_id   TEXT PRIMARY KEY,
-    title     TEXT NOT NULL,
-    owner_id  INTEGER,
-    due_date  TEXT,
-    status    TEXT NOT NULL DEFAULT 'todo'
+    task_id      TEXT PRIMARY KEY,
+    title        TEXT NOT NULL,
+    owner_id     INTEGER,
+    due_date     TEXT,
+    status       TEXT NOT NULL DEFAULT 'todo',
+    description  TEXT NOT NULL DEFAULT '',
+    progress     INTEGER NOT NULL DEFAULT 0,  -- 0-100, set by a member; 100 when done
+    created_at   REAL,                        -- unix time, set by TASK_TIMES
+    done_at      REAL                         -- unix time it became done, NULL otherwise
 );
 CREATE TABLE IF NOT EXISTS coord_task_dependency (
     task_id     TEXT NOT NULL,
@@ -79,7 +84,9 @@ CREATE TABLE IF NOT EXISTS coord_decision (
     reason       TEXT NOT NULL DEFAULT '',
     decided_by   INTEGER NOT NULL,
     decided_at   REAL NOT NULL,
-    source       TEXT NOT NULL DEFAULT ''
+    source       TEXT NOT NULL DEFAULT '',
+    reopened_at  REAL,
+    reopened_by  INTEGER
 );
 CREATE TABLE IF NOT EXISTS coord_proposal (
     proposal_id     TEXT PRIMARY KEY,
@@ -115,6 +122,15 @@ CREATE TABLE IF NOT EXISTS coord_setting (
     name   TEXT PRIMARY KEY,
     value  TEXT NOT NULL
 );
+-- Documents the group gave Cadence as context (the assignment, notes): their
+-- text only, never the file. Command "document"; kickoff adds them too.
+CREATE TABLE IF NOT EXISTS coord_document (
+    document_id  TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    text         TEXT NOT NULL,
+    added_by     INTEGER,
+    added_at     REAL NOT NULL
+);
 -- "Helpful" on a proactive card: one row per member and card. Feedback
 -- only: it never changes the project state or the card.
 CREATE TABLE IF NOT EXISTS coord_feedback (
@@ -124,6 +140,41 @@ CREATE TABLE IF NOT EXISTS coord_feedback (
     PRIMARY KEY (proposal_id, member_id)
 );
 """
+
+
+# When a task was made and when it was finished, kept by SQLite itself so every
+# writer (by hand, cards, check-ins) is covered: the Reflection page counts
+# "done this week" from done_at. Run after the columns exist (old files get
+# them first, in _connect).
+TASK_TIMES = """
+CREATE TRIGGER IF NOT EXISTS coord_task_created AFTER INSERT ON coord_task
+WHEN NEW.created_at IS NULL
+BEGIN
+    UPDATE coord_task SET created_at = (julianday('now') - 2440587.5) * 86400.0 WHERE task_id = NEW.task_id;
+END;
+CREATE TRIGGER IF NOT EXISTS coord_task_done AFTER UPDATE OF status ON coord_task
+WHEN NEW.status = 'done' AND OLD.status <> 'done'
+BEGIN
+    UPDATE coord_task SET done_at = (julianday('now') - 2440587.5) * 86400.0, progress = 100 WHERE task_id = NEW.task_id;
+END;
+CREATE TRIGGER IF NOT EXISTS coord_task_reopened AFTER UPDATE OF status ON coord_task
+WHEN NEW.status <> 'done' AND OLD.status = 'done'
+BEGIN
+    UPDATE coord_task SET done_at = NULL WHERE task_id = NEW.task_id;
+END;
+"""
+
+
+class DependencyError(ValueError):
+    """
+    A dependency the plan cannot hold. `kind` is "unknown" (no such task),
+    "itself" (a task cannot wait on itself) or "loop" (A waits on B and B,
+    through any tasks, waits on A: neither could ever start).
+    """
+
+    def __init__(self, kind: str) -> None:
+        super().__init__(kind)
+        self.kind = kind
 
 
 class CoordinationStore:
@@ -145,6 +196,23 @@ class CoordinationStore:
                 cursor = await db.execute("PRAGMA table_info(coord_member)")
                 if "background" not in {row[1] for row in await cursor.fetchall()}:
                     await db.execute("ALTER TABLE coord_member ADD COLUMN background TEXT NOT NULL DEFAULT ''")
+                # Files made before K3 get the "reopened" columns.
+                cursor = await db.execute("PRAGMA table_info(coord_decision)")
+                decision_columns = {row[1] for row in await cursor.fetchall()}
+                if "reopened_at" not in decision_columns:
+                    await db.execute("ALTER TABLE coord_decision ADD COLUMN reopened_at REAL")
+                    await db.execute("ALTER TABLE coord_decision ADD COLUMN reopened_by INTEGER")
+                # Files made before task descriptions get the column.
+                cursor = await db.execute("PRAGMA table_info(coord_task)")
+                task_columns = {row[1] for row in await cursor.fetchall()}
+                if "description" not in task_columns:
+                    await db.execute("ALTER TABLE coord_task ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+                # Files made before progress and times get them (old tasks: no times).
+                if "progress" not in task_columns:
+                    await db.execute("ALTER TABLE coord_task ADD COLUMN progress INTEGER NOT NULL DEFAULT 0")
+                    await db.execute("ALTER TABLE coord_task ADD COLUMN created_at REAL")
+                    await db.execute("ALTER TABLE coord_task ADD COLUMN done_at REAL")
+                await db.executescript(TASK_TIMES)
             except Exception:
                 await db.close()
                 raise
@@ -222,6 +290,18 @@ class CoordinationStore:
         finally:
             await db.close()
         return _proposal_from_row(row) if row is not None else None
+
+    async def open_proposals(self, now: float) -> list[Proposal]:
+        """Pending proposals not yet expired (R9: no second card on the same thing)."""
+        db = await self._connect()
+        db.row_factory = aiosqlite.Row
+        try:
+            rows = await _all_params(
+                db, "SELECT * FROM coord_proposal WHERE status = 'pending' AND expires_at > ?", (now,)
+            )
+        finally:
+            await db.close()
+        return [_proposal_from_row(row) for row in rows]
 
     async def resolve_proposal(
         self,
@@ -332,28 +412,61 @@ class CoordinationStore:
     # The plan edited by hand (a member's own action: no card, no model)
     # ------------------------------------------------------------------
 
-    async def add_task_by_hand(self, task_id: str, title: str, owner_id: int | None, due_date: str | None) -> None:
+    async def add_task_by_hand(
+        self,
+        task_id: str,
+        title: str,
+        owner_id: int | None,
+        due_date: str | None,
+        description: str = "",
+        depends_on: list[str] | None = None,
+    ) -> None:
+        """A new task; with `depends_on` the task and its dependencies are saved together or not at all."""
         db = await self._connect()
         try:
-            await db.execute(
-                "INSERT INTO coord_task (task_id, title, owner_id, due_date, status) VALUES (?, ?, ?, ?, 'todo')",
-                (task_id, title, owner_id, due_date),
-            )
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                await db.execute(
+                    "INSERT INTO coord_task (task_id, title, owner_id, due_date, status, description) VALUES (?, ?, ?, ?, 'todo', ?)",
+                    (task_id, title, owner_id, due_date, description),
+                )
+                if depends_on:
+                    await _replace_dependencies(db, task_id, depends_on)
+            except BaseException:
+                await db.execute("ROLLBACK")
+                raise
+            await db.execute("COMMIT")
         finally:
             await db.close()
 
-    async def edit_task(self, task_id: str, fields: dict) -> bool:
-        """Set the given columns of a task (title, owner_id, due_date, status); None clears owner or date."""
-        allowed = {k: v for k, v in fields.items() if k in ("title", "owner_id", "due_date", "status")}
-        if not allowed:
+    async def edit_task(self, task_id: str, fields: dict, depends_on: list[str] | None = None) -> bool:
+        """
+        Set the given columns of a task (title, owner_id, due_date, status,
+        description, progress; None clears owner or date) and, when `depends_on` is
+        given, replace the tasks it waits on ([] = none). Raises
+        DependencyError, saving nothing, if a dependency is not acceptable.
+        """
+        allowed = {k: v for k, v in fields.items() if k in ("title", "owner_id", "due_date", "status", "description", "progress")}
+        if not allowed and depends_on is None:
             return False
         db = await self._connect()
         try:
-            cursor = await db.execute(
-                f"UPDATE coord_task SET {', '.join(f'{column} = ?' for column in allowed)} WHERE task_id = ?",
-                (*allowed.values(), task_id),
-            )
-            return cursor.rowcount > 0
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                found = True
+                if allowed:
+                    cursor = await db.execute(
+                        f"UPDATE coord_task SET {', '.join(f'{column} = ?' for column in allowed)} WHERE task_id = ?",
+                        (*allowed.values(), task_id),
+                    )
+                    found = cursor.rowcount > 0
+                if found and depends_on is not None:
+                    await _replace_dependencies(db, task_id, depends_on)
+            except BaseException:
+                await db.execute("ROLLBACK")
+                raise
+            await db.execute("COMMIT")
+            return found
         finally:
             await db.close()
 
@@ -518,12 +631,28 @@ class CoordinationStore:
                     due_date=row["due_date"],
                     status=row["status"],
                     depends_on=sorted(dependencies.get(row["task_id"], [])),
+                    description=row["description"],
+                    progress=row["progress"],
+                    created_at=row["created_at"],
+                    done_at=row["done_at"],
                 )
                 for row in await _all(db, "SELECT * FROM coord_task ORDER BY task_id")
             ]
             decisions = [
                 Decision(**dict(row))
                 for row in await _all(db, "SELECT * FROM coord_decision ORDER BY decided_at")
+            ]
+            documents = [
+                ProjectDocument(
+                    document_id=row["document_id"],
+                    name=row["name"],
+                    chars=row["chars"],
+                    added_by=row["added_by"],
+                    added_at=row["added_at"],
+                )
+                for row in await _all(
+                    db, "SELECT document_id, name, length(text) AS chars, added_by, added_at FROM coord_document ORDER BY added_at"
+                )
             ]
             language_rows = await _all(db, "SELECT value FROM coord_setting WHERE name = 'language'")
         finally:
@@ -534,13 +663,79 @@ class CoordinationStore:
             milestones=milestones,
             tasks=tasks,
             decisions=decisions,
+            documents=documents,
             language=language_rows[0]["value"] if language_rows else "",
         )
+
+    # ------------------------------------------------------------------
+    # Project documents (a member's own action: kept as text, never as a file)
+    # ------------------------------------------------------------------
+
+    async def add_document(self, document_id: str, name: str, text: str, added_by: int | None, added_at: float) -> None:
+        db = await self._connect()
+        try:
+            await db.execute(
+                "INSERT INTO coord_document (document_id, name, text, added_by, added_at) VALUES (?, ?, ?, ?, ?)",
+                (document_id, name, text, added_by, added_at),
+            )
+        finally:
+            await db.close()
+
+    async def remove_document(self, document_id: str) -> bool:
+        db = await self._connect()
+        try:
+            cursor = await db.execute("DELETE FROM coord_document WHERE document_id = ?", (document_id,))
+            return cursor.rowcount > 0
+        finally:
+            await db.close()
+
+    async def document_texts(self) -> list[tuple[str, str]]:
+        """(name, text) of every document, oldest first: what Cadence reads when it answers."""
+        db = await self._connect()
+        try:
+            cursor = await db.execute("SELECT name, text FROM coord_document ORDER BY added_at")
+            return [(row[0], row[1]) for row in await cursor.fetchall()]
+        finally:
+            await db.close()
+
+
+async def _all_params(db: aiosqlite.Connection, sql: str, params: tuple) -> list[aiosqlite.Row]:
+    cursor = await db.execute(sql, params)
+    return list(await cursor.fetchall())
 
 
 async def _all(db: aiosqlite.Connection, sql: str) -> list[aiosqlite.Row]:
     cursor = await db.execute(sql)
     return list(await cursor.fetchall())
+
+
+async def _replace_dependencies(db: aiosqlite.Connection, task_id: str, depends_on: list[str]) -> None:
+    """
+    `task_id` now waits on exactly `depends_on`. Checked inside the caller's
+    transaction, so two members changing the plan at once cannot sneak a loop in.
+    """
+    wanted = list(dict.fromkeys(depends_on))
+    if task_id in wanted:
+        raise DependencyError("itself")
+    for other in wanted:
+        if not await _all_params(db, "SELECT 1 FROM coord_task WHERE task_id = ?", (other,)):
+            raise DependencyError("unknown")
+    # Who waits on whom, leaving out this task's own old rows (they are being replaced).
+    waits_on: dict[str, list[str]] = {}
+    for row in await _all_params(db, "SELECT task_id, depends_on FROM coord_task_dependency WHERE task_id != ?", (task_id,)):
+        waits_on.setdefault(row[0], []).append(row[1])
+    # A loop closes if, following "waits on" from any wanted task, we come back to this one.
+    to_visit, seen = list(wanted), set()
+    while to_visit:
+        current = to_visit.pop()
+        if current == task_id:
+            raise DependencyError("loop")
+        if current not in seen:
+            seen.add(current)
+            to_visit.extend(waits_on.get(current, []))
+    await db.execute("DELETE FROM coord_task_dependency WHERE task_id = ?", (task_id,))
+    for other in wanted:
+        await db.execute("INSERT INTO coord_task_dependency (task_id, depends_on) VALUES (?, ?)", (task_id, other))
 
 
 def _proposal_from_row(row: aiosqlite.Row) -> Proposal:

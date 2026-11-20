@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from .models import (
     ApproachPayload,
+    BlockerCertainty,
     BlockerPayload,
     Charter,
     CharterPayload,
@@ -32,6 +33,7 @@ from .models import (
     DecisionPayload,
     Milestone,
     PlanPayload,
+    RevisitPayload,
     TaskAssignmentPayload,
     TaskStatus,
 )
@@ -42,6 +44,7 @@ from .plan_writes import (
     add_task,
     assign_task,
     delete_task,
+    reopen_decision,
     task_owner,
     update_task,
 )
@@ -192,7 +195,14 @@ def plan_applier(payload: PlanPayload, *, new_id) -> Applier:
 
     async def apply(db) -> None:
         for item in payload.items:
-            await add_task(db, task_id=new_id(), title=item.title, owner_id=item.owner_id, due_date=item.due_date)
+            if item.task_id is None:
+                await add_task(db, task_id=new_id(), title=item.title, owner_id=item.owner_id, due_date=item.due_date)
+                continue
+            # "Find owners": a task already in the plan gets the suggested owner,
+            # unless it is gone or someone took it since (then it is left alone).
+            exists, owner = await task_owner(db, item.task_id)
+            if exists and owner is None and item.owner_id is not None:
+                await update_task(db, task_id=item.task_id, owner_id=item.owner_id)
 
     return apply
 
@@ -212,10 +222,13 @@ def checkin_applier(option: CheckinOption) -> Applier:
     return apply
 
 
-def blocker_applier(payload: BlockerPayload, *, new_task_id: str) -> Applier:
+def blocker_applier(payload: BlockerPayload, *, new_task_id: str, new_dependency_id: str | None = None) -> Applier:
     """
-    CS7 confirmed: the task is marked blocked (added if the plan did not have
-    it) and, if the card names one, the task it waits on is recorded.
+    CS7 confirmed. The task is added if the plan did not have it. BLOCKED:
+    the task is marked blocked. POSSIBLE: the status is left alone (nobody
+    said it is blocked, the group only confirmed that it depends).
+    In both cases the work it waits on is recorded: a plan task, or a new
+    task with the title said in the chat (no owner: the card never assigns).
     """
 
     async def apply(db) -> None:
@@ -227,10 +240,40 @@ def blocker_applier(payload: BlockerPayload, *, new_task_id: str) -> Applier:
             exists, _ = await task_owner(db, task_id)
             if not exists:
                 raise StaleProposal("This task is no longer in the plan.")
-        await update_task(db, task_id=task_id, status=TaskStatus.BLOCKED)
-        if payload.depends_on_task_id:
-            exists, _ = await task_owner(db, payload.depends_on_task_id)
-            if exists:
-                await add_dependency(db, task_id=task_id, depends_on=payload.depends_on_task_id)
+        if payload.certainty is BlockerCertainty.BLOCKED:
+            await update_task(db, task_id=task_id, status=TaskStatus.BLOCKED)
+        depends_on = payload.depends_on_task_id
+        if depends_on:
+            exists, _ = await task_owner(db, depends_on)
+            if not exists:
+                depends_on = None
+        elif payload.depends_on_title.strip() and new_dependency_id:
+            depends_on = new_dependency_id
+            await add_task(db, task_id=depends_on, title=payload.depends_on_title.strip(), owner_id=None, due_date=None)
+        if depends_on:
+            await add_dependency(db, task_id=task_id, depends_on=depends_on)
+
+    return apply
+
+
+def revisit_applier(payload: RevisitPayload, *, member_id: int, now: float) -> Applier:
+    """
+    K3 "Reopen it": the decision is marked reopened, not deleted (the log
+    keeps why it was taken). If it is gone or someone reopened it already,
+    the card is stale.
+    """
+
+    async def apply(db) -> None:
+        if not await reopen_decision(db, payload.decision_id, member_id=member_id, now=now):
+            raise StaleProposal("This decision was already reopened or is no longer in the log.")
+
+    return apply
+
+
+def keep_applier() -> Applier:
+    """K3 "Keep": nothing in the plan changes; the card records who kept it and when."""
+
+    async def apply(db) -> None:
+        return None
 
     return apply

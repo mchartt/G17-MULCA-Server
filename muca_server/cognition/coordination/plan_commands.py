@@ -21,6 +21,10 @@ PlanCommands: the M4 commands of one group session, used by router.py.
               milestones and decisions, each named as the source; when none
               of them answers, the server says so (spec: "@coordinator")
 
+After tasks are added (by hand, or a confirmed plan card) the coordinator looks
+for a likely dependency in the background (`suggest_dependencies`): a CS7
+"possible" card per pair, at most two, which the group confirms or not.
+
 The check-in also runs on time (spec FR15): checkin_timer.py calls
 `timed_checkin`, which posts a card only when something is late or at risk.
 
@@ -40,12 +44,30 @@ from typing import Any
 from .checkin import findings, owners_report
 from pydantic import ValidationError
 
-from .models import MAX_TITLE, Decision, PlanItem, PlanPayload, ProposalKind, TaskStatus
+from .models import (
+    MAX_TEXT,
+    MAX_TITLE,
+    BlockerCertainty,
+    BlockerPayload,
+    Decision,
+    Evidence,
+    PlanItem,
+    PlanPayload,
+    ProactiveContext,
+    ProposalKind,
+    TaskStatus,
+)
+from .plan_writes import topic_key
 from .plan_writer import AskAnswer, PlanWriter, WhyAnswer
 from .proposals import ProposalService, new_id
-from .store import CoordinationStore
+from .store import CoordinationStore, DependencyError
 
 logger = logging.getLogger(__name__)
+
+# The strategy a dependency card belongs to: "Not now" on one silences the
+# same strategy and topic (the task's title) as a CS7 card from the chat.
+DEPENDENCY_STRATEGY = "cs7_blockers_dependencies"
+MAX_DEPENDENCY_CARDS = 2
 
 BUSY = "The coordinator is already working on a request for this group: its answer will appear here."
 MAX_TASKS_TEXT = 4000
@@ -68,6 +90,8 @@ class PlanCommands:
         send_state: Callable[[str], Awaitable[None]],
         unavailable: Callable[[str, str], Awaitable[None]],
         today: Callable[[], date] = date.today,
+        recent_chat: Callable[[], Awaitable[list[str]]] | None = None,
+        remember: Callable[[int, str, str], Awaitable[None]] | None = None,
     ) -> None:
         self._participants = participants
         self._store = store
@@ -78,7 +102,12 @@ class PlanCommands:
         self._send_state = send_state
         self._unavailable = unavailable
         self._today = today
+        # The last lines of the chat (Cadence's own included), and where a
+        # question and its answer are written so the next turn sees them.
+        self._recent_chat = recent_chat
+        self._remember = remember
         self._task: asyncio.Task | None = None
+        self._dependencies: asyncio.Task | None = None
 
     async def handle(self, message) -> None:
         """Entry point for planning, checkin, task, why and ask (router.py checked membership)."""
@@ -97,6 +126,69 @@ class PlanCommands:
     async def wait(self) -> None:
         if self._task is not None:
             await asyncio.gather(self._task, return_exceptions=True)
+        if self._dependencies is not None:
+            await asyncio.gather(self._dependencies, return_exceptions=True)
+
+    def suggest_dependencies(self, new_ids: list[str], channel: str) -> None:
+        """
+        After tasks are added, look for a likely dependency without making the
+        member wait: one model call in the background, then a CS7 "possible"
+        card per new pair (at most two). One look at a time per group: tasks
+        added while one runs are not looked at again (no queue of calls).
+        """
+        if not new_ids or (self._dependencies is not None and not self._dependencies.done()):
+            return
+        self._dependencies = asyncio.create_task(self._dependency_cards(list(new_ids), channel))
+
+    async def _dependency_cards(self, new_ids: list[str], channel: str) -> None:
+        try:
+            store = self._store()
+            state = await store.load_state()
+            open_tasks = [t for t in state.tasks if t.status != TaskStatus.DONE]
+            if len(open_tasks) < 2:
+                return
+            members = self._participants()
+            drafted = await self._writer.draft_dependencies(new_ids, state=state, members=members)
+            if not drafted or not drafted[0]:
+                return
+            links, rationale = drafted
+            tasks = {t.task_id: t for t in state.tasks}
+            now = self._service().now()
+            silenced = {topic for sid, topic in await store.active_snoozes(now) if sid == DEPENDENCY_STRATEGY}
+            waiting = {
+                topic_key(str(p.payload.get("title", "")))
+                for p in await store.open_proposals(now)
+                if p.kind is ProposalKind.BLOCKER
+            }
+            posted = 0
+            for link in links:
+                task, other = tasks[link.task_id], tasks[link.waits_on]
+                if topic_key(task.title) in silenced | waiting or posted >= MAX_DEPENDENCY_CARDS:
+                    continue
+                payload = BlockerPayload(
+                    context=ProactiveContext(
+                        strategy_id=DEPENDENCY_STRATEGY,
+                        topic=task.title[:120],
+                        evidence=[
+                            Evidence(speaker="Plan", text=f"New task: {task.title}"[:300]),
+                            Evidence(speaker="Plan", text=f"Open task: {other.title}"[:300]),
+                        ],
+                    ),
+                    task_id=task.task_id,
+                    title=task.title,
+                    depends_on_task_id=other.task_id,
+                    question=f"Does “{task.title}” wait on “{other.title}”? {link.reason}"[:300],
+                    certainty=BlockerCertainty.POSSIBLE,
+                )
+                proposal = await self._service().create(
+                    ProposalKind.BLOCKER, payload, rationale=rationale, origin_channel=channel
+                )
+                await self._send_proposal(proposal)
+                waiting.add(topic_key(task.title))
+                posted += 1
+        except Exception:
+            # Project rule: a suggestion that fails never breaks the plan or the chat.
+            logger.exception("dependency suggestion failed")
 
     async def _run(self, handler, message) -> None:
         try:
@@ -107,6 +199,9 @@ class PlanCommands:
     # ------------------------------------------------------------------
 
     async def _planning(self, message) -> None:
+        if message.args.get("owners") is True:
+            await self._find_owners(message)
+            return
         members = self._participants()
         chosen: list[PlanItem] = []  # tasks whose owner the members already chose
         text = str(message.args.get("text", "")).strip()[:MAX_TASKS_TEXT]
@@ -151,6 +246,34 @@ class PlanCommands:
         )
         await self._send_proposal(proposal)
         await self._notice(True, "Plan card posted: any member can confirm or reject it.", message.request_id)
+
+    async def _find_owners(self, message) -> None:
+        """
+        "Find owners" (Matteo, 20/11): every open task with no owner, and the
+        member Cadence suggests for each from the profiles, in one plan card.
+        Confirming gives each task that owner (a task someone took meanwhile
+        is left alone). Nothing changes before a member confirms.
+        """
+        members = self._participants()
+        state = await self._store().load_state()
+        ownerless = [t for t in state.tasks if t.owner_id is None and t.status != TaskStatus.DONE][:15]
+        if not ownerless:
+            await self._notice(True, "Every open task already has an owner.", message.request_id)
+            return
+        text = "\n".join(t.title for t in ownerless)
+        draft = await self._writer.draft_plan(text, members=members, state=state, today=self._today())
+        if draft is None or len(draft.payload.items) != len(ownerless):
+            await self._unavailable(message.event, message.request_id)
+            return
+        items = [
+            PlanItem(title=task.title, owner_id=item.owner_id, reason=item.reason, due_date=task.due_date, task_id=task.task_id)
+            for task, item in zip(ownerless, draft.payload.items)
+        ]
+        proposal = await self._service().create(
+            ProposalKind.PLAN, PlanPayload(items=items), rationale=draft.rationale, origin_channel=message.channel
+        )
+        await self._send_proposal(proposal)
+        await self._notice(True, "Cadence suggested owners in a card: any member can confirm it.", message.request_id)
 
     async def _checkin(self, message) -> None:
         await self.run_checkin(message.channel, message.request_id, quiet=False)
@@ -207,17 +330,37 @@ class PlanCommands:
     async def _ask(self, message) -> None:
         question = str(message.args.get("question", "")).strip()[:MAX_QUESTION]
         if not question:
-            await self._notice(False, "Write your question after @coordinator.", message.request_id)
+            await self._notice(False, "Write what you want to ask Cadence.", message.request_id)
             return
-        state = await self._store().load_state()
-        if not (state.tasks or state.milestones or state.decisions):
-            await self._notice(True, NOT_SAVED, message.request_id)  # nothing to read: no model call
-            return
-        answer = await self._writer.answer_question(question, members=self._participants(), state=state)
+        store = self._store()
+        state = await store.load_state()
+        members = self._participants()
+        chat = await self._recent_chat() if self._recent_chat is not None else []
+        maybe = message.args.get("maybe") is True  # a follow-up that does not name Cadence
+        answer = await self._writer.answer_question(
+            question,
+            members=members,
+            state=state,
+            documents=await store.document_texts(),
+            chat=chat,
+            today=self._today(),
+            maybe=maybe,
+        )
         if answer is None:
-            await self._unavailable(message.event, message.request_id)
+            if maybe:  # a guess that failed: silence, never "unavailable" for a message not sent to Cadence
+                await self._notice(True, "", message.request_id)
+            else:
+                await self._unavailable(message.event, message.request_id)
             return
-        await self._notice(True, ask_text(answer, self._participants()), message.request_id)
+        if not answer.answer:  # not meant for Cadence: it stays silent, nothing is remembered
+            await self._notice(True, "", message.request_id)
+            return
+        text = ask_text(answer, members)
+        await self._notice(True, text, message.request_id)
+        if self._remember is not None:
+            # The question and the answer join the chat's memory: the next
+            # message, a follow-up or a catch-up sees them.
+            await self._remember(message.member_id, question, answer.answer)
 
     async def _on_task(self, message) -> None:
         """
@@ -253,15 +396,50 @@ class PlanCommands:
                 await self._notice(False, f"Write the task in a few words (up to {MAX_TITLE} characters).", message.request_id)
                 return
             fields["title"] = title
+        if "progress" in args:
+            try:
+                progress = int(args.get("progress"))
+            except (TypeError, ValueError):
+                progress = -1
+            if not 0 <= progress <= 100:
+                await self._notice(False, "Progress is a number from 0 to 100.", message.request_id)
+                return
+            fields["progress"] = progress
+        if "description" in args:
+            description = str(args.get("description") or "").strip()
+            if len(description) > MAX_TEXT:
+                await self._notice(False, f"Keep the description under {MAX_TEXT} characters.", message.request_id)
+                return
+            fields["description"] = description
+
+        tasks = (await self._store().load_state()).tasks
+        depends_on: list[str] | None = None
+        if "depends_on" in args:
+            depends_on = _task_ids(args.get("depends_on"), tasks)
+            if depends_on is None:
+                await self._notice(False, "Choose the tasks it waits on from the ones in this plan.", message.request_id)
+                return
 
         if "add" in args:
-            await self._store().add_task_by_hand(new_id(), fields["title"], fields.get("owner_id"), fields.get("due_date"))
+            try:
+                await self._store().add_task_by_hand(
+                    new_id(), fields["title"], fields.get("owner_id"), fields.get("due_date"), fields.get("description", ""), depends_on
+                )
+            except DependencyError as error:
+                await self._notice(False, _dependency_refusal(error), message.request_id)
+                return
             owner_name = members.get(fields.get("owner_id"), "nobody yet")
             await self._notice(True, f"Task added: “{fields['title']}” ({owner_name}).", message.request_id)
             await self._send_state("")
+            if not depends_on:  # the member already said what it waits on: nothing to suggest
+                added = next(
+                    (t.task_id for t in (await self._store().load_state()).tasks if t.task_id not in {x.task_id for x in tasks}),
+                    None,
+                )
+                if added:
+                    self.suggest_dependencies([added], message.channel)
             return
 
-        tasks = (await self._store().load_state()).tasks
         ref = str(args.get("task", "")).strip()
         task = next((t for t in tasks if t.task_id == ref), None)
         if task is None and ref.isdigit() and 1 <= int(ref) <= len(tasks):
@@ -274,10 +452,14 @@ class PlanCommands:
             await self._notice(True, f"“{task.title}” was removed from the plan.", message.request_id)
             await self._send_state("")
             return
-        if not fields:
-            await self._notice(False, "Say what to change: status, owner, date or title.", message.request_id)
+        if not fields and depends_on is None:
+            await self._notice(False, "Say what to change: status, owner, date, title, description, progress or what it waits on.", message.request_id)
             return
-        await self._store().edit_task(task.task_id, fields)
+        try:
+            await self._store().edit_task(task.task_id, fields, depends_on)
+        except DependencyError as error:
+            await self._notice(False, _dependency_refusal(error), message.request_id)
+            return
         changes = []
         if "status" in fields:
             changes.append(f"is now {fields['status']}")
@@ -287,6 +469,12 @@ class PlanCommands:
             changes.append(f"is due {fields['due_date']}" if fields["due_date"] else "has no date")
         if "title" in fields:
             changes.append("was renamed")
+        if "description" in fields:
+            changes.append("has a new description" if fields["description"] else "has no description")
+        if "progress" in fields:
+            changes.append(f"is {fields['progress']}% done")
+        if depends_on is not None:
+            changes.append(f"waits on {len(depends_on)} task{'s' if len(depends_on) != 1 else ''}" if depends_on else "waits on nothing")
         await self._notice(True, f"“{fields.get('title', task.title)}” {', '.join(changes)}.", message.request_id)
         await self._send_state("")
 
@@ -329,6 +517,33 @@ class PlanCommands:
         await self._send_state("")
 
 
+def _task_ids(value, tasks) -> list[str] | None:
+    """
+    The task ids behind a "waits on" list: each item is a task id or the number
+    shown in the plan. None when it is not a list or names a task that is not there.
+    """
+    if not isinstance(value, list):
+        return None
+    ids: list[str] = []
+    for item in value:
+        ref = str(item).strip()
+        task = next((t for t in tasks if t.task_id == ref), None)
+        if task is None and ref.isdigit() and 1 <= int(ref) <= len(tasks):
+            task = tasks[int(ref) - 1]
+        if task is None:
+            return None
+        ids.append(task.task_id)
+    return ids
+
+
+def _dependency_refusal(error: DependencyError) -> str:
+    if error.kind == "itself":
+        return "A task cannot wait on itself."
+    if error.kind == "loop":
+        return "That would make a loop: the tasks would wait on each other and none could start."
+    return "Choose the tasks it waits on from the ones in this plan."
+
+
 _INVALID = object()
 
 
@@ -359,18 +574,18 @@ def why_text(answer: WhyAnswer, members: dict[int, str]) -> str:
 
 
 def ask_text(answer: AskAnswer, members: dict[int, str]) -> str:
-    """The answer, then every saved item it rests on; with no source, the fixed "nothing saved" line."""
-    if not answer.found:
-        return NOT_SAVED
-    lines = [answer.answer]
-    for t in answer.tasks:
-        owner = members.get(t.owner_id, "a member") if t.owner_id else "no owner"
-        due = t.due_date.strftime("%d %b") if t.due_date else "no date"
-        lines.append(f"Source: task “{t.title}” ({owner}, due {due}, {t.status.value}).")
-    for m in answer.milestones:
-        lines.append(f"Source: milestone “{m.title}” ({m.due_date.strftime('%d %b') if m.due_date else 'no date'}).")
-    lines.extend(_decision_source(d, members) for d in answer.decisions)
-    return "\n".join(lines)
+    """
+    The answer, then one short "From:" line naming what it rests on (tasks,
+    milestones, decisions, documents), so the group can check it. No line
+    when the answer rests on nothing saved (advice, or "it is not there").
+    """
+    sources = [f"task “{t.title}”" for t in answer.tasks]
+    sources += [f"milestone “{m.title}”" for m in answer.milestones]
+    sources += [f"decision “{d.choice}”" for d in answer.decisions]
+    sources += [f"“{name}”" for name in answer.documents]
+    if not sources:
+        return answer.answer
+    return f"{answer.answer}\nFrom: {', '.join(sources)}."
 
 
 def _decision_source(d: Decision, members: dict[int, str]) -> str:

@@ -8,9 +8,9 @@ trigger_description: >
   do it, or nobody has said by when. Look for an action the group clearly
   wants done, followed by messages that move on without an owner or a date.
   Do NOT fire for: an idea that is still being discussed and not yet agreed;
-  an action someone already took ("I'll do it", "I can handle that");
-  vague wishes with no concrete result; jokes; work outside the project;
-  a task the project plan already shows with an owner.
+  an action someone already took ("I'll do it", "I can handle that", "on
+  it"); vague wishes with no concrete result; jokes; work outside the
+  project; a task the Project memory already shows with an owner and a date.
 cooldown_messages: 10
 trigger_variables: []
 prompt_template: |

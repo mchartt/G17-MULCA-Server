@@ -256,3 +256,83 @@ Newest first. Each entry: date, decision, alternatives, reason, status.
 - **Limits:** the mirror and the shared cards reach sessions open in the same
   server process; a channel whose session is closed sees them through
   `catchup` and the next state it asks for. NOT VERIFIED live on Render.
+
+## 2026-11-19 · K1 the observer sees the project; K2 CS7 v2 (possible dependencies)
+
+- **Problem (tutor 18/11, audit G0):** the intervention agent judged the
+  coordinator strategies from the chat alone. It could not notice that a test
+  on Friday needs an API that is due Saturday, nor a decision being reopened:
+  those facts are in the plan and the decision log, not in the last messages.
+- **K1 decision:** when the coordinator is on, the observer's turn update
+  ("Current trigger variables: …") ends with a short **Project memory**
+  (`coordination/project_memory.py`): open tasks with owner, date, status and
+  what they wait on; milestones of the next 14 days; the last 8 decisions with
+  their reason. Built in code from the database, never by a model. Sent only
+  when it changes, or again every 25 messages (the observer's context is
+  trimmed). Hook: `CoalaPolicy._project_note` (policy.py, ~15 lines). With the
+  coordinator off, with no bridge, with nothing saved or on any error the
+  update is byte-for-byte the lab's (test
+  `test_policy_turn_update_is_the_labs_when_off_unchanged_or_failing`).
+  Cost: a few hundred input tokens, only on the turns where the plan changed.
+- **K2 decision:** CS7 cards say how sure they are. `certainty = blocked`
+  (a member said they are stuck: as before, confirming marks the task
+  blocked) or `possible` (inferred from the chat and the plan: the card asks
+  the group to confirm; confirming only records the dependency, never marks
+  anything blocked). A possible dependency must name what it may wait on: a
+  plan task or, if the plan does not have it, its title from the chat, added
+  without owner on confirmation. Up to three `ways_forward` (mock data, a
+  minimal version first, swap the order) are suggestions, not state changes.
+  New R7: no card for a dependency the plan already records.
+- **Not changed:** the lab strategies (`resolve_conflict` overlap with CS3
+  stays Matteo's decision), the Realtime evaluator, R1-R6.
+- **Status:** IMPLEMENTED/TESTED OFFLINE (26 tests). Whether the evaluator
+  actually fires CS7 on the corpus in `CS_CORPUS.md`: NOT VERIFIED (live run).
+
+## 2026-11-19 · K3 a reopened decision (scenario C)
+
+- **Problem:** "let's say Marco reopens a decision. How does Cadence detect
+  that this decision was already made?" (tutor 18/11, via Gabriele's report).
+  Before K3 the honest answer was "it doesn't; `why` answers if asked".
+- **Decision:** new strategy `cs3_reopened_decision` (kept apart from CS3:
+  CS3 closes an open question, this one recalls a closed one). The observer
+  judges it from the chat **and** the Project memory (K1), which lists the
+  decisions with their reason. The card (kind `revisit`) recalls the
+  question, the choice and the reason **copied from the log by the server**,
+  says what seems new (`new_point`, "" if nothing), and offers
+  Keep (option 0: nothing changes, the card records who kept it) /
+  Reopen it (option 1: `coord_decision.reopened_at/by` set; the old choice and
+  reason stay in the log; a later CS3 can close it again) / Not now.
+  Uses the existing `choose` action: no protocol change. Migration: two
+  nullable columns, added to older files at open.
+- **Status:** IMPLEMENTED/TESTED OFFLINE (12 tests). Clients must render the
+  `revisit` card (U3). Detection quality: NOT VERIFIED until the corpus runs live.
+
+## 2026-11-19 · R8 no second card on the same thing
+
+- A card still waiting for a click (same kind and topic, or for CS5/CS2 the
+  same task title) stops a new draft from being posted
+  (`proactive._duplicate`, `store.open_proposals`). The first card stays
+  answerable; a copy would only add noise (CCLT: coordination is a cost too).
+  Code, not model. Tested offline.
+
+## 2026-11-19 · Slice C: a task made by hand has a description and what it waits on
+
+- **Decision:** the hand command `task` accepts two more arguments:
+  `description` (up to 2000 characters, "" clears it) and `depends_on` (a
+  list of task ids or plan numbers; [] clears it), on add and on edit. The
+  server refuses a task that waits on itself, on an unknown task, or in a
+  loop (A waits on B, B on A, through any tasks), and saves nothing.
+  The check runs inside the same transaction as the write
+  (`store._replace_dependencies`), so two members cannot race a loop in.
+- **Why:** the "+ New" popup and the dependency page need both; the table
+  `coord_task_dependency` already existed but nothing by hand wrote it.
+- **Protocol:** additive. Old clients send neither argument and nothing
+  changes. Migration: one column with a default, added to older files at open.
+  By hand = no card, no model call. Approved by the user on 2026-11-19
+  (decision 2 of the plan).
+- **Known gap (not fixed here):** a CS7 card that confirms "A waits on B"
+  (`blocker_applier`) does not run the loop check. IDEA: reuse
+  `_replace_dependencies` there, with its own decision.
+- **Open question:** hand-added tasks accept a past date (the planning list
+  refuses it). Left as is: a member may log work that is already late.
+- **Status:** IMPLEMENTED/TESTED OFFLINE (9 tests, `test_coordinator_task_details.py`).
