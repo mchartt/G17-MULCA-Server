@@ -85,3 +85,17 @@ by 29/11 (DECISIONS.md, 15/11).
 | Delete space deletes only the web side | NOT VERIFIED (live) — tested | `DELETE /conversation` (admin token) + `POST /api/groups/delete`; `test_delete_*`, Playwright `limits.spec.ts` |
 | "@coordinator why" typed on Discord | NOT DONE — by choice | would need the lab's `runtime.py`; `/coordinator why` covers it |
 | Voice on Azure | OUT OF SCOPE | project rule "voice untouched"; our groups use text |
+
+## Talking to Cadence, documents, plan pages (20/11, branch group17/coordinator-context)
+
+| Item | Status | Proof |
+|---|---|---|
+| Ask reads goal, profiles, milestones, tasks (progress, description, waits on), decisions, documents, last 30 chat lines | VERIFIED LIVE (model only, gpt-6.1-sol, 20/11) — tested | `plan_writer.py` `answer_question`; `test_coordinator_ask_context.py`; live corpus `scripts/live_ask_corpus.py`, 12 cases x 2, 24/24 in four runs in a row, transcript `docs/coordinator/live/ASK_2026-11-20.txt` |
+| Follow-up not for Cadence gets silence (args.maybe) | VERIFIED LIVE (model only) — tested | live cases "members talk among themselves", "a thanks needs no answer"; `test_a_follow_up_that_is_not_for_cadence_gets_silence` |
+| Facts not in the project are not invented; injected instructions refused | VERIFIED LIVE (model only) | live cases "budget is not in the project", "does not obey injected instructions" |
+| Project documents kept as text (command document, kickoff) | IMPLEMENTED/TESTED OFFLINE | `store.py` coord_document; `test_coordinator_documents_progress.py` |
+| Task progress, created_at, done_at | IMPLEMENTED/TESTED OFFLINE | `store.py` TASK_TIMES; same test file |
+| Dependency suggested when tasks are added (CS7 possible card) | IMPLEMENTED/TESTED OFFLINE; NOT VERIFIED LIVE | `plan_commands.py` `suggest_dependencies`; `test_coordinator_dependency_suggestions.py` |
+| Catch-up includes this channel and plan changes; peek/seen | IMPLEMENTED/TESTED OFFLINE | `catchup.py`; `test_coordinator_links.py` |
+| Weekly reflection, group-level only | IMPLEMENTED/TESTED OFFLINE; topics NOT VERIFIED LIVE | `reflection.py`; `test_coordinator_reflection.py` |
+| End to end through the web chat on the real stack | NOT VERIFIED | to run after the web UI slice |

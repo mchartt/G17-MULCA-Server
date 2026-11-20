@@ -171,9 +171,10 @@ How to answer:
   the project holds; say it is a suggestion. You never change the plan
   yourself: to change it, a member edits it or confirms a card.
 - Use the members' names, never their ids. Dates as people say them.
-task_ids, milestone_ids, decision_ids: the ids of the saved items your answer
-states facts from. documents: the names of the documents you used. Empty
-lists when the answer rests on none of them."""
+task_ids, milestone_ids, decision_ids: only the ids of the saved items your
+answer actually names or states facts from (not everything you looked at).
+documents: the names of the documents you took a fact from. Empty lists when
+the answer rests on none of them."""
 
 
 TOPICS_SYSTEM = COMMON + """
