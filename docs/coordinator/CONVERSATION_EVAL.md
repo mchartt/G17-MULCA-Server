@@ -168,6 +168,24 @@ conversation logs it, the proactive judge reads it). Before, every message for
 `plan.spec` (CS3 "Think-aloud or SUS?") and `opener.spec` failed on HEAD
 for this reason; both pass now.
 
+Live, real model (`gpt-6.1-sol` on Azure, `scripts/live_conversation_corpus.py`,
+20/11 evening, model text path only: the Realtime judge and the adapters are
+not in this run):
+
+| Split | Category | Result |
+|---|---|---|
+| awareness (dev) | identity (asker known, same-name record) | 9/9 (3 cases x 3) |
+| awareness (dev) | focus (progress, date, owner, "da cosa dipende") | 15/15 |
+| awareness (dev) | silence on Matteo's 3 sentences | 9/9 |
+| awareness_holdout | silence on 4 unseen paraphrases | 12/12 |
+| awareness_holdout | requests with the name mid-sentence | 9/9 |
+| whole corpus, 1 run | regression 7/7, dev 26/26, holdout 19/19, awareness 18/18 | 70/70 |
+
+Raw outputs: `live/AWARENESS_2026-11-20_x3.txt`,
+`live/CONVERSATION_CORPUS_2026-11-20_run6_awareness.txt`. Pattern checkers,
+not human judgement: naturalness is not scored. Earlier runs' scores for the
+cases with a `\b` pattern were optimistic (the 0x08 bytes, now fixed).
+
 Proof on this branch: pytest server 764, client 379; Vitest 167; Playwright
 e2e 16/16 (HEAD: 3 failing, same stack); axe 0 violations on 5 screens
 (`e2e/axe.mjs` opened the landing for the sign-up form, now on /login).
@@ -176,9 +194,9 @@ Known limits (decisions for Matteo):
 - Discord/Slack: an @mention of the bot or a sure call goes to the
   coordinator only, so it no longer reaches the lab agent (its web search
   included), and a message Cadence answers is not judged by CS5/CS7 too.
-- Silence on talk ABOUT Cadence rests on the prompt (MAYBE_NOTE): NOT VERIFIED
-  with a real model. Earlier corpora showed the prompt alone did not always
-  hold such rules.
+- Silence on talk ABOUT Cadence rests on the prompt (MAYBE_NOTE). Measured
+  live below on 7 sentences x 3 runs; a wider set of real group chat may
+  still find cases it answers.
 
 NOT IMPLEMENTED (fit the existing action → card → click pattern): milestone
 reschedule by chat, dependency removal by chat, cancelling a pending card by

@@ -1,0 +1,278 @@
+
+[PASS] awareness/identity A: my tasks, the asker is known #1 (gpt-6.1-sol)
+  > Controlla le mie task.
+  Nel piano hai due task:
+  - Implementare le API REST: in corso al **50%**, scadenza **28 novembre**. In chat hai detto che le API dei task sono pronte e mancano quelle delle decisioni; questo dettaglio non è ancora registrato nel piano.
+  - Configurare il repository: completata al 100%, senza scadenza indicata.
+  From: task “Implement the REST API”, task “Set up the repository”.
+
+[PASS] awareness/identity A: my tasks, the asker is known #2 (gpt-6.1-sol)
+  > Controlla le mie task.
+  Nel piano hai due task:
+  - Implementare le API REST: in corso al **50%**, scadenza **28 novembre**. In chat hai detto che le API per i task sono pronte e mancano quelle per le decisioni; questo dettaglio non è ancora registrato nel piano.
+  - Configurare il repository: completata al 100%, senza scadenza indicata.
+  From: task “Implement the REST API”, task “Set up the repository”.
+
+[PASS] awareness/identity A: my tasks, the asker is known #3 (gpt-6.1-sol)
+  > Controlla le mie task.
+  Nel piano hai due task:
+  - Implementare le REST API: in corso al **50%**, scadenza **28 novembre**. In chat hai detto che le API per i task sono pronte e mancano quelle per le decisioni; questo dettaglio non è ancora registrato nel piano.
+  - Configurare il repository: completata al 100%, senza scadenza indicata.
+  From: task “Implement the REST API”, task “Set up the repository”.
+
+[PASS] awareness/identity A: my deadlines #1 (gpt-6.1-sol)
+  > quali sono le mie scadenze?
+  Nel piano, la tua scadenza è il **23 novembre** per il primo mockup, attualmente al 70%. In chat hai detto che lo caricherai domani, 21 novembre: questa data non è ancora registrata nel piano.
+  From: task “Create first mockup”.
+
+[PASS] awareness/identity A: my deadlines #2 (gpt-6.1-sol)
+  > quali sono le mie scadenze?
+  Nel piano, la tua scadenza è il **23 novembre** per il primo mockup, segnato al 70%. In chat hai detto che lo caricherai domani, 21 novembre: questa data non è ancora registrata nel piano.
+  From: task “Create first mockup”.
+
+[PASS] awareness/identity A: my deadlines #3 (gpt-6.1-sol)
+  > quali sono le mie scadenze?
+  Nel piano, la tua scadenza è il **23 novembre** per il primo mockup, segnato al 70%. In chat hai detto che lo carichi domani, 21 novembre: è una previsione, non una modifica della scadenza nel piano.
+  From: task “Create first mockup”.
+
+[PASS] awareness/identity A: same name, other record has the tasks #1 (gpt-6.1-sol)
+  > Controlla le mie task.
+  Nel piano non hai task assegnate al tuo account. L’altro record con il tuo stesso nome ha «Rivedere e correggere il RASD», in corso al 40%, con scadenza il 24 novembre.
+  From: task “Rivedere e correggere il RASD”.
+
+[PASS] awareness/identity A: same name, other record has the tasks #2 (gpt-6.1-sol)
+  > Controlla le mie task.
+  Nel piano non hai task assegnate. L’altro record con il tuo stesso nome ha «Rivedere e correggere il RASD», al 40% e con scadenza il 24 novembre; se vuoi, possiamo proporre di assegnarla a te.
+  From: task “Rivedere e correggere il RASD”.
+
+[PASS] awareness/identity A: same name, other record has the tasks #3 (gpt-6.1-sol)
+  > Controlla le mie task.
+  Nel piano non ci sono task assegnate a te. L'altro record con il tuo stesso nome ha «Rivedere e correggere il RASD», in corso al 40%, con scadenza il 24 novembre.
+  From: task “Rivedere e correggere il RASD”.
+
+[PASS] awareness/focus B: progress with the task in focus #1 (gpt-6.1-sol)
+  > Sono al 70%.
+  L’aggiornamento di «Implement the REST API» al 70% è pronto su una card da confermare.
+    ACTION update_task: task=t3 title='Implement the REST API' owner=None due=None waits_on='' delivered_by=None
+
+[PASS] awareness/focus B: progress with the task in focus #2 (gpt-6.1-sol)
+  > Sono al 70%.
+  L’aggiornamento delle API REST al 70% è pronto su una scheda da confermare.
+    ACTION update_task: task=t3 title='Implement the REST API' owner=None due=None waits_on='' delivered_by=None
+
+[PASS] awareness/focus B: progress with the task in focus #3 (gpt-6.1-sol)
+  > Sono al 70%.
+  L’aggiornamento delle API REST al 70% è pronto su una scheda da confermare.
+    ACTION update_task: task=t3 title='Implement the REST API' owner=None due=None waits_on='' delivered_by=None
+
+[PASS] awareness/focus B: screenshot sentence, one open task #1 (gpt-6.1-sol)
+  > sono all'80% della mia task.
+  L’aggiornamento della tua task sulle API REST all’80% è pronto su una card da confermare.
+    ACTION update_task: task=t3 title='Implement the REST API' owner=None due=None waits_on='' delivered_by=None
+
+[PASS] awareness/focus B: screenshot sentence, one open task #2 (gpt-6.1-sol)
+  > sono all'80% della mia task.
+  L’aggiornamento di «Implement the REST API» all’80% è pronto su una scheda da confermare.
+    ACTION update_task: task=t3 title='Implement the REST API' owner=None due=None waits_on='' delivered_by=None
+
+[PASS] awareness/focus B: screenshot sentence, one open task #3 (gpt-6.1-sol)
+  > sono all'80% della mia task.
+  L’aggiornamento di «Implement the REST API» all’80% è pronto su una scheda da confermare.
+    ACTION update_task: task=t3 title='Implement the REST API' owner=None due=None waits_on='' delivered_by=None
+
+[PASS] awareness/focus B: move it to Friday #1 (gpt-6.1-sol)
+  > spostala a venerdì prossimo
+  Lo spostamento della task delle API REST a venerdì prossimo, **27 novembre**, è pronto sulla scheda da confermare.
+    ACTION update_task: task=t3 title='Implement the REST API' owner=None due=2026-11-27 waits_on='' delivered_by=None
+
+[PASS] awareness/focus B: move it to Friday #2 (gpt-6.1-sol)
+  > spostala a venerdì prossimo
+  Lo spostamento della scadenza delle API REST a venerdì prossimo, 27 novembre, è pronto su una scheda da confermare.
+    ACTION update_task: task=t3 title='Implement the REST API' owner=None due=2026-11-27 waits_on='' delivered_by=None
+
+[PASS] awareness/focus B: move it to Friday #3 (gpt-6.1-sol)
+  > spostala a venerdì prossimo
+  Lo spostamento della scadenza delle API REST a venerdì 27 novembre è pronto su una card da confermare.
+    ACTION update_task: task=t3 title='Implement the REST API' owner=None due=2026-11-27 waits_on='' delivered_by=None
+
+[PASS] awareness/focus B: what does it depend on #1 (gpt-6.1-sol)
+  > e da cosa dipende?
+  Nel piano, i test di integrazione dipendono dal completamento delle API REST di Bruno Neri. Il collegamento è stato aggiunto manualmente da Bruno.
+  From: task “Integration tests”, task “Implement the REST API”.
+
+[PASS] awareness/focus B: what does it depend on #2 (gpt-6.1-sol)
+  > e da cosa dipende?
+  Nel piano, i test di integrazione dipendono dal completamento delle **API REST**. Il collegamento è stato inserito manualmente da Bruno Neri.
+  From: task “Integration tests”, task “Implement the REST API”.
+
+[PASS] awareness/focus B: what does it depend on #3 (gpt-6.1-sol)
+  > e da cosa dipende?
+  I test di integrazione dipendono dal completamento di **Implement the REST API**, assegnata a Bruno Neri. Il collegamento è registrato nel piano ed è stato inserito manualmente da Bruno.
+  From: task “Integration tests”, task “Implement the REST API”.
+
+[PASS] awareness/focus B: reassign it #1 (gpt-6.1-sol)
+  > allora riassegnala a Bruno
+  La riassegnazione del Design Document a Bruno è pronta su una scheda da confermare.
+    ACTION update_task: task=t6 title='Write the Design Document' owner=3 due=None waits_on='' delivered_by=None
+
+[PASS] awareness/focus B: reassign it #2 (gpt-6.1-sol)
+  > allora riassegnala a Bruno
+  La riassegnazione del Design Document a Bruno è pronta su una scheda da confermare.
+    ACTION update_task: task=t6 title='Write the Design Document' owner=3 due=None waits_on='' delivered_by=None
+
+[PASS] awareness/focus B: reassign it #3 (gpt-6.1-sol)
+  > allora riassegnala a Bruno
+  La riassegnazione del Design Document a Bruno è pronta su una scheda da confermare.
+    ACTION update_task: task=t6 title='Write the Design Document' owner=3 due=None waits_on='' delivered_by=None
+
+[PASS] awareness/silence S: Cadence è troppo forte #1 (gpt-6.1-sol)
+  > Cadence è troppo forte  (maybe)
+  (silent)
+
+[PASS] awareness/silence S: Cadence è troppo forte #2 (gpt-6.1-sol)
+  > Cadence è troppo forte  (maybe)
+  (silent)
+
+[PASS] awareness/silence S: Cadence è troppo forte #3 (gpt-6.1-sol)
+  > Cadence è troppo forte  (maybe)
+  (silent)
+
+[PASS] awareness/silence S: secondo me Cadence è inutile #1 (gpt-6.1-sol)
+  > Secondo me Cadence è inutile  (maybe)
+  (silent)
+
+[PASS] awareness/silence S: secondo me Cadence è inutile #2 (gpt-6.1-sol)
+  > Secondo me Cadence è inutile  (maybe)
+  (silent)
+
+[PASS] awareness/silence S: secondo me Cadence è inutile #3 (gpt-6.1-sol)
+  > Secondo me Cadence è inutile  (maybe)
+  (silent)
+
+[PASS] awareness/silence S: mannaggia #1 (gpt-6.1-sol)
+  > Mannaggia me sa che cadence non basta  (maybe)
+  (silent)
+
+[PASS] awareness/silence S: mannaggia #2 (gpt-6.1-sol)
+  > Mannaggia me sa che cadence non basta  (maybe)
+  (silent)
+
+[PASS] awareness/silence S: mannaggia #3 (gpt-6.1-sol)
+  > Mannaggia me sa che cadence non basta  (maybe)
+  (silent)
+
+[PASS] awareness_holdout/silence SH: praise in passing #1 (gpt-6.1-sol)
+  > oggi Cadence è stata utilissima col RASD  (maybe)
+  (silent)
+
+[PASS] awareness_holdout/silence SH: praise in passing #2 (gpt-6.1-sol)
+  > oggi Cadence è stata utilissima col RASD  (maybe)
+  (silent)
+
+[PASS] awareness_holdout/silence SH: praise in passing #3 (gpt-6.1-sol)
+  > oggi Cadence è stata utilissima col RASD  (maybe)
+  (silent)
+
+[PASS] awareness_holdout/silence SH: told someone about it #1 (gpt-6.1-sol)
+  > ho detto a Giulia che Cadence può aiutarla col mockup  (maybe)
+  (silent)
+
+[PASS] awareness_holdout/silence SH: told someone about it #2 (gpt-6.1-sol)
+  > ho detto a Giulia che Cadence può aiutarla col mockup  (maybe)
+  (silent)
+
+[PASS] awareness_holdout/silence SH: told someone about it #3 (gpt-6.1-sol)
+  > ho detto a Giulia che Cadence può aiutarla col mockup  (maybe)
+  (silent)
+
+[PASS] awareness_holdout/silence SH: complaint #1 (gpt-6.1-sol)
+  > boh cadence a volte non capisce niente  (maybe)
+  (silent)
+
+[PASS] awareness_holdout/silence SH: complaint #2 (gpt-6.1-sol)
+  > boh cadence a volte non capisce niente  (maybe)
+  (silent)
+
+[PASS] awareness_holdout/silence SH: complaint #3 (gpt-6.1-sol)
+  > boh cadence a volte non capisce niente  (maybe)
+  (silent)
+
+[PASS] awareness_holdout/silence SH: comparison #1 (gpt-6.1-sol)
+  > meglio Cadence che i fogli Excel del prof  (maybe)
+  (silent)
+
+[PASS] awareness_holdout/silence SH: comparison #2 (gpt-6.1-sol)
+  > meglio Cadence che i fogli Excel del prof  (maybe)
+  (silent)
+
+[PASS] awareness_holdout/silence SH: comparison #3 (gpt-6.1-sol)
+  > meglio Cadence che i fogli Excel del prof  (maybe)
+  (silent)
+
+[PASS] awareness_holdout/mid_request RH: request with the name mid-sentence #1 (gpt-6.1-sol)
+  > puoi dirmi tu cadence chi fa i test di integrazione?  (maybe)
+  Nel piano, i test di integrazione **non hanno ancora un responsabile**. Potete decidere insieme a chi assegnarli.
+  From: task “Integration tests”.
+
+[PASS] awareness_holdout/mid_request RH: request with the name mid-sentence #2 (gpt-6.1-sol)
+  > puoi dirmi tu cadence chi fa i test di integrazione?  (maybe)
+  Nel piano i test di integrazione **non hanno ancora un responsabile**. Potete decidere insieme chi se ne occupa.
+  From: task “Integration tests”.
+
+[PASS] awareness_holdout/mid_request RH: request with the name mid-sentence #3 (gpt-6.1-sol)
+  > puoi dirmi tu cadence chi fa i test di integrazione?  (maybe)
+  Nel piano i test di integrazione **non hanno ancora un responsabile**. Potete decidere insieme a chi assegnarli.
+  From: task “Integration tests”.
+
+[PASS] awareness_holdout/mid_request RH: reminder with the name mid-sentence #1 (gpt-6.1-sol)
+  > mi ricordi cadence quando è la demo  (maybe)
+  La demo del prototipo è il **9 dicembre 2026**, come riportato nel piano.
+  From: milestone “Prototype demo”.
+
+[PASS] awareness_holdout/mid_request RH: reminder with the name mid-sentence #2 (gpt-6.1-sol)
+  > mi ricordi cadence quando è la demo  (maybe)
+  La demo del prototipo è il **9 dicembre 2026**, come previsto nel piano.
+  From: milestone “Prototype demo”.
+
+[PASS] awareness_holdout/mid_request RH: reminder with the name mid-sentence #3 (gpt-6.1-sol)
+  > mi ricordi cadence quando è la demo  (maybe)
+  La demo del prototipo è il **9 dicembre 2026**, come indicato nel piano.
+  From: milestone “Prototype demo”.
+
+[PASS] awareness_holdout/mid_request RH: dai cadence #1 (gpt-6.1-sol)
+  > dai cadence dimmi cosa manca per il RASD  (maybe)
+  Il RASD va consegnato il **24 novembre**. Da piano e documenti, resta da completare o verificare:
+  - La revisione e correzione: nel piano sei al 40%; in chat hai detto che sei al capitolo 3.
+  - L’analisi delle risposte al sondaggio di Matías: nel piano è ancora da fare. Le note della riunione indicano che quei dati servono all’analisi utenti del RASD.
+  - Almeno **12 casi d’uso** e la matrice di tracciabilità, richiesti da requirements.pdf.
+  Non ho il testo attuale del RASD, quindi non posso dire quali sezioni manchino davvero: incolla l’indice e possiamo controllarlo.
+  From: task “Rivedere e correggere il RASD”, task “Analyse the survey answers”, milestone “RASD hand-in”, “requirements.pdf”, “meeting-notes-17-11.txt”.
+
+[PASS] awareness_holdout/mid_request RH: dai cadence #2 (gpt-6.1-sol)
+  > dai cadence dimmi cosa manca per il RASD  (maybe)
+  Non ho il RASD completo per dirti esattamente cosa manca; dai materiali disponibili risultano questi punti:
+  - Revisione e correzione: nel piano è al 40%; in chat hai detto che sei al capitolo 3, ma questo dettaglio non è ancora registrato.
+  - Analisi dei questionari: nel piano è ancora da fare, assegnata a Matías con scadenza 18 novembre. Le note della riunione indicano che i dati servono all’analisi degli utenti del RASD.
+  - Contenuti da verificare: requirements.pdf richiede almeno 12 casi d’uso e la matrice di tracciabilità; non risulta se siano già completi.
+  - La consegna è il **24 novembre**. Se incolli l’indice e lo stato delle sezioni, possiamo individuare le lacune precise.
+  From: task “Rivedere e correggere il RASD”, task “Analyse the survey answers”, milestone “RASD hand-in”, “requirements.pdf”, “meeting-notes-17-11.txt”.
+
+[PASS] awareness_holdout/mid_request RH: dai cadence #3 (gpt-6.1-sol)
+  > dai cadence dimmi cosa manca per il RASD  (maybe)
+  Non ho il RASD completo per dirti quali sezioni mancano; per la consegna del **24 novembre**, risultano questi punti da chiudere o verificare:
+  - Revisione e correzione: nel piano sei al 40%. In chat hai detto che sei al capitolo 3, ma questo dettaglio non è ancora registrato nel piano.
+  - Analisi dei questionari: nel piano il lavoro di Matías è ancora da iniziare; le note della riunione indicano che quei dati servono all’analisi degli utenti nel RASD.
+  - Almeno 12 casi d’uso e la matrice di tracciabilità: sono richiesti da requirements.pdf, ma non risulta se siano già completi.
+  Se mi passi la bozza, possiamo individuare le lacune precise.
+  From: task “Rivedere e correggere il RASD”, task “Analyse the survey answers”, milestone “RASD hand-in”, “requirements.pdf”, “meeting-notes-17-11.txt”.
+
+=== by split and category ===
+awareness: 33/33
+   focus                  15/15
+   identity               9/9
+   silence                9/9
+awareness_holdout: 21/21
+   mid_request            9/9
+   silence                12/12
+
+54/54 passed in 194 s
