@@ -125,6 +125,40 @@ The shell is a Linux VM; only the connected folder survives between sessions.
 | Render start script | `deploy/render/start.sh` run locally | both processes up, `/api/health`, CORS for the Vercel origin, WebSocket hello, Delete space; agent connection fails with a fake endpoint, as expected |
 | Accessibility | `npm run axe` (fake stack running) | 0 WCAG 2.1 AA violations on landing, console with card, proactive card with Why? open, planning dialog, plan with status selects |
 
+## Plan pages and quick actions (19/11, user: "implementa le modifiche e committa")
+
+Branches (local only, nothing pushed): server `group17/coordinator-plan-pages`
+(on `group17/coordinator-sees-the-project`), project `group17/coordinator-plan-pages`
+(on `group17/coordinator-cards`).
+
+| Slice | What | State |
+|---|---|---|
+| C | Hand command `task`: `description`, `depends_on` (no self, no unknown, no loop; checked in the write's transaction) | IMPLEMENTED/TESTED OFFLINE (9 server tests) |
+| B | "+ New" menu (Task, Milestone), popups New task / New milestone / Today, "Today: n due, n late" line | IMPLEMENTED/TESTED OFFLINE (Vitest) |
+| A | Left rail: Chat (default), Dependencies, Milestones, Reflection | IMPLEMENTED/TESTED OFFLINE (Vitest, Playwright) |
+| D | Dependency graph in plain SVG + the same facts as a list + "Link tasks" popup | IMPLEMENTED/TESTED OFFLINE (6 layout tests, Playwright) |
+| E | Reflection page from the saved plan only (counts, decisions with reasons) | PARTIAL |
+| F | Accessibility and end to end | axe 0 violations on 11 screens; Playwright 11/11 on the offline stack **with the new server on PYTHONPATH** |
+
+**Not built, on purpose**
+- A line in the chat for the whole group ("Ada added X"): needs a new server
+  event or the author in the state, and Discord/Slack render it too. A protocol
+  decision of its own. The author sees a banner; the others see the task appear in the plan.
+- "Decision" in the New menu: no hand path to the decision log exists (decisions
+  come from cards); it would need its own server command.
+- Reflection: the "Coordinator's record" (interventions, confirmed, not now,
+  expired) and Start/Stop/Continue. The server keeps every card's status in
+  `coord_proposal` but the state message does not carry the counts, and no
+  retrospective strategy exists in the code (only mentioned in TRACEABILITY.md).
+  Needs an additive `record` in the state plus a decision on the strategy.
+- Francesco's phase stepper and Ghost to Solid on the panel: left untouched.
+- The dashed "possible dependency" in the graph: it lives only in a pending card, not in the plan.
+
+**NOT VERIFIED:** `vendor/muca-server` (Render) still has the old server, so the
+deployed app has the popups but the server refuses description and depends_on
+until it is updated. Mobile: the rail stacks above the content as the old sidebar did
+(no horizontal overflow; reading a page needs a scroll).
+
 ## Cadence interface v2 (15/11, Matteo: "more premium, softer, Apple-like, no AI fonts")
 
 - Font: SF Pro through the system stack on Apple devices (legal there), Geist

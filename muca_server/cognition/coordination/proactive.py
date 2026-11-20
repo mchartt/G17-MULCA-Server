@@ -23,10 +23,13 @@ rules 4.3 and 11, spec NFR3, GL4, GL10):
     R6  "Not now": a silenced (strategy, topic) never gets a card (checked
         after the draft, when the topic is known)
     R7  CS5: no card for a task the plan already shows with an owner;
-        CS7: no card for a task already marked blocked
+        CS7: no card for a task already marked blocked, or for a dependency
+        the plan already records; K3: no card on a decision already reopened
     R8  no card while the plan opener listens for the group's answers to
         "How do you want to plan the work?" (opener.py): their replies
         ("I take the API") are answers, not gaps to fill
+    R9  no second card while one on the same thing (kind and topic, or task
+        title) is still waiting for a click
 
 R3 and R4 count only cards actually posted: a draft that fails or is
 dropped does not silence the group. Their marker is saved in the group's
@@ -54,8 +57,9 @@ from datetime import date
 from enum import StrEnum
 from typing import Any
 
-from .models import BlockerPayload, Proposal, ProposalKind, TaskAssignmentPayload, TaskStatus
+from .models import BlockerCertainty, BlockerPayload, Proposal, ProposalKind, TaskAssignmentPayload, TaskStatus
 from .plan_writes import topic_key
+from .project_memory import RESEND_EVERY, project_memory
 from .proactive_writer import STRATEGY_KINDS, ChatLine, ProactiveDraft, ProactiveWriter
 from .proposals import ProposalService
 from .store import CoordinationStore
@@ -105,6 +109,9 @@ class ProactiveBridge:
         self._last_count: int | None = None
         self._last_at: float | None = None
         self._mark_loaded = False
+        # K1: the project memory last told to the observer, and when.
+        self._memory_sent: str | None = None
+        self._memory_sent_at_count = 0
 
     # ------------------------------------------------------------------
     # Called by CoalaPolicy
@@ -133,6 +140,28 @@ class ProactiveBridge:
         ]
         self._task = asyncio.create_task(self._post(strategy_id, chat, message_count))
         return Verdict.TAKEN
+
+    async def observer_note(self, message_count: int) -> str:
+        """
+        K1: the project memory for the intervention agent (project_memory.py),
+        or "" when it has not changed since it was last sent and fewer than
+        RESEND_EVERY messages have passed. Called by the policy on every
+        judged turn; a database error gives "" (the turn goes on as before).
+        """
+        try:
+            state = await self._store().load_state()
+            note = project_memory(state, dict(self._members()), self._today())
+        except Exception:
+            logger.exception("%s coordinator: could not build the project memory", self._conversation.conversation_id)
+            return ""
+        if not note:
+            return ""
+        stale = message_count - self._memory_sent_at_count >= RESEND_EVERY
+        if note == self._memory_sent and not stale:
+            return ""
+        self._memory_sent = note
+        self._memory_sent_at_count = message_count
+        return note
 
     async def wait(self) -> None:
         """Wait for a running draft (tests, shutdown)."""
@@ -197,11 +226,14 @@ class ProactiveBridge:
                 tasks=state.tasks,
                 silenced_topics=silenced,
                 today=self._today(),
+                decisions=state.decisions,
             )
             if draft is None:
                 logger.warning("%s coordinator: no valid %s draft, staying silent", conversation_id, strategy_id)
                 return
-            dropped = _dropped(draft, silenced, state.tasks)
+            dropped = _dropped(draft, silenced, state.tasks, state.decisions) or _duplicate(
+                draft, await store.open_proposals(self._clock())
+            )
             if dropped:
                 logger.info("%s coordinator dropped %s: %s", conversation_id, strategy_id, dropped)
                 return
@@ -221,7 +253,26 @@ class ProactiveBridge:
             logger.exception("%s coordinator failed on %s", conversation_id, strategy_id)
 
 
-def _dropped(draft: ProactiveDraft, silenced: list[str], tasks) -> str:
+def _duplicate(draft: ProactiveDraft, open_cards: list[Proposal]) -> str:
+    """
+    R9: a card still waiting for a click already asks the same thing (same
+    kind and topic, or for CS5/CS2 the same task title). The group can still
+    answer the first one; a second copy would only be noise.
+    """
+    topic = topic_key(draft.payload.context.topic)
+    title = topic_key(getattr(draft.payload, "title", "") or "")
+    for card in open_cards:
+        if card.kind is not draft.kind:
+            continue
+        context = card.payload.get("context") or {}
+        if topic_key(context.get("topic", "")) == topic:
+            return "R9 an open card already asks this"
+        if title and topic_key(card.payload.get("title", "") or "") == title:
+            return "R9 an open card already asks this"
+    return ""
+
+
+def _dropped(draft: ProactiveDraft, silenced: list[str], tasks, decisions=()) -> str:
     """R6 and R7, on the finished draft. Returns why it is dropped, or ""."""
     context = draft.payload.context
     if topic_key(context.topic) in silenced:
@@ -233,6 +284,14 @@ def _dropped(draft: ProactiveDraft, silenced: list[str], tasks) -> str:
             return "R7 the plan already has this task with an owner"
     if draft.kind is ProposalKind.BLOCKER:
         assert isinstance(draft.payload, BlockerPayload)
-        if any(t.task_id == draft.payload.task_id and t.status is TaskStatus.BLOCKED for t in tasks):
+        payload = draft.payload
+        task = next((t for t in tasks if payload.task_id is not None and t.task_id == payload.task_id), None)
+        if payload.certainty is BlockerCertainty.BLOCKED and task is not None and task.status is TaskStatus.BLOCKED:
             return "R7 the task is already marked blocked"
+        if task is not None and payload.depends_on_task_id is not None and payload.depends_on_task_id in task.depends_on:
+            return "R7 the plan already records this dependency"
+    if draft.kind is ProposalKind.REVISIT:
+        decision = next((d for d in decisions if d.decision_id == draft.payload.decision_id), None)
+        if decision is None or decision.reopened_at is not None:
+            return "R7 the decision is no longer closed in the log"
     return ""

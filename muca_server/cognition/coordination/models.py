@@ -95,6 +95,8 @@ class Task(_Model):
     due_date: date | None = None
     status: TaskStatus = TaskStatus.TODO
     depends_on: list[str] = Field(default_factory=list)  # other task_ids
+    # Written by a member by hand (the "New task" popup); cards never set it.
+    description: str = Field(default="", max_length=MAX_TEXT)
 
 
 class Decision(_Model):
@@ -108,6 +110,10 @@ class Decision(_Model):
     decided_at: float
     # Where the decision came from, e.g. "proposal:<id>", for the answer's source.
     source: str = ""
+    # K3: set when a member chose "Reopen it" on a revisit card. The decision
+    # stays in the log (history is kept); a later CS3 card can close it again.
+    reopened_at: float | None = None
+    reopened_by: int | None = None
 
 
 class ProjectState(_Model):
@@ -139,6 +145,7 @@ class ProposalKind(StrEnum):
     CHECKIN = "checkin"  # M4: /checkin, up to three ways to fix what is late or at risk
     BLOCKER = "blocker"  # M4: CS7, a task is blocked or waits on another
     APPROACH = "approach"  # plan opener (CS-OPEN-01): how the group plans the work, as it said it
+    REVISIT = "revisit"  # K3: a decision in the log is being reopened: keep it or reopen it
 
 
 class ProposalStatus(StrEnum):
@@ -285,18 +292,92 @@ class CheckinPayload(_Model):
     options: list[CheckinOption] = Field(min_length=1, max_length=3)
 
 
+class BlockerCertainty(StrEnum):
+    """
+    How sure the coordinator is (CS7 v2). The card says it in words, so the
+    group can tell a fact it stated from something the coordinator inferred.
+
+    BLOCKED   a member said they are stuck or waiting on other work.
+    POSSIBLE  nobody said so: the chat and the plan suggest a dependency
+              (Sara tests on Friday, the API she needs is not done). The
+              card asks the group to confirm it before anything is recorded.
+    """
+
+    BLOCKED = "blocked"
+    POSSIBLE = "possible"
+
+
+MAX_WAY = 160
+
+
 class BlockerPayload(_Model):
     """
-    CS7: a task is blocked, or waits on another one. Confirming marks the task
-    blocked and records the dependency; `helper_id` is who could help.
+    CS7: a task is blocked, or waits on another one. `helper_id` is who could help.
+
+    Confirming a BLOCKED card marks the task blocked and records what it
+    waits on. Confirming a POSSIBLE card only records the dependency ("yes,
+    it depends"): the task is not marked blocked, nobody said it was.
+    The work it waits on is a plan task (`depends_on_task_id`) or, when the
+    plan does not have it yet, its title as said in the chat
+    (`depends_on_title`), added to the plan on confirmation.
+    `ways_forward`: up to three concrete options taken from the chat and the
+    plan (mock data, a minimal version first, another order). Shown on the
+    card as suggestions: choosing one changes nothing by itself.
     """
 
     context: ProactiveContext
     task_id: str | None = None
     title: str = Field(min_length=1, max_length=MAX_TITLE)
     depends_on_task_id: str | None = None
+    depends_on_title: str = Field(default="", max_length=MAX_TITLE)
     helper_id: int | None = None
     question: str = Field(default="", max_length=MAX_QUOTE)
+    certainty: BlockerCertainty = BlockerCertainty.BLOCKED
+    ways_forward: list[str] = Field(default_factory=list, max_length=3)
+
+    @field_validator("ways_forward")
+    @classmethod
+    def _short_ways(cls, value: list[str]) -> list[str]:
+        cleaned = [" ".join(item.split()) for item in value if item.strip()]
+        if any(len(item) > MAX_WAY for item in cleaned):
+            raise ValueError("a way forward is too long")
+        return cleaned
+
+    @model_validator(mode="after")
+    def _possible_names_what(self) -> "BlockerPayload":
+        if (
+            self.certainty is BlockerCertainty.POSSIBLE
+            and self.depends_on_task_id is None
+            and not self.depends_on_title.strip()
+        ):
+            raise ValueError("a possible dependency must say what the task may wait on")
+        return self
+
+
+class RevisitPayload(_Model):
+    """
+    K3: the chat reopens a question the decision log already closed.
+    The card recalls the decision and its reason, says what seems new
+    (`new_point`, "" if nothing new was said) and offers two buttons:
+    option 0 "Keep" (nothing changes) and option 1 "Reopen it" (the decision
+    is marked reopened, history kept). `choice` and `reason` are copied by
+    the server from the log, never written by the model.
+    """
+
+    context: ProactiveContext
+    decision_id: str = Field(min_length=1, max_length=40)
+    question: str = Field(min_length=1, max_length=MAX_TITLE)
+    choice: str = Field(min_length=1, max_length=MAX_TITLE)
+    reason: str = Field(default="", max_length=MAX_TEXT)
+    decided_at: float = 0
+    new_point: str = Field(default="", max_length=MAX_QUOTE)
+    # The two buttons, labelled by the server (Discord and Slack draw one
+    # button per option, as for a decision card): [Keep "<choice>", Reopen it].
+    options: list[DecisionOption] = Field(default_factory=list, max_length=2)
+
+
+REVISIT_KEEP = 0
+REVISIT_REOPEN = 1
 
 
 class ApproachPayload(_Model):
@@ -332,6 +413,7 @@ PAYLOAD_MODELS: dict[ProposalKind, type[_Model]] = {
     ProposalKind.CHECKIN: CheckinPayload,
     ProposalKind.BLOCKER: BlockerPayload,
     ProposalKind.APPROACH: ApproachPayload,
+    ProposalKind.REVISIT: RevisitPayload,
 }
 
 

@@ -224,6 +224,24 @@ class CoalaPolicy:
         """Group Coordinator: its strategies answer with a card, not a reply."""
         self._proactive = bridge
 
+    async def _project_note(self, wm: WorkingMemory) -> str:
+        """
+        Group Coordinator only: the saved plan and decisions, so the observer
+        can judge a dependency or a reopened decision it cannot see in the
+        chat (cognition/coordination/project_memory.py). "" when the
+        coordinator is off, when nothing changed, or on any error: the turn
+        update is then exactly the lab's.
+        """
+        note_for = getattr(self._proactive, "observer_note", None)
+        if note_for is None:
+            return ""
+        try:
+            note = await note_for(wm.total_message_count)
+        except Exception:
+            logger.exception("%s project memory for the observer failed", wm.conversation_id)
+            return ""
+        return f"\n{note}" if note else ""
+
     async def start(self, port: ConversationPort) -> None:
         self._port = port
 
@@ -477,6 +495,7 @@ class CoalaPolicy:
                 "Current trigger variables: "
                 f"{json.dumps(wm.trigger_variables)}.{cooldown_note}"
                 f"{modality_note}{window_note}"
+                f"{await self._project_note(wm)}"
             )
 
         # A decision -- forced or observer-judged -- is now pending for

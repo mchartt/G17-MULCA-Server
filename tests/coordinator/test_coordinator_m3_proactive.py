@@ -83,6 +83,9 @@ async def offer(bridge, strategy=CS2, count=20, history=HISTORY):
 def deleg_draft(topic="Fonts and margins"):
     payload = delegation_payload()
     payload = payload.model_copy(update={"context": payload.context.model_copy(update={"topic": topic})})
+    if topic != "Fonts and margins":
+        # A different card is about a different task (R9 drops a second card on the same one).
+        payload = payload.model_copy(update={"title": f"{payload.title} ({topic})"})
     return ProactiveDraft(ProposalKind.DELEGATION, payload, "Stepping in because one person can do it.")
 
 

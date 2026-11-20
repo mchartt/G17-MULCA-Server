@@ -40,10 +40,10 @@ from typing import Any
 from .checkin import findings, owners_report
 from pydantic import ValidationError
 
-from .models import MAX_TITLE, Decision, PlanItem, PlanPayload, ProposalKind, TaskStatus
+from .models import MAX_TEXT, MAX_TITLE, Decision, PlanItem, PlanPayload, ProposalKind, TaskStatus
 from .plan_writer import AskAnswer, PlanWriter, WhyAnswer
 from .proposals import ProposalService, new_id
-from .store import CoordinationStore
+from .store import CoordinationStore, DependencyError
 
 logger = logging.getLogger(__name__)
 
@@ -253,15 +253,34 @@ class PlanCommands:
                 await self._notice(False, f"Write the task in a few words (up to {MAX_TITLE} characters).", message.request_id)
                 return
             fields["title"] = title
+        if "description" in args:
+            description = str(args.get("description") or "").strip()
+            if len(description) > MAX_TEXT:
+                await self._notice(False, f"Keep the description under {MAX_TEXT} characters.", message.request_id)
+                return
+            fields["description"] = description
+
+        tasks = (await self._store().load_state()).tasks
+        depends_on: list[str] | None = None
+        if "depends_on" in args:
+            depends_on = _task_ids(args.get("depends_on"), tasks)
+            if depends_on is None:
+                await self._notice(False, "Choose the tasks it waits on from the ones in this plan.", message.request_id)
+                return
 
         if "add" in args:
-            await self._store().add_task_by_hand(new_id(), fields["title"], fields.get("owner_id"), fields.get("due_date"))
+            try:
+                await self._store().add_task_by_hand(
+                    new_id(), fields["title"], fields.get("owner_id"), fields.get("due_date"), fields.get("description", ""), depends_on
+                )
+            except DependencyError as error:
+                await self._notice(False, _dependency_refusal(error), message.request_id)
+                return
             owner_name = members.get(fields.get("owner_id"), "nobody yet")
             await self._notice(True, f"Task added: “{fields['title']}” ({owner_name}).", message.request_id)
             await self._send_state("")
             return
 
-        tasks = (await self._store().load_state()).tasks
         ref = str(args.get("task", "")).strip()
         task = next((t for t in tasks if t.task_id == ref), None)
         if task is None and ref.isdigit() and 1 <= int(ref) <= len(tasks):
@@ -274,10 +293,14 @@ class PlanCommands:
             await self._notice(True, f"“{task.title}” was removed from the plan.", message.request_id)
             await self._send_state("")
             return
-        if not fields:
-            await self._notice(False, "Say what to change: status, owner, date or title.", message.request_id)
+        if not fields and depends_on is None:
+            await self._notice(False, "Say what to change: status, owner, date, title, description or what it waits on.", message.request_id)
             return
-        await self._store().edit_task(task.task_id, fields)
+        try:
+            await self._store().edit_task(task.task_id, fields, depends_on)
+        except DependencyError as error:
+            await self._notice(False, _dependency_refusal(error), message.request_id)
+            return
         changes = []
         if "status" in fields:
             changes.append(f"is now {fields['status']}")
@@ -287,6 +310,10 @@ class PlanCommands:
             changes.append(f"is due {fields['due_date']}" if fields["due_date"] else "has no date")
         if "title" in fields:
             changes.append("was renamed")
+        if "description" in fields:
+            changes.append("has a new description" if fields["description"] else "has no description")
+        if depends_on is not None:
+            changes.append(f"waits on {len(depends_on)} task{'s' if len(depends_on) != 1 else ''}" if depends_on else "waits on nothing")
         await self._notice(True, f"“{fields.get('title', task.title)}” {', '.join(changes)}.", message.request_id)
         await self._send_state("")
 
@@ -327,6 +354,33 @@ class PlanCommands:
             await self._notice(False, "Say what to change: the name or the date.", message.request_id)
             return
         await self._send_state("")
+
+
+def _task_ids(value, tasks) -> list[str] | None:
+    """
+    The task ids behind a "waits on" list: each item is a task id or the number
+    shown in the plan. None when it is not a list or names a task that is not there.
+    """
+    if not isinstance(value, list):
+        return None
+    ids: list[str] = []
+    for item in value:
+        ref = str(item).strip()
+        task = next((t for t in tasks if t.task_id == ref), None)
+        if task is None and ref.isdigit() and 1 <= int(ref) <= len(tasks):
+            task = tasks[int(ref) - 1]
+        if task is None:
+            return None
+        ids.append(task.task_id)
+    return ids
+
+
+def _dependency_refusal(error: DependencyError) -> str:
+    if error.kind == "itself":
+        return "A task cannot wait on itself."
+    if error.kind == "loop":
+        return "That would make a loop: the tasks would wait on each other and none could start."
+    return "Choose the tasks it waits on from the ones in this plan."
 
 
 _INVALID = object()
