@@ -253,6 +253,15 @@ class PlanCommands:
                 await self._notice(False, f"Write the task in a few words (up to {MAX_TITLE} characters).", message.request_id)
                 return
             fields["title"] = title
+        if "progress" in args:
+            try:
+                progress = int(args.get("progress"))
+            except (TypeError, ValueError):
+                progress = -1
+            if not 0 <= progress <= 100:
+                await self._notice(False, "Progress is a number from 0 to 100.", message.request_id)
+                return
+            fields["progress"] = progress
         if "description" in args:
             description = str(args.get("description") or "").strip()
             if len(description) > MAX_TEXT:
@@ -294,7 +303,7 @@ class PlanCommands:
             await self._send_state("")
             return
         if not fields and depends_on is None:
-            await self._notice(False, "Say what to change: status, owner, date, title, description or what it waits on.", message.request_id)
+            await self._notice(False, "Say what to change: status, owner, date, title, description, progress or what it waits on.", message.request_id)
             return
         try:
             await self._store().edit_task(task.task_id, fields, depends_on)
@@ -312,6 +321,8 @@ class PlanCommands:
             changes.append("was renamed")
         if "description" in fields:
             changes.append("has a new description" if fields["description"] else "has no description")
+        if "progress" in fields:
+            changes.append(f"is {fields['progress']}% done")
         if depends_on is not None:
             changes.append(f"waits on {len(depends_on)} task{'s' if len(depends_on) != 1 else ''}" if depends_on else "waits on nothing")
         await self._notice(True, f"“{fields.get('title', task.title)}” {', '.join(changes)}.", message.request_id)

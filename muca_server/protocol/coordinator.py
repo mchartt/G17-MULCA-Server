@@ -88,10 +88,13 @@ class CoordinatorCommandMessage(CoordinatorIncomingMessage):
     # confirmed charter; answered with a charter card to confirm, no model.
     # approach (additive, CS-OPEN-01): no args; "Plan together": Cadence asks the
     # group how it wants to plan the work, then sums the answers up in a card.
+    # document (additive): args.add = {name, text} keeps a document's text as
+    # project context; args.remove = its id. kickoff may also carry
+    # args.documents = [{name, text}] and args.description, kept the same way.
     command: Literal[
         "profile", "kickoff", "state", "planning", "checkin", "task", "why", "card",
         "link", "unlink", "catchup", "ask", "language", "charter", "milestone",
-        "approach",
+        "approach", "document",
     ]
     member_id: int = Field(alias="memberId")
     args: dict[str, Any] = Field(default_factory=dict)

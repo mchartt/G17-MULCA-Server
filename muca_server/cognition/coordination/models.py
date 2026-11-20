@@ -97,6 +97,11 @@ class Task(_Model):
     depends_on: list[str] = Field(default_factory=list)  # other task_ids
     # Written by a member by hand (the "New task" popup); cards never set it.
     description: str = Field(default="", max_length=MAX_TEXT)
+    # How far along it is, 0-100, set by a member; 100 once done.
+    progress: int = Field(default=0, ge=0, le=100)
+    # Unix times kept by the store (TASK_TIMES): when it was made, when it was done.
+    created_at: float | None = None
+    done_at: float | None = None
 
 
 class Decision(_Model):
@@ -116,6 +121,22 @@ class Decision(_Model):
     reopened_by: int | None = None
 
 
+# A project document: kept as text so Cadence can read it when it answers
+# (Project settings > Documents). The file itself is never kept.
+MAX_DOCUMENT_CHARS = 20_000
+MAX_DOCUMENTS = 20
+
+
+class ProjectDocument(_Model):
+    """What the panel lists about a document; its text stays on the server."""
+
+    document_id: str
+    name: str = Field(min_length=1, max_length=MAX_TITLE)
+    chars: int = 0
+    added_by: int | None = None
+    added_at: float = 0.0
+
+
 class ProjectState(_Model):
     """Everything the project panel shows, in one object."""
 
@@ -124,6 +145,7 @@ class ProjectState(_Model):
     milestones: list[Milestone] = Field(default_factory=list)
     tasks: list[Task] = Field(default_factory=list)
     decisions: list[Decision] = Field(default_factory=list)
+    documents: list[ProjectDocument] = Field(default_factory=list)
     # The language the group chose for the coordinator's texts: "en", "it",
     # or "" (not chosen: it follows the chat). Command "language".
     language: str = ""

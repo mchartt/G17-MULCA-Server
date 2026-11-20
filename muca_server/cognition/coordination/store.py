@@ -28,6 +28,7 @@ from .models import (
     Decision,
     MemberProfile,
     Milestone,
+    ProjectDocument,
     ProjectState,
     Proposal,
     ProposalStatus,
@@ -66,7 +67,10 @@ CREATE TABLE IF NOT EXISTS coord_task (
     owner_id     INTEGER,
     due_date     TEXT,
     status       TEXT NOT NULL DEFAULT 'todo',
-    description  TEXT NOT NULL DEFAULT ''
+    description  TEXT NOT NULL DEFAULT '',
+    progress     INTEGER NOT NULL DEFAULT 0,  -- 0-100, set by a member; 100 when done
+    created_at   REAL,                        -- unix time, set by TASK_TIMES
+    done_at      REAL                         -- unix time it became done, NULL otherwise
 );
 CREATE TABLE IF NOT EXISTS coord_task_dependency (
     task_id     TEXT NOT NULL,
@@ -118,6 +122,15 @@ CREATE TABLE IF NOT EXISTS coord_setting (
     name   TEXT PRIMARY KEY,
     value  TEXT NOT NULL
 );
+-- Documents the group gave Cadence as context (the assignment, notes): their
+-- text only, never the file. Command "document"; kickoff adds them too.
+CREATE TABLE IF NOT EXISTS coord_document (
+    document_id  TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    text         TEXT NOT NULL,
+    added_by     INTEGER,
+    added_at     REAL NOT NULL
+);
 -- "Helpful" on a proactive card: one row per member and card. Feedback
 -- only: it never changes the project state or the card.
 CREATE TABLE IF NOT EXISTS coord_feedback (
@@ -126,6 +139,29 @@ CREATE TABLE IF NOT EXISTS coord_feedback (
     at           REAL NOT NULL,
     PRIMARY KEY (proposal_id, member_id)
 );
+"""
+
+
+# When a task was made and when it was finished, kept by SQLite itself so every
+# writer (by hand, cards, check-ins) is covered: the Reflection page counts
+# "done this week" from done_at. Run after the columns exist (old files get
+# them first, in _connect).
+TASK_TIMES = """
+CREATE TRIGGER IF NOT EXISTS coord_task_created AFTER INSERT ON coord_task
+WHEN NEW.created_at IS NULL
+BEGIN
+    UPDATE coord_task SET created_at = (julianday('now') - 2440587.5) * 86400.0 WHERE task_id = NEW.task_id;
+END;
+CREATE TRIGGER IF NOT EXISTS coord_task_done AFTER UPDATE OF status ON coord_task
+WHEN NEW.status = 'done' AND OLD.status <> 'done'
+BEGIN
+    UPDATE coord_task SET done_at = (julianday('now') - 2440587.5) * 86400.0, progress = 100 WHERE task_id = NEW.task_id;
+END;
+CREATE TRIGGER IF NOT EXISTS coord_task_reopened AFTER UPDATE OF status ON coord_task
+WHEN NEW.status <> 'done' AND OLD.status = 'done'
+BEGIN
+    UPDATE coord_task SET done_at = NULL WHERE task_id = NEW.task_id;
+END;
 """
 
 
@@ -168,8 +204,15 @@ class CoordinationStore:
                     await db.execute("ALTER TABLE coord_decision ADD COLUMN reopened_by INTEGER")
                 # Files made before task descriptions get the column.
                 cursor = await db.execute("PRAGMA table_info(coord_task)")
-                if "description" not in {row[1] for row in await cursor.fetchall()}:
+                task_columns = {row[1] for row in await cursor.fetchall()}
+                if "description" not in task_columns:
                     await db.execute("ALTER TABLE coord_task ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+                # Files made before progress and times get them (old tasks: no times).
+                if "progress" not in task_columns:
+                    await db.execute("ALTER TABLE coord_task ADD COLUMN progress INTEGER NOT NULL DEFAULT 0")
+                    await db.execute("ALTER TABLE coord_task ADD COLUMN created_at REAL")
+                    await db.execute("ALTER TABLE coord_task ADD COLUMN done_at REAL")
+                await db.executescript(TASK_TIMES)
             except Exception:
                 await db.close()
                 raise
@@ -399,11 +442,11 @@ class CoordinationStore:
     async def edit_task(self, task_id: str, fields: dict, depends_on: list[str] | None = None) -> bool:
         """
         Set the given columns of a task (title, owner_id, due_date, status,
-        description; None clears owner or date) and, when `depends_on` is
+        description, progress; None clears owner or date) and, when `depends_on` is
         given, replace the tasks it waits on ([] = none). Raises
         DependencyError, saving nothing, if a dependency is not acceptable.
         """
-        allowed = {k: v for k, v in fields.items() if k in ("title", "owner_id", "due_date", "status", "description")}
+        allowed = {k: v for k, v in fields.items() if k in ("title", "owner_id", "due_date", "status", "description", "progress")}
         if not allowed and depends_on is None:
             return False
         db = await self._connect()
@@ -589,12 +632,27 @@ class CoordinationStore:
                     status=row["status"],
                     depends_on=sorted(dependencies.get(row["task_id"], [])),
                     description=row["description"],
+                    progress=row["progress"],
+                    created_at=row["created_at"],
+                    done_at=row["done_at"],
                 )
                 for row in await _all(db, "SELECT * FROM coord_task ORDER BY task_id")
             ]
             decisions = [
                 Decision(**dict(row))
                 for row in await _all(db, "SELECT * FROM coord_decision ORDER BY decided_at")
+            ]
+            documents = [
+                ProjectDocument(
+                    document_id=row["document_id"],
+                    name=row["name"],
+                    chars=row["chars"],
+                    added_by=row["added_by"],
+                    added_at=row["added_at"],
+                )
+                for row in await _all(
+                    db, "SELECT document_id, name, length(text) AS chars, added_by, added_at FROM coord_document ORDER BY added_at"
+                )
             ]
             language_rows = await _all(db, "SELECT value FROM coord_setting WHERE name = 'language'")
         finally:
@@ -605,8 +663,40 @@ class CoordinationStore:
             milestones=milestones,
             tasks=tasks,
             decisions=decisions,
+            documents=documents,
             language=language_rows[0]["value"] if language_rows else "",
         )
+
+    # ------------------------------------------------------------------
+    # Project documents (a member's own action: kept as text, never as a file)
+    # ------------------------------------------------------------------
+
+    async def add_document(self, document_id: str, name: str, text: str, added_by: int | None, added_at: float) -> None:
+        db = await self._connect()
+        try:
+            await db.execute(
+                "INSERT INTO coord_document (document_id, name, text, added_by, added_at) VALUES (?, ?, ?, ?, ?)",
+                (document_id, name, text, added_by, added_at),
+            )
+        finally:
+            await db.close()
+
+    async def remove_document(self, document_id: str) -> bool:
+        db = await self._connect()
+        try:
+            cursor = await db.execute("DELETE FROM coord_document WHERE document_id = ?", (document_id,))
+            return cursor.rowcount > 0
+        finally:
+            await db.close()
+
+    async def document_texts(self) -> list[tuple[str, str]]:
+        """(name, text) of every document, oldest first: what Cadence reads when it answers."""
+        db = await self._connect()
+        try:
+            cursor = await db.execute("SELECT name, text FROM coord_document ORDER BY added_at")
+            return [(row[0], row[1]) for row in await cursor.fetchall()]
+        finally:
+            await db.close()
 
 
 async def _all_params(db: aiosqlite.Connection, sql: str, params: tuple) -> list[aiosqlite.Row]:

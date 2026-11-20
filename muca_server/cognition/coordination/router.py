@@ -60,13 +60,23 @@ from .card_requests import CardRequests
 from .catchup import CatchUp, channel_of, summary_line
 from .checkin_timer import CheckinTimer
 from .links import GroupLinks, LinkError, LiveGroups
-from .models import CharterPayload, MemberProfile, MilestoneDraft, Proposal, ProposalKind, ProposalStatus
+from .models import (
+    MAX_DOCUMENT_CHARS,
+    MAX_DOCUMENTS,
+    MAX_TITLE,
+    CharterPayload,
+    MemberProfile,
+    MilestoneDraft,
+    Proposal,
+    ProposalKind,
+    ProposalStatus,
+)
 from .opener import PlanOpener
 from .plan_commands import PlanCommands
 from .plan_writer import PlanWriter
 from .proactive import ProactiveBridge
 from .proactive_writer import ProactiveWriter
-from .proposals import ProposalService
+from .proposals import ProposalService, new_id
 from .store import CoordinationStore
 from .writer import LANGUAGES, MAX_RATIONALE_CHARS, ProposalWriter
 
@@ -255,6 +265,8 @@ class CoordinatorRouter:
                 await self._on_catchup(message)
             elif message.command == "approach":
                 await self._on_approach(message)
+            elif message.command == "document":
+                await self._on_document(message)
             else:  # "state"
                 await self._send_state(request_id)
         except Exception:
@@ -325,6 +337,44 @@ class CoordinatorRouter:
         await self._notice(True, text, message.request_id)
         await self._send_state("")
 
+    async def _keep_document(self, name: str, text: str, member_id: int | None) -> str:
+        """
+        Keep one document's text; "" if kept, else why not. Names and text are
+        trimmed to the limits; empty ones and documents past MAX_DOCUMENTS are refused.
+        """
+        name = " ".join(name.split())[:MAX_TITLE]
+        text = text.strip()[:MAX_DOCUMENT_CHARS]
+        if not name or not text:
+            return "A document needs a name and some text."
+        store = self._store_now()
+        if len((await store.load_state()).documents) >= MAX_DOCUMENTS:
+            return f"A project keeps up to {MAX_DOCUMENTS} documents: remove one first."
+        await store.add_document(new_id(), name, text, member_id, time.time())
+        return ""
+
+    async def _on_document(self, message: CoordinatorCommandMessage) -> None:
+        """
+        A member adds or removes a document Cadence reads as project context
+        (Project settings > Documents). Their own action: no card, no model.
+        """
+        args = message.args
+        if isinstance(args.get("add"), dict):
+            name = str(args["add"].get("name", ""))
+            refused = await self._keep_document(name, str(args["add"].get("text", "")), message.member_id)
+            if refused:
+                await self._notice(False, refused, message.request_id)
+                return
+            await self._notice(True, f"Cadence now reads “{' '.join(name.split())[:MAX_TITLE]}”.", message.request_id)
+        elif args.get("remove"):
+            if not await self._store_now().remove_document(str(args["remove"])):
+                await self._notice(False, "No such document in this project.", message.request_id)
+                return
+            await self._notice(True, "Document removed: Cadence no longer reads it.", message.request_id)
+        else:
+            await self._notice(False, "Say which document to add or remove.", message.request_id)
+            return
+        await self._send_state("")
+
     async def _on_charter(self, message: CoordinatorCommandMessage) -> None:
         """
         A member edits the charter by hand: goal and deliverables as they
@@ -373,6 +423,14 @@ class CoordinatorRouter:
         if self._kickoff is not None and not self._kickoff.done():
             await self._notice(False, KICKOFF_RUNNING, message.request_id)
             return
+        # The description and the documents of the setup desk stay as project
+        # context, so Cadence can read them again when someone asks later.
+        description = str(message.args.get("description", "")).strip()
+        if description:
+            await self._keep_document("Project description", description, message.member_id)
+        for document in message.args.get("documents") or []:
+            if isinstance(document, dict):
+                await self._keep_document(str(document.get("name", "")), str(document.get("text", "")), message.member_id)
         self._kickoff = asyncio.create_task(self._run_kickoff(message, text))
 
     async def _run_kickoff(self, message: CoordinatorCommandMessage, text: str) -> None:
