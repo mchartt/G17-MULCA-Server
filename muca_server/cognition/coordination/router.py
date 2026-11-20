@@ -77,7 +77,7 @@ from .plan_commands import PlanCommands
 from .plan_writer import PlanWriter
 from .plan_writes import topic_key
 from .progress import ProgressMonitor, timezone_from
-from .proactive import ProactiveBridge
+from .proactive import ProactiveBridge, claim_key
 from .proactive_writer import ProactiveWriter
 from .wording import italian, localize
 from .proposals import ProposalService, new_id
@@ -137,6 +137,9 @@ class CoordinatorRouter:
         self._home_id: str | None = None
         # CS6: messages already offered as late replies, per (task, due date).
         self._late_tries: dict[tuple[str, str], int] = {}
+        # Lines this router already sent to ask as late replies (text -> time):
+        # the same line arriving as a web maybe-ask is then not read twice.
+        self._late_read: dict[str, float] = {}
         # The kickoff running in the background, if any (one per group).
         self._kickoff: asyncio.Task | None = None
         # The reflection being built (it may ask the model for the week's topics).
@@ -302,7 +305,11 @@ class CoordinatorRouter:
                     # R10: this message is Cadence's to answer (or to leave
                     # unanswered); the lab's agent must not reply to it too.
                     self.proactive.claim(str(message.args.get("question", "")))
-                if maybe and self.opener.listening:
+                late = maybe and time.time() - self._late_read.get(claim_key(str(message.args.get("question", ""))), 0) < 120
+                if late:
+                    # Already read as a late progress reply (its user_text came first): once is enough.
+                    await self._notice(True, "", request_id)
+                elif maybe and self.opener.listening:
                     # R8 for the chat too: the members are answering "How do you
                     # want to plan the work?"; their lines go to the opener, not
                     # to an ask reply or a task card. Silence, no model call.
@@ -742,6 +749,8 @@ class CoordinatorRouter:
         self._late_tries[key] = self._late_tries.get(key, 0) + 1
         if self.proactive is not None:
             self.proactive.claim(text)  # R10: the lab's agent does not answer it too
+        self._late_read = {k: at for k, at in self._late_read.items() if now - at < 120}
+        self._late_read[claim_key(text)] = now
         return True
 
     async def _say_unlogged(self, text: str) -> None:

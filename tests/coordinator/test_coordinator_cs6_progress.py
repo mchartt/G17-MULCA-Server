@@ -685,3 +685,21 @@ async def test_a_reply_already_offered_as_a_web_follow_up_is_not_read_twice(tmp_
     await web.route_user_text(SimpleNamespace(text="tutto ok", speaker=100_000_002, speaker_name="Bruno"))
     await web.wait_for_background()
     assert len(group.writer._client.calls) == 1
+
+
+async def test_the_same_line_arriving_as_user_text_first_then_as_a_maybe_ask_is_read_once(tmp_path):
+    import time as clock
+
+    group, web, queue = _router_with_progress(
+        tmp_path, answer("Grazie Bruno!", action=none_action(), progress={"task_id": "t1", "status": "on_track"}),
+    )
+    store = group.store_for(WEB)
+    await store.add_task_by_hand("t1", "Dashboard", 100_000_002, "2026-11-25")
+    await store.claim_progress_checkin("t1", "2026-11-25", 100_000_002, clock.time() - 600)
+    await web.route_user_text(SimpleNamespace(text="tutto ok", speaker=100_000_002, speaker_name="Bruno"))
+    await web.wait_for_background()
+    await web.route_coordinator(command("ask", 100_000_002, question="tutto ok", maybe=True))
+    await web.wait_for_background()
+    assert len(group.writer._client.calls) == 1
+    notices = [m for m in await drain(queue) if isinstance(m, CoordinatorNoticeMessage)]
+    assert notices[-1].text == ""
