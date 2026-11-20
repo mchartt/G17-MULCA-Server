@@ -93,10 +93,26 @@ async def build_reflection(
 
     talk: list[dict[str, Any]] = []
     lines: list[str] = []
+    # The week day by day, for the page's small charts: the group's messages and
+    # tasks done each day (counts only, never who).
+    days = [{"day": (start_day + timedelta(days=i)).isoformat(), "messages": 0, "done": 0} for i in range(7)]
+
+    def day_of(at: float) -> int | None:
+        index = (datetime.fromtimestamp(at).date() - start_day).days
+        return index if 0 <= index < 7 else None
+
+    for t in done:
+        index = day_of(t["at"])
+        if index is not None:
+            days[index]["done"] += 1
     for conversation_id in group:
         records = await read_channel(conversation_id, start, end)
         said = [r for r in records if r.content.strip()]
         talk.append({"channel": channel_of(conversation_id), "messages": len(said)})
+        for r in said:
+            index = day_of(r.timestamp)
+            if index is not None:
+                days[index]["messages"] += 1
         for r in said:
             text = " ".join(r.content.split())[:MAX_LINE]
             lines.append(f"{datetime.fromtimestamp(r.timestamp).strftime('%a %H:%M')} {text}")
@@ -113,6 +129,7 @@ async def build_reflection(
         "slipped": slipped,
         "upcoming": upcoming,
         "talk": talk,
+        "days": days,
         "progress": {"done": finished, "total": total},
         "topics": topics,
         "names": names,

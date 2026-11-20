@@ -1,0 +1,26 @@
+seconds: 7.2
+line: Dalla tua ultima visita: 7 messaggi qui.
+{
+ "overview": "Si è parlato dei dati del questionario, della chiusura e revisione del RASD e degli aggiornamenti al mockup. La demo è stata confermata per il 9 dicembre.",
+ "topics": [
+  {
+   "title": "Chiusura e revisione RASD",
+   "summary": "Matteo chiude il RASD lunedì quando arrivano i dati; resta da assegnare la rilettura del capitolo 2, perché Giulia e Matías non sono disponibili."
+  },
+  {
+   "title": "Data della demo",
+   "summary": "La demo è stata confermata per il 9 dicembre."
+  },
+  {
+   "title": "Dati del questionario",
+   "summary": "Matías manda i dati venerdì; mancano ancora 3 risposte."
+  },
+  {
+   "title": "Aggiornamenti al mockup",
+   "summary": "Giulia ha rifatto la navbar e spostato i filtri a sinistra."
+  }
+ ],
+ "open": [
+  "Chi rilegge il capitolo 2 del RASD?"
+ ]
+}

@@ -297,19 +297,24 @@ class PlanPayload(_Model):
 class CheckinOption(_Model):
     """
     One way to fix a risk found by the check-in: change one task (new date,
-    new owner, or drop it). At least one change is required.
+    new owner, or drop it). At least one change is required. A member asking
+    Cadence in words to update a task ("segna il prototipo al 50%") gets the
+    same card with one option, which may also set the status or the progress.
     """
 
     label: str = Field(min_length=1, max_length=MAX_TITLE)
     task_id: str = Field(min_length=1, max_length=40)
     new_due_date: date | None = None
     new_owner_id: int | None = None
+    new_status: TaskStatus | None = None
+    new_progress: int | None = Field(default=None, ge=0, le=100)
     drop: bool = False
 
     @model_validator(mode="after")
     def _one_change(self) -> "CheckinOption":
-        if not self.drop and self.new_due_date is None and self.new_owner_id is None:
-            raise ValueError("an option must change the date, the owner, or drop the task")
+        changes = (self.new_due_date, self.new_owner_id, self.new_status, self.new_progress)
+        if not self.drop and all(c is None for c in changes):
+            raise ValueError("an option must change the date, the owner, the status, the progress, or drop the task")
         return self
 
 
