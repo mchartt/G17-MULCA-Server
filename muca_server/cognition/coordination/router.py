@@ -40,6 +40,7 @@ background; every chat message then passes through `opener.heard`.
 from __future__ import annotations
 
 import asyncio
+import re
 import logging
 import time
 from collections.abc import Callable
@@ -96,6 +97,12 @@ RECAP_MIN_MESSAGES = 2
 # a possible reply, and how many of their messages per question at most.
 LATE_REPLY_SECONDS = 3 * 24 * 3600
 LATE_TRIES = 3
+# A message asking the other members is not a reply to Cadence (live 20/11:
+# "qualcuno ha gli appunti di ieri?" got an answer). Code, not prompt (as F8).
+TO_THE_GROUP = re.compile(
+    r"^\s*(qualcuno|ragazzi|raga|secondo voi|chi di voi|chi ha|chi può|chi mi|avete|anyone|guys|does anyone|has anyone|who has|who can)\b",
+    re.IGNORECASE,
+)
 KICKOFF_RUNNING = "A kickoff is already running for this group: its card will appear here."
 
 
@@ -733,6 +740,8 @@ class CoordinatorRouter:
             return False
         if self.proactive is not None and self.proactive.is_claimed(text):
             return False  # the web already offered it to ask as a follow-up: read once
+        if TO_THE_GROUP.search(text):
+            return False
         now = time.time()
         rows = [
             r for r in await self._store_now().progress_checkins()

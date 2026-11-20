@@ -703,3 +703,17 @@ async def test_the_same_line_arriving_as_user_text_first_then_as_a_maybe_ask_is_
     assert len(group.writer._client.calls) == 1
     notices = [m for m in await drain(queue) if isinstance(m, CoordinatorNoticeMessage)]
     assert notices[-1].text == ""
+
+
+async def test_a_question_to_the_group_is_not_taken_as_a_late_reply(tmp_path):
+    """Live 20/11: "qualcuno ha gli appunti di ieri?" from the member asked got an answer from Cadence."""
+    import time as clock
+
+    group, web, queue = _router_with_progress(tmp_path)
+    store = group.store_for(WEB)
+    await store.add_task_by_hand("t1", "Dashboard", 100_000_002, "2026-11-25")
+    await store.claim_progress_checkin("t1", "2026-11-25", 100_000_002, clock.time() - 7 * 3600)
+    for text in ("qualcuno ha gli appunti di ieri?", "Ragazzi stasera ci siete?", "anyone has the slides?"):
+        await web.route_user_text(SimpleNamespace(text=text, speaker=100_000_002, speaker_name="Bruno"))
+        await web.wait_for_background()
+    assert group.writer._client.calls == []
