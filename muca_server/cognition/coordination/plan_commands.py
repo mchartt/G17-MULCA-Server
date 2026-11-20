@@ -167,8 +167,10 @@ class PlanCommands:
         return found[0]
 
     async def wait(self) -> None:
-        while self._asks:
-            await asyncio.gather(*self._asks, return_exceptions=True)
+        # Only the unfinished ones: awaiting finished tasks never yields, so the
+        # done-callbacks that empty the set would never run (a busy loop).
+        while pending := [t for t in self._asks if not t.done()]:
+            await asyncio.gather(*pending, return_exceptions=True)
         if self._task is not None:
             await asyncio.gather(self._task, return_exceptions=True)
         if self._dependencies is not None:
