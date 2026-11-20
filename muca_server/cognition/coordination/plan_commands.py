@@ -39,6 +39,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime
+from types import SimpleNamespace
 from typing import Any
 
 from .checkin import findings, owners_report
@@ -336,7 +337,30 @@ class PlanCommands:
             return
         await self._notice(True, why_text(answer, self._participants()), message.request_id)
 
-    async def _ask(self, message) -> None:
+    def answer_late(self, member_id: int, text: str, post: Callable[[str], Awaitable[None]]) -> bool:
+        """
+        CS6: a member's chat message, any time after Cadence asked them about
+        a task's progress, read as a possible reply (a "maybe": silence when it
+        is about something else). The answer goes to the chat with `post`, not
+        as the reply to a command. False when a request is already running.
+        """
+        if self.busy:
+            return False
+        message = SimpleNamespace(
+            event="coordinator_command", command="ask", member_id=member_id, request_id="",
+            args={"question": text, "maybe": True},
+        )
+
+        async def quiet() -> None:  # a failure on a message not sent to Cadence is never announced
+            try:
+                await self._ask(message, post=post)
+            except Exception:
+                logger.exception("late progress reply failed")
+
+        self._task = asyncio.create_task(quiet())
+        return True
+
+    async def _ask(self, message, post: Callable[[str], Awaitable[None]] | None = None) -> None:
         question = str(message.args.get("question", "")).strip()[:MAX_QUESTION]
         if not question:
             await self._notice(False, "Write what you want to ask Cadence.", message.request_id)
@@ -369,9 +393,10 @@ class PlanCommands:
             # The web no longer forwards these to the lab's agent, which
             # answered them a second time (20/11 test space), so the line is
             # kept here: the chat's memory still has the whole conversation.
-            if self._remember is not None:
+            if self._remember is not None and post is None:  # a late reply is already in the log
                 await self._remember(message.member_id, question, "")
-            await self._notice(True, "", message.request_id)
+            if post is None:
+                await self._notice(True, "", message.request_id)
             return
         if answer.progress is not None:
             # CS6: what the member said about the task's progress, kept so the
@@ -390,9 +415,14 @@ class PlanCommands:
         if self._remember is not None:
             # The question and the answer join the chat's memory: the next
             # message, a follow-up or a catch-up sees them.
-            await self._remember(message.member_id, question, text.split("\n")[0] if card is None and answer.action else answer.answer)
+            # A late reply's own words are already in the log (they came as user_text).
+            said = "" if post is not None else question
+            await self._remember(message.member_id, said, text.split("\n")[0] if card is None and answer.action else answer.answer)
         if card is not None:
             await self._send_proposal(card)
+        if post is not None:
+            await post(text)
+            return
         # Last, so this request is over when the member reads the answer: a
         # follow-up typed at once is never refused as "already working" (20/11 e2e).
         await self._notice(True, text, message.request_id)

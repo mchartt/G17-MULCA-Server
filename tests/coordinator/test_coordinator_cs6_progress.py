@@ -516,3 +516,115 @@ async def test_while_the_plan_opener_listens_a_maybe_message_gets_silence_withou
     notice = [m for m in await drain(web_q) if isinstance(m, CoordinatorNoticeMessage)][-1]
     assert notice.ok and notice.text == ""
     assert group.writer._client.calls == []
+
+
+# ----------------------------------------------------------------------
+# A reply hours later still reaches Cadence; the adapter can wake a group
+# ----------------------------------------------------------------------
+
+
+def _router_with_progress(tmp_path, *answers):
+    from muca_server.cognition.coordination.router import CoordinatorRouter
+    from muca_server.cognition.coordination.writer import ProposalWriter
+
+    from .conftest import FakeChatClient
+
+    group = Group(tmp_path)
+    group.writer = ProposalWriter(FakeChatClient(*answers))
+    queue: asyncio.Queue = asyncio.Queue()
+    web = CoordinatorRouter(
+        FakeConversation(conversation_id=WEB, roster={100_000_001: "Ada", 100_000_002: "Bruno"}),
+        queue, store_for=group.store_for, writer=group.writer, proposal_ttl_seconds=3600,
+        catchup=group.catchup, progress_checkins=True, timezone="Europe/Rome",
+    )
+    return group, web, queue
+
+
+async def test_a_reply_five_hours_after_the_question_is_read_and_answered(tmp_path):
+    import time as clock
+
+    from muca_server.protocol import AssistantTextMessage
+
+    group, web, queue = _router_with_progress(
+        tmp_path,
+        answer("Perfetto, grazie dell'aggiornamento.", action=none_action(), progress={"task_id": "t1", "status": "on_track"}),
+    )
+    store = group.store_for(WEB)
+    await store.add_task_by_hand("t1", "Dashboard", 100_000_002, "2026-11-25")
+    await store.claim_progress_checkin("t1", "2026-11-25", 100_000_002, clock.time() - 5 * 3600)
+
+    await web.route_user_text(SimpleNamespace(text="tutto ok, manca solo l'ultimo controllo", speaker=100_000_002, speaker_name="Bruno"))
+    await web.wait_for_background()
+    said = [m.text for m in await drain(queue) if isinstance(m, AssistantTextMessage)]
+    assert said == ["Perfetto, grazie dell'aggiornamento."]
+    (row,) = await store.progress_checkins()
+    assert row["answer"] == "on_track"
+    # The prompt told the model which question this answers.
+    prompt = group.writer._client.calls[-1]["messages"][-1]["content"]
+    assert "asked Bruno 5 h ago; answer: no answer yet" in prompt
+    # Answered: the next message from Bruno costs no model call.
+    await web.route_user_text(SimpleNamespace(text="ci vediamo dopo", speaker=100_000_002, speaker_name="Bruno"))
+    await web.wait_for_background()
+    assert len(group.writer._client.calls) == 1
+
+
+async def test_only_the_member_asked_is_read_and_at_most_three_messages_per_question(tmp_path):
+    import time as clock
+
+    silent = answer("", action=none_action())
+    group, web, queue = _router_with_progress(tmp_path, silent, silent, silent, silent)
+    store = group.store_for(WEB)
+    await store.add_task_by_hand("t1", "Dashboard", 100_000_002, "2026-11-25")
+    await store.claim_progress_checkin("t1", "2026-11-25", 100_000_002, clock.time() - 3600)
+    await web.route_user_text(SimpleNamespace(text="ragazzi pizza stasera?", speaker=100_000_001, speaker_name="Ada"))
+    await web.wait_for_background()
+    assert group.writer._client.calls == []  # Ada was not asked anything
+    for n in range(5):
+        await web.route_user_text(SimpleNamespace(text=f"messaggio {n}", speaker=100_000_002, speaker_name="Bruno"))
+        await web.wait_for_background()
+    assert len(group.writer._client.calls) == 3
+
+
+async def test_a_question_asked_more_than_three_days_ago_is_no_longer_waited_for(tmp_path):
+    import time as clock
+
+    group, web, queue = _router_with_progress(tmp_path)
+    store = group.store_for(WEB)
+    await store.add_task_by_hand("t1", "Dashboard", 100_000_002, "2026-11-25")
+    await store.claim_progress_checkin("t1", "2026-11-25", 100_000_002, clock.time() - 4 * 86400)
+    await web.route_user_text(SimpleNamespace(text="fatto!", speaker=100_000_002, speaker_name="Bruno"))
+    await web.wait_for_background()
+    assert group.writer._client.calls == []
+
+
+async def test_the_adapter_can_ask_for_an_assessment_with_the_progress_command(tmp_path):
+    group, web, queue = _router_with_progress(tmp_path)
+    calls = []
+
+    async def sweep():
+        calls.append(1)
+        return False
+
+    web.progress.sweep = sweep
+    await web.route_coordinator(command("progress", 100_000_001))
+    (notice,) = [m for m in await drain(queue) if isinstance(m, CoordinatorNoticeMessage)]
+    assert notice.ok and notice.text == "" and calls == [1]
+
+
+async def test_a_new_question_does_not_open_like_one_cadence_already_asked(tmp_path):
+    from muca_server.cognition.coordination.plan_writer import PlanWriter
+    from muca_server.cognition.coordination.writer import ProposalWriter
+
+    from .conftest import FakeChatClient
+
+    client = FakeChatClient(
+        {"text": "Bruno, come sta andando il dashboard? Ti manca qualcosa?", "skip_reason": ""},
+        {"text": "Bruno, a che punto sei con il dashboard? Domani si consegna.", "skip_reason": ""},
+    )
+    plan = PlanWriter(ProposalWriter(client))
+    tasks = state(task("t1", "Dashboard"), task("t9", "API", owner=BRUNO))
+    (candidate,) = [c for c in candidates(tasks, [], now=at(24, 14), tz=ROME) if c.task.task_id == "t1"]
+    chat = ["Cadence: Bruno, come sta andando l'API? Ti serve qualcosa?"]
+    text = await plan.draft_progress_question(candidate, members=MEMBERS, state=tasks, chat=chat, now=at(24, 14), tz=ROME)
+    assert text.startswith("Bruno, a che punto sei")
+    assert "do not start like these: come sta andando" in client.calls[0]["messages"][-1]["content"]

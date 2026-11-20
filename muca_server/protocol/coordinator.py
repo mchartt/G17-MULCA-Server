@@ -93,10 +93,14 @@ class CoordinatorCommandMessage(CoordinatorIncomingMessage):
     # args.documents = [{name, text}] and args.description, kept the same way.
     # reflection (additive): args.week = a YYYY-MM-DD day of the week (default
     # this week) -> a notice with `reflection` (reflection.py); group-level only.
+    # progress (additive, CS6): no args; the adapter asks for one progress
+    # assessment now (a group nobody has opened since a restart has no timer
+    # running). Answered with an empty notice; a question, if any, is posted
+    # in the chat as an assistant message.
     command: Literal[
         "profile", "kickoff", "state", "planning", "checkin", "task", "why", "card",
         "link", "unlink", "catchup", "ask", "language", "charter", "milestone",
-        "approach", "document", "reflection",
+        "approach", "document", "reflection", "progress",
     ]
     member_id: int = Field(alias="memberId")
     args: dict[str, Any] = Field(default_factory=dict)

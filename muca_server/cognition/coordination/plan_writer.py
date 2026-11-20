@@ -550,10 +550,14 @@ class PlanWriter:
             f"{t.title} ({members.get(t.owner_id, 'no owner') if t.owner_id else 'no owner'})" for t in candidate.downstream
         ) or "nothing"
         waits = "; ".join(titles.get(i, i) for i in task.depends_on) or "nothing"
+        # Openings Cadence already used (its earlier lines in the chat): a new
+        # question must not start the same way ("Bruno, come sta andando…" x3).
+        used = {_opening(line.split(": ", 1)[1], members) for line in chat if line.startswith("Cadence: ")} - {""}
         user = (
             f"Now: {local:%A %d %B %Y, %H:%M}.\n<task>\n{task.title} | owner: {owner} | {when} ({task.due_date}) | "
             f"status {task.status.value} | {task.progress}% done\nWaiting on it: {downstream}\nIt waits on: {waits}\n</task>\n"
             "<chat>\n" + ("\n".join(chat[-CHAT_LINES:]) or "(no recent messages)") + "\n</chat>"
+            + ("\nOpenings you already used, do not start like these: " + "; ".join(sorted(used)) if used else "")
         )
 
         def check(data: dict) -> str:
@@ -566,6 +570,8 @@ class PlanWriter:
                 raise ValueError("the question must name the owner")
             if re.search(r"task_id|\bt-?\d+\b|\*\*|^- ", text):
                 raise ValueError("ids or formatting in a chat question")
+            if _opening(text, members) in used:
+                raise ValueError("the question opens like one Cadence already asked")
             return text
 
         return await self._run("progress", PROGRESS_SYSTEM, user, PROGRESS_SCHEMA, check)
@@ -687,6 +693,13 @@ NO_ACCESS = re.compile(
 RECAP_LINES = 120
 DOCUMENT_BUDGET = 12_000
 CHUNK = 900
+
+
+def _opening(text: str, members: dict[int, str]) -> str:
+    """The first three words of a message, members' names left out ("come sta andando")."""
+    names = {part.lower() for name in members.values() for part in name.split()}
+    words = [w for w in re.findall(r"[\w']+", text.lower()) if w not in names]
+    return " ".join(words[:3])
 
 
 def _charter(state: ProjectState) -> str:
