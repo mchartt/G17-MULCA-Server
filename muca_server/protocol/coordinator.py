@@ -91,10 +91,12 @@ class CoordinatorCommandMessage(CoordinatorIncomingMessage):
     # document (additive): args.add = {name, text} keeps a document's text as
     # project context; args.remove = its id. kickoff may also carry
     # args.documents = [{name, text}] and args.description, kept the same way.
+    # reflection (additive): args.week = a YYYY-MM-DD day of the week (default
+    # this week) -> a notice with `reflection` (reflection.py); group-level only.
     command: Literal[
         "profile", "kickoff", "state", "planning", "checkin", "task", "why", "card",
         "link", "unlink", "catchup", "ask", "language", "charter", "milestone",
-        "approach", "document",
+        "approach", "document", "reflection",
     ]
     member_id: int = Field(alias="memberId")
     args: dict[str, Any] = Field(default_factory=dict)
@@ -138,6 +140,8 @@ class CoordinatorNoticeMessage(OutgoingMessage):
     # Only for the "catchup" command (additive): decisions and messages from
     # the group's other channels since the member's last catch-up (catchup.py).
     catchup: dict[str, Any] | None = None
+    # Only for the "reflection" command (additive): the week's facts and topics.
+    reflection: dict[str, Any] | None = None
 
 
 class CoordinatorMirrorMessage(OutgoingMessage):

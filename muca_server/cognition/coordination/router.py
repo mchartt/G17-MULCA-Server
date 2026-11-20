@@ -77,6 +77,7 @@ from .plan_writer import PlanWriter
 from .proactive import ProactiveBridge
 from .proactive_writer import ProactiveWriter
 from .proposals import ProposalService, new_id
+from .reflection import build_reflection, week_of
 from .store import CoordinationStore
 from .writer import LANGUAGES, MAX_RATIONALE_CHARS, ProposalWriter
 
@@ -124,6 +125,8 @@ class CoordinatorRouter:
         self._home_id: str | None = None
         # The kickoff running in the background, if any (one per group).
         self._kickoff: asyncio.Task | None = None
+        # The reflection being built (it may ask the model for the week's topics).
+        self._reflecting: asyncio.Task | None = None
         # M3: proactive cards (CS5, CS2, CS3), plugged into the policy by wiring.py.
         self.proactive = (
             ProactiveBridge(
@@ -267,6 +270,8 @@ class CoordinatorRouter:
                 await self._on_approach(message)
             elif message.command == "document":
                 await self._on_document(message)
+            elif message.command == "reflection":
+                await self._start_reflection(message)
             else:  # "state"
                 await self._send_state(request_id)
         except Exception:
@@ -276,6 +281,8 @@ class CoordinatorRouter:
         """Wait for a running kickoff or proactive draft (used by tests and at shutdown)."""
         if self._kickoff is not None:
             await asyncio.gather(self._kickoff, return_exceptions=True)
+        if self._reflecting is not None:
+            await asyncio.gather(self._reflecting, return_exceptions=True)
         if self.proactive is not None:
             await self.proactive.wait()
         await self._plan.wait()
@@ -609,6 +616,42 @@ class CoordinatorRouter:
                 ok=True, text=summary_line(result), request_id=message.request_id, catchup=result
             )
         )
+
+    async def _start_reflection(self, message: CoordinatorCommandMessage) -> None:
+        """
+        The week's reflection (reflection.py). It may call the model for the
+        topics, so it runs in the background: the session must never wait.
+        """
+        if self._catchup is None:
+            await self._notice(False, "Reflection is not available on this server.", message.request_id)
+            return
+        week = str(message.args.get("week", "")).strip()
+        try:
+            day = date.fromisoformat(week) if week else self._today()
+        except ValueError:
+            await self._notice(False, "Write the week as a day, YYYY-MM-DD.", message.request_id)
+            return
+        if self._reflecting is not None and not self._reflecting.done():
+            await self._notice(False, "Cadence is already looking at this week.", message.request_id)
+            return
+        self._reflecting = asyncio.create_task(self._run_reflection(message, day))
+
+    async def _run_reflection(self, message: CoordinatorCommandMessage, day: date) -> None:
+        try:
+            group = self._links.group(self._home()) if self._links is not None else [self._home()]
+            result = await build_reflection(
+                store=self._store_now(),
+                group=group,
+                monday=week_of(day),
+                today=self._today(),
+                read_channel=self._catchup.read,
+                draft_topics=PlanWriter(self._writer).draft_topics,
+            )
+            await self._outbound.put(
+                CoordinatorNoticeMessage(ok=True, text="", request_id=message.request_id, reflection=result)
+            )
+        except Exception:
+            await self._fail(message.event, message.request_id)
 
     def _service(self) -> ProposalService:
         return ProposalService(self._store_now(), ttl_seconds=self._ttl)

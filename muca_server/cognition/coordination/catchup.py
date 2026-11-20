@@ -112,8 +112,12 @@ class CatchUp:
         """The member closed the catch-up: the next one starts now."""
         await store.save_mark(f"catchup:{conversation_id}:{member_id}", 0, self._clock())
 
+    async def read(self, conversation_id: str, since: float, until: float) -> list:
+        """One channel's chat between two times (read only): also used by reflection.py."""
+        return await self._episodic_for(conversation_id).records_between(conversation_id, since, until)
+
     async def _channel(self, conversation_id: str, since: float, now: float) -> dict[str, Any]:
-        records = await self._episodic_for(conversation_id).records_between(conversation_id, since, now)
+        records = await self.read(conversation_id, since, now)
         messages = []
         for r in records:
             if r.content.strip():
