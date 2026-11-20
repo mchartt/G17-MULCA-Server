@@ -162,11 +162,20 @@ answer would come); Discord and Slack give up visibly on a late answer after
 (`hello.thinking`); the web answers in the background, one group's answers in
 order, so a message typed under the banner is shown at once.
 
+A "maybe" Cadence stays silent on now goes on as ordinary chat (the
+conversation logs it, the proactive judge reads it). Before, every message for
+180 s after an answer or a card skipped CS3/CS5/CS7: the e2e specs
+`plan.spec` (CS3 "Think-aloud or SUS?") and `opener.spec` failed on HEAD
+for this reason; both pass now.
+
+Proof on this branch: pytest server 764, client 379; Vitest 167; Playwright
+e2e 16/16 (HEAD: 3 failing, same stack); axe 0 violations on 5 screens
+(`e2e/axe.mjs` opened the landing for the sign-up form, now on /login).
+
 Known limits (decisions for Matteo):
-- Discord/Slack: a message that names Cadence, or comes within 180 s of its
-  answer, now goes to the coordinator only. The proactive judge (CS5/CS7) and
-  the lab agent (web search included) no longer see it: an @mention of the bot
-  no longer reaches the lab agent. Already true on the web before this change.
+- Discord/Slack: an @mention of the bot or a sure call goes to the
+  coordinator only, so it no longer reaches the lab agent (its web search
+  included), and a message Cadence answers is not judged by CS5/CS7 too.
 - Silence on talk ABOUT Cadence rests on the prompt (MAYBE_NOTE): NOT VERIFIED
   with a real model. Earlier corpora showed the prompt alone did not always
   hold such rules.

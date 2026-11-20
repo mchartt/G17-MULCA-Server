@@ -98,6 +98,7 @@ class PlanCommands:
         recent_chat: Callable[[], Awaitable[list[str]]] | None = None,
         remember: Callable[[int, str, str], Awaitable[None]] | None = None,
         clock: Callable[[], float] = time.monotonic,
+        as_chat: Callable[[int, str], Awaitable[None]] | None = None,
     ) -> None:
         self._participants = participants
         self._store = store
@@ -126,6 +127,11 @@ class PlanCommands:
         # new question. Per member, in this session only, for FOCUS_SECONDS.
         self._clock = clock
         self._focus: dict[int, tuple[str, float]] = {}
+        # A "maybe" Cadence stays silent on is an ordinary chat message: the
+        # proactive judge (CS3, CS5, CS7) must still read it. Without this,
+        # every message for 180 s after an answer or a card skipped it (the
+        # e2e "Think-aloud or SUS?" got no CS3 card).
+        self._as_chat = as_chat
 
     async def handle(self, message) -> None:
         """Entry point for planning, checkin, task, why and ask (router.py checked membership)."""
@@ -406,7 +412,11 @@ class PlanCommands:
             # The web no longer forwards these to the lab's agent, which
             # answered them a second time (20/11 test space), so the line is
             # kept here: the chat's memory still has the whole conversation.
-            if self._remember is not None:
+            said = str(message.args.get("said") or question)
+            if maybe and self._as_chat is not None:
+                # Logged by the conversation itself, like any chat message.
+                await self._as_chat(message.member_id, said)
+            elif self._remember is not None:
                 await self._remember(message.member_id, question, "")
             await self._notice(True, "", message.request_id)
             return

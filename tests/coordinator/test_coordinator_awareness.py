@@ -174,3 +174,22 @@ async def test_a_failed_model_call_on_a_direct_message_is_said_not_swallowed(sto
     router, queue, _ = make(store, {"broken": True}, {"broken": True})
     notice, cards = await ask(router, queue, "Cadence, sono al 30%.")
     assert notice.ok is False and notice.text == UNAVAILABLE and cards == []
+
+
+# ----------------------------------------------------------------------
+# Silence on a "maybe" never hides the message from the proactive judge
+# ----------------------------------------------------------------------
+
+
+async def test_a_maybe_cadence_stays_silent_on_is_read_as_ordinary_chat(store):
+    router, queue, _ = make(store, answer(""))
+    await router.route_coordinator(command("ask", ADA, question="Think-aloud or SUS?", said="Think-aloud or SUS?", maybe=True))
+    await router.wait_for_background()
+    assert router._conversation.texts == ["Think-aloud or SUS?"]  # the CS3 judge sees it
+
+
+async def test_a_maybe_cadence_answers_is_not_read_twice(store):
+    router, queue, _ = make(store, answer("Sì, la demo è venerdì."))
+    await router.route_coordinator(command("ask", ADA, question="la demo è venerdì?", maybe=True))
+    await router.wait_for_background()
+    assert getattr(router._conversation, "texts", []) == []

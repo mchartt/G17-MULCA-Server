@@ -49,6 +49,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from ...protocol.incoming import UserTextMessage
 from ...protocol.coordinator import (
     CoordinatorCommandMessage,
     CoordinatorMirrorMessage,
@@ -161,6 +162,7 @@ class CoordinatorRouter:
             today=today,
             recent_chat=self._recent_chat if catchup is not None else None,
             remember=self._remember if catchup is not None else None,
+            as_chat=self._as_chat,
         )
         # Helpful and "send me this card again": no model, no state change.
         self._cards = CardRequests(store=self._store_now, notice=self._notice)
@@ -213,6 +215,26 @@ class CoordinatorRouter:
         try:
             self.opener.heard(message)
         except Exception:  # an answer to the opener must never break the chat
+            logger.exception("%s plan opener could not read a message", self._conversation.conversation_id)
+
+    async def _as_chat(self, member_id: int, text: str) -> None:
+        """
+        A message offered to Cadence as "maybe" that it stays silent on: the
+        Conversation reads it as any chat message (proactive judge, memory),
+        not addressed to the agent. Already mirrored when it was asked.
+        """
+        if not text.strip():
+            return
+        message = UserTextMessage(
+            event="user_text",
+            speaker=member_id,
+            speaker_name=self._conversation.participants().get(member_id, ""),
+            text=text,
+        )
+        await self._conversation.route_user_text(message)
+        try:
+            self.opener.heard(message)
+        except Exception:
             logger.exception("%s plan opener could not read a message", self._conversation.conversation_id)
 
     async def _mirror(self, message: Any) -> None:

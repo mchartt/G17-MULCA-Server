@@ -84,11 +84,9 @@ async def test_a_follow_up_that_is_not_for_cadence_gets_silence(tmp_path):
     (notice,) = [m for m in await drain(web_q) if isinstance(m, CoordinatorNoticeMessage)]
     assert notice.ok and notice.text == ""
     assert "may not be for you" in prompt(group)
-    # The member's line joins the chat's memory (the web no longer sends it to
-    # the lab's agent too), Cadence's silence does not.
-    await web.route_coordinator(command("catchup", 100_000_001, peek=True))
-    catchup = [m for m in await drain(web_q) if getattr(m, "catchup", None)][-1].catchup
-    assert catchup["here"]["total"] == 1
+    # Not for Cadence: the line goes on as ordinary chat, so the conversation
+    # logs it (the chat's memory) and the proactive judge (CS3, CS5, CS7) reads it.
+    assert web._conversation.texts == ["ok Bruno I'll send you the file"]
 
     notice = await ask(web, web_q, "and is that still friday?")
     assert notice.text == "Yes, Friday."
