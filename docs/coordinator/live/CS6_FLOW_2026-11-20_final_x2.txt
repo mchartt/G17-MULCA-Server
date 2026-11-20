@@ -1,0 +1,109 @@
+
+[PASS] dev on track #1
+  sweeps [True, False, False, False] (5.1 s)
+  Cadence: Matías, come sta andando con i dati per il RASD? Ti manca qualcosa per completarli?
+  Matías (5 h later): Tutto bene, mi manca solo un ultimo controllo.
+  Cadence: Grazie per l’aggiornamento, Matías!
+  (4.0 s)
+
+[PASS] dev on track #2
+  sweeps [True, False, False, False] (4.5 s)
+  Cadence: Matías, come sta andando con i dati per il RASD? Ti manca qualcosa per completarli?
+  Matías (5 h later): Tutto bene, mi manca solo un ultimo controllo.
+  Cadence: Grazie per l’aggiornamento, Matías!
+  (3.5 s)
+
+[PASS] holdout on track, paraphrase #1
+  sweeps [True, False, False, False] (5.5 s)
+  Cadence: Matías, come sta andando il lavoro sui dati per il RASD e ti manca qualcosa per finirlo?
+  Matías (8 h later): procede, stasera lo chiudo
+  Cadence: Grazie Matías, buon lavoro per stasera.
+  (3.4 s)
+
+[PASS] holdout on track, paraphrase #2
+  sweeps [True, False, False, False] (2.2 s)
+  Cadence: Matías, come sta andando con i dati per il RASD? Ti manca qualcosa per completarli?
+  Matías (8 h later): procede, stasera lo chiudo
+  Cadence: Grazie Matías, ricevuto!
+  (3.2 s)
+
+[PASS] dev behind #1
+  sweeps [True, False, False, False] (2.3 s)
+  Cadence: Matías, come sta andando con i dati per il RASD? Ti manca qualcosa per completarli?
+  Matías (6 h later): Sono indietro, non penso di riuscire a finire in tempo.
+  Cadence: Grazie per averlo detto. È una questione di tempo o c’è qualcosa di specifico che ti sta rallentando?
+  (3.9 s)
+
+[PASS] dev behind #2
+  sweeps [True, False, False, False] (2.5 s)
+  Cadence: Matías, come sta andando con i dati per il RASD? Ti manca qualcosa per completarli?
+  Matías (6 h later): Sono indietro, non penso di riuscire a finire in tempo.
+  Cadence: Grazie per avermelo detto. È una questione di tempo o c’è qualcosa di specifico che ti sta rallentando?
+Fonti: attività “Dati per il RASD”.
+  (2.9 s)
+
+[PASS] holdout stuck, paraphrase #1
+  sweeps [True, False, False, False] (3.9 s)
+  Cadence: Matías, come va con i dati per il RASD? Ti manca qualcosa per finire?
+  Matías (9 h later): sono fermo, aspetto ancora il file dal prof
+  Cadence: Potresti partire con dati provvisori per il RASD, oppure chiedere al prof quando può arrivare il file. Quale delle due ti sembra più utile?
+Fonti: attività “Dati per il RASD”.
+  (3.3 s)
+
+[PASS] holdout stuck, paraphrase #2
+  sweeps [True, False, False, False] (4.1 s)
+  Cadence: Matías, come sta andando il lavoro sui dati per il RASD? Ti manca qualcosa per finirlo?
+  Matías (9 h later): sono fermo, aspetto ancora il file dal prof
+  Cadence: Per i dati del RASD, ti suggerisco due strade mentre aspetti il file del prof:
+- Iniziare dalle parti che non dipendono dal file.
+- Chiedere al prof quando può mandarlo.
+Quale ti sembra più utile?
+Fonti: attività “Dati per il RASD”.
+  (4.2 s)
+
+[PASS] dev declined #1
+  sweeps [True, False, False, False] (2.5 s)
+  Cadence: Matías, come sta andando con i dati per il RASD? Ti manca qualcosa per completarli?
+  Matías (5 h later): ne parliamo domani, ora non ho tempo
+  Cadence: Va bene, ne parliamo domani.
+  (2.8 s)
+
+[PASS] dev declined #2
+  sweeps [True, False, False, False] (2.8 s)
+  Cadence: Matías, come sta andando con i dati per il RASD? Ti manca qualcosa per completarli?
+  Matías (5 h later): ne parliamo domani, ora non ho tempo
+  Cadence: Va bene, ne riparliamo domani.
+  (3.1 s)
+
+[FAIL] holdout about something else #1
+  sweeps [True, False, False, False] (3.3 s)
+  Cadence: Matías, come sta andando con i dati per il RASD? Ti manca qualcosa per completarli?
+  Matías (7 h later): qualcuno ha gli appunti di ieri?
+  Cadence: Nel progetto non ci sono gli appunti di ieri e non risulta chi li abbia. Chi li ha può condividerli qui in chat.
+  (5.5 s)
+  !! answered or recorded '' for a message about something else
+
+[PASS] holdout about something else #2
+  sweeps [True, False, False, False] (2.7 s)
+  Cadence: Matías, come sta andando con i dati per il RASD? Ti manca qualcosa per completarli?
+  Matías (7 h later): qualcuno ha gli appunti di ieri?
+  (3.7 s)
+
+[PASS] holdout done #1
+  sweeps [True, False, False, False] (2.8 s)
+  Cadence: Matías, come sta andando con i dati per il RASD? Ti manca qualcosa per completarli?
+  Matías (6 h later): fatto! l'ho appena caricato
+  Cadence: La modifica per segnare “Dati per il RASD” come completato è pronta su una card da confermare.
+Fonti: attività “Dati per il RASD”.
+  (6.2 s)
+
+[PASS] holdout done #2
+  sweeps [True, False, False, False] (2.8 s)
+  Cadence: Matías, come sta andando con i dati per il RASD? Ti manca qualcosa per completarli?
+  Matías (6 h later): fatto! l'ho appena caricato
+  Cadence: La modifica per segnare i dati per il RASD come completati è pronta su una card da confermare.
+Fonti: attività “Dati per il RASD”.
+  (4.2 s)
+
+13/14 passed in 105 s
+tokens: 28 calls, 42693 prompt, 2733 completion (~1524 prompt per call)

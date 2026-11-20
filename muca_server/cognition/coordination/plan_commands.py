@@ -39,6 +39,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime
+from types import SimpleNamespace
 from typing import Any
 
 from .checkin import findings, owners_report
@@ -110,6 +111,11 @@ class PlanCommands:
         self._remember = remember
         self._task: asyncio.Task | None = None
         self._dependencies: asyncio.Task | None = None
+
+    @property
+    def busy(self) -> bool:
+        """A member's request (planning, check-in, ask...) is running."""
+        return self._task is not None and not self._task.done()
 
     async def handle(self, message) -> None:
         """Entry point for planning, checkin, task, why and ask (router.py checked membership)."""
@@ -331,7 +337,30 @@ class PlanCommands:
             return
         await self._notice(True, why_text(answer, self._participants()), message.request_id)
 
-    async def _ask(self, message) -> None:
+    def answer_late(self, member_id: int, text: str, post: Callable[[str], Awaitable[None]]) -> bool:
+        """
+        CS6: a member's chat message, any time after Cadence asked them about
+        a task's progress, read as a possible reply (a "maybe": silence when it
+        is about something else). The answer goes to the chat with `post`, not
+        as the reply to a command. False when a request is already running.
+        """
+        if self.busy:
+            return False
+        message = SimpleNamespace(
+            event="coordinator_command", command="ask", member_id=member_id, request_id="",
+            channel="group", args={"question": text, "maybe": True},
+        )
+
+        async def quiet() -> None:  # a failure on a message not sent to Cadence is never announced
+            try:
+                await self._ask(message, post=post)
+            except Exception:
+                logger.exception("late progress reply failed")
+
+        self._task = asyncio.create_task(quiet())
+        return True
+
+    async def _ask(self, message, post: Callable[[str], Awaitable[None]] | None = None) -> None:
         question = str(message.args.get("question", "")).strip()[:MAX_QUESTION]
         if not question:
             await self._notice(False, "Write what you want to ask Cadence.", message.request_id)
@@ -341,7 +370,9 @@ class PlanCommands:
         members = self._participants()
         chat = await self._recent_chat() if self._recent_chat is not None else []
         maybe = message.args.get("maybe") is True  # a follow-up that does not name Cadence
-        pending = [card_line(c, members) for c in await store.open_proposals(self._service().now())][:8]
+        now = self._service().now()
+        pending = [card_line(c, members) for c in await store.open_proposals(now)][:8]
+        ledger = await store.progress_checkins()
         answer = await self._writer.answer_question(
             question,
             members=members,
@@ -351,6 +382,7 @@ class PlanCommands:
             today=self._today(),
             maybe=maybe,
             pending=pending,
+            checkins=_checkin_lines(ledger, state, members, now),
         )
         if answer is None and not maybe:
             await self._unavailable(message.event, message.request_id)
@@ -361,11 +393,21 @@ class PlanCommands:
             # The web no longer forwards these to the lab's agent, which
             # answered them a second time (20/11 test space), so the line is
             # kept here: the chat's memory still has the whole conversation.
-            if self._remember is not None:
+            if self._remember is not None and post is None:  # a late reply is already in the log
                 await self._remember(message.member_id, question, "")
-            await self._notice(True, "", message.request_id)
+            if post is None:
+                await self._notice(True, "", message.request_id)
             return
+        if answer.progress is not None:
+            # CS6: what the member said about the task's progress, kept so the
+            # coordinator does not ask again (memory, not a change of the plan).
+            task = next(t for t in state.tasks if t.task_id == answer.progress[0])
+            due = task.due_date.isoformat() if task.due_date else ""
+            await store.record_progress(task.task_id, due, answer.progress[1], now)
         text = ask_text(answer, members, it=italian(state.language, f"{question} {answer.answer}"))
+        if answer.progress is not None and answer.progress[1] in ("on_track", "declined") and answer.action is None:
+            # A short "grazie" or "ok" to a progress reply needs no sources line.
+            text = answer.answer
         card = None
         if answer.action is not None:
             # The member asked for a change: it becomes a card a member confirms,
@@ -376,9 +418,14 @@ class PlanCommands:
         if self._remember is not None:
             # The question and the answer join the chat's memory: the next
             # message, a follow-up or a catch-up sees them.
-            await self._remember(message.member_id, question, text.split("\n")[0] if card is None and answer.action else answer.answer)
+            # A late reply's own words are already in the log (they came as user_text).
+            said = "" if post is not None else question
+            await self._remember(message.member_id, said, text.split("\n")[0] if card is None and answer.action else answer.answer)
         if card is not None:
             await self._send_proposal(card)
+        if post is not None:
+            await post(text)
+            return
         # Last, so this request is over when the member reads the answer: a
         # follow-up typed at once is never refused as "already working" (20/11 e2e).
         await self._notice(True, text, message.request_id)
@@ -568,6 +615,25 @@ class PlanCommands:
             await self._notice(False, "Say what to change: the name or the date.", message.request_id)
             return
         await self._send_state("")
+
+
+def _checkin_lines(ledger: list[dict], state, members: dict[int, str], now: float) -> list[str]:
+    """The CS6 questions of the last 3 days, for the ask prompt: about what, to whom, and the answer so far."""
+    tasks = {t.task_id: t for t in state.tasks}
+    lines = []
+    for row in sorted(ledger, key=lambda r: r.get("asked_at") or 0):
+        task = tasks.get(row["task_id"])
+        if task is None or not row.get("asked_at") or now - row["asked_at"] > 3 * 86400:
+            continue
+        hours = max(0, round((now - row["asked_at"]) / 3600))
+        answer = row.get("answer") or "no answer yet"
+        if answer == "skipped":
+            continue
+        lines.append(
+            f"task_id {task.task_id} ({task.title}, due {row['due_date']}): asked "
+            f"{members.get(row.get('member_id'), 'its owner')} {hours} h ago; answer: {answer}"
+        )
+    return lines[-5:]
 
 
 def _task_ids(value, tasks) -> list[str] | None:

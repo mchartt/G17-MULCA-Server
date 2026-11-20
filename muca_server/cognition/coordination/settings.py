@@ -20,7 +20,12 @@ TTL_ENV_VAR = "MUCA_COORDINATOR_PROPOSAL_TTL_HOURS"
 CHECKIN_ENV_VAR = "MUCA_COORDINATOR_CHECKIN_HOURS"
 # The text model that drafts every card (writer.py); on Azure, the deployment name.
 MODEL_ENV_VAR = "MUCA_COORDINATOR_MODEL"
+# CS6 progress check-ins (progress.py): on with the coordinator unless set to
+# off; the project's time zone, for the deadline convention and quiet hours.
+PROGRESS_ENV_VAR = "MUCA_COORDINATOR_PROGRESS_CHECKINS"
+TIMEZONE_ENV_VAR = "MUCA_COORDINATOR_TIMEZONE"
 TRUE_WORDS = frozenset({"1", "true", "yes", "on"})
+FALSE_WORDS = frozenset({"0", "false", "no", "off"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +34,8 @@ class CoordinatorSettings:
     proposal_ttl_seconds: float = DEFAULT_TTL_SECONDS
     checkin_interval_seconds: float = 0.0
     writer_model: str = DEFAULT_WRITER_MODEL
+    progress_checkins: bool = True
+    timezone: str = "Europe/Rome"
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] = os.environ) -> "CoordinatorSettings":
@@ -38,6 +45,8 @@ class CoordinatorSettings:
         checkin_hours = env.get(CHECKIN_ENV_VAR, "").strip()
         return cls(
             writer_model=env.get(MODEL_ENV_VAR, "").strip() or DEFAULT_WRITER_MODEL,
+            progress_checkins=env.get(PROGRESS_ENV_VAR, "").strip().lower() not in FALSE_WORDS,
+            timezone=env.get(TIMEZONE_ENV_VAR, "").strip() or "Europe/Rome",
             checkin_interval_seconds=max(0.0, float(checkin_hours) * 3600) if checkin_hours else 0.0,
             enabled=enabled,
             proposal_ttl_seconds=(

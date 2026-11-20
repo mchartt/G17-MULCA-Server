@@ -40,6 +40,7 @@ background; every chat message then passes through `opener.heard`.
 from __future__ import annotations
 
 import asyncio
+import re
 import logging
 import time
 from collections.abc import Callable
@@ -56,6 +57,7 @@ from ...protocol.coordinator import (
     CoordinatorStateMessage,
     ProposalResponseMessage,
 )
+from ...protocol.outgoing import AssistantTextMessage
 from .card_requests import CardRequests
 from .catchup import CatchUp, channel_of, summary_line
 from .checkin_timer import CheckinTimer
@@ -74,7 +76,9 @@ from .models import (
 from .opener import PlanOpener
 from .plan_commands import PlanCommands
 from .plan_writer import PlanWriter
-from .proactive import ProactiveBridge
+from .plan_writes import topic_key
+from .progress import ProgressMonitor, timezone_from
+from .proactive import ProactiveBridge, claim_key
 from .proactive_writer import ProactiveWriter
 from .wording import italian, localize
 from .proposals import ProposalService, new_id
@@ -89,6 +93,16 @@ GROUP_ONLY = "The coordinator works only in a group channel, not in a direct mes
 MEMBERS_ONLY = "Only members of this group can use the coordinator here."
 # The catch-up recap needs at least two messages to have something to sum up.
 RECAP_MIN_MESSAGES = 2
+# CS6: how long after a progress question a member's message is still read as
+# a possible reply, and how many of their messages per question at most.
+LATE_REPLY_SECONDS = 3 * 24 * 3600
+LATE_TRIES = 3
+# A message asking the other members is not a reply to Cadence (live 20/11:
+# "qualcuno ha gli appunti di ieri?" got an answer). Code, not prompt (as F8).
+TO_THE_GROUP = re.compile(
+    r"^\s*(qualcuno|ragazzi|raga|secondo voi|chi di voi|chi ha|chi può|chi mi|avete|anyone|guys|does anyone|has anyone|who has|who can)\b",
+    re.IGNORECASE,
+)
 KICKOFF_RUNNING = "A kickoff is already running for this group: its card will appear here."
 
 
@@ -107,6 +121,8 @@ class CoordinatorRouter:
         links: GroupLinks | None = None,
         live: LiveGroups | None = None,
         catchup: CatchUp | None = None,
+        progress_checkins: bool = False,
+        timezone: str = "",
     ) -> None:
         # Set first: __getattr__ below reads it.
         self._conversation = conversation
@@ -126,6 +142,11 @@ class CoordinatorRouter:
         self._live = live
         self._catchup = catchup
         self._home_id: str | None = None
+        # CS6: messages already offered as late replies, per (task, due date).
+        self._late_tries: dict[tuple[str, str], int] = {}
+        # Lines this router already sent to ask as late replies (text -> time):
+        # the same line arriving as a web maybe-ask is then not read twice.
+        self._late_read: dict[str, float] = {}
         # The kickoff running in the background, if any (one per group).
         self._kickoff: asyncio.Task | None = None
         # The reflection being built (it may ask the model for the week's topics).
@@ -148,11 +169,12 @@ class CoordinatorRouter:
             else None
         )
         # M4: planning, checkin, task, why (plan_commands.py).
+        plan_writer = PlanWriter(writer)
         self._plan = PlanCommands(
             participants=self._roster,
             store=self._store_now,
             service=self._service,
-            writer=PlanWriter(writer),
+            writer=plan_writer,
             send_proposal=self._send_proposal,
             notice=self._notice,
             send_state=self._send_state,
@@ -174,12 +196,29 @@ class CoordinatorRouter:
             language=self._language,
             send_proposal=self._send_proposal,
         )
+        # CS6: one short progress question when a deadline is close (progress.py).
+        self.progress = (
+            ProgressMonitor(
+                conversation,
+                store=self._store_now,
+                members=self._roster,
+                write=plan_writer.draft_progress_question,
+                say=self._say,
+                chat=self._recent_timed,
+                busy=self._busy,
+                open_card_titles=self._open_card_titles,
+                tz=timezone_from(timezone),
+            )
+            if progress_checkins and catchup is not None
+            else None
+        )
         # FR15: the check-in on time, while the session is open (off when 0).
         self.checkin_timer = CheckinTimer(
             conversation,
             interval_seconds=checkin_interval_seconds,
             store=self._store_now,
-            run_checkin=self._plan.timed_checkin,
+            run_checkin=self._timed_checkin,
+            run_progress=self.progress.sweep if self.progress is not None else None,
         )
 
     def __getattr__(self, name: str) -> Any:
@@ -203,7 +242,14 @@ class CoordinatorRouter:
         """
         A chat message: the Conversation handles it as always, then the
         group's other channels get a copy to show (linked groups only).
+        CS6: a message from a member Cadence asked about a task's progress,
+        not answered yet, is also read by Cadence as a possible reply, however
+        late it comes (before the Conversation, so R10 holds for it).
         """
+        try:
+            await self._late_progress_reply(message)
+        except Exception:  # reading a late reply must never break the chat
+            logger.exception("%s could not read a late progress reply", self._conversation.conversation_id)
         await self._conversation.route_user_text(message)
         try:
             await self._mirror(message)
@@ -261,7 +307,22 @@ class CoordinatorRouter:
             elif message.command == "kickoff":
                 await self._start_kickoff(message)
             elif message.command in ("planning", "checkin", "task", "milestone", "why", "ask"):
-                await self._plan.handle(message)
+                maybe = message.command == "ask" and message.args.get("maybe") is True
+                if maybe and self.proactive is not None:
+                    # R10: this message is Cadence's to answer (or to leave
+                    # unanswered); the lab's agent must not reply to it too.
+                    self.proactive.claim(str(message.args.get("question", "")))
+                late = maybe and time.time() - self._late_read.get(claim_key(str(message.args.get("question", ""))), 0) < 120
+                if late:
+                    # Already read as a late progress reply (its user_text came first): once is enough.
+                    await self._notice(True, "", request_id)
+                elif maybe and self.opener.listening:
+                    # R8 for the chat too: the members are answering "How do you
+                    # want to plan the work?"; their lines go to the opener, not
+                    # to an ask reply or a task card. Silence, no model call.
+                    await self._notice(True, "", request_id)
+                else:
+                    await self._plan.handle(message)
             elif message.command == "language":
                 await self._on_language(message)
             elif message.command == "charter":
@@ -278,6 +339,12 @@ class CoordinatorRouter:
                 await self._on_document(message)
             elif message.command == "reflection":
                 await self._start_reflection(message)
+            elif message.command == "progress":
+                # CS6 on request of the adapter (a group with a deadline near
+                # and no session since a restart): the same sweep as the timer.
+                if self.progress is not None:
+                    await self.progress.sweep()
+                await self._notice(True, "", request_id)
             else:  # "state"
                 await self._send_state(request_id)
         except Exception:
@@ -657,6 +724,106 @@ class CoordinatorRouter:
             if not recap:
                 raise
             await self._fail(message.event, message.request_id)
+
+    async def _late_progress_reply(self, message: Any) -> bool:
+        """
+        The speaker owes an answer to a CS6 question (asked < LATE_REPLY_SECONDS
+        ago, no answer recorded): offer this message to `ask` as "maybe" and
+        post the answer in the chat. At most LATE_TRIES messages per question,
+        so a member who talks about other things does not cost a call each time.
+        """
+        if self.progress is None or self._conversation.is_private or self._conversation.is_ephemeral:
+            return False
+        text = (getattr(message, "text", "") or "").strip()
+        speaker = getattr(message, "speaker", None)
+        if not text or speaker is None:
+            return False
+        if self.proactive is not None and self.proactive.is_claimed(text):
+            return False  # the web already offered it to ask as a follow-up: read once
+        if TO_THE_GROUP.search(text):
+            return False
+        now = time.time()
+        rows = [
+            r for r in await self._store_now().progress_checkins()
+            if r.get("member_id") == speaker and r.get("asked_at") and not r.get("answer")
+            and now - r["asked_at"] < LATE_REPLY_SECONDS
+        ]
+        if not rows:
+            return False
+        key = (rows[-1]["task_id"], rows[-1]["due_date"])
+        if self._late_tries.get(key, 0) >= LATE_TRIES:
+            return False
+        if not self._plan.answer_late(speaker, text[:500], self._say_unlogged):
+            return False
+        self._late_tries[key] = self._late_tries.get(key, 0) + 1
+        if self.proactive is not None:
+            self.proactive.claim(text)  # R10: the lab's agent does not answer it too
+        self._late_read = {k: at for k, at in self._late_read.items() if now - at < 120}
+        self._late_read[claim_key(text)] = now
+        return True
+
+    async def _say_unlogged(self, text: str) -> None:
+        """Post an answer whose words ask already wrote into the chat's memory."""
+        await self._post_text(text)
+
+    def _busy(self) -> str:
+        """Why a time-driven message must wait (a card draft, the opener, a member's request), or ""."""
+        if self.proactive is not None:
+            reason = self.proactive.busy()
+            if reason:
+                return reason
+        if self.opener.listening:
+            return "R8 the plan opener is listening"
+        if self._plan.busy:
+            return "a member's request is running"
+        return ""
+
+    async def _timed_checkin(self) -> bool:
+        """
+        The interval check-in card, under the same shared budget as every
+        unsolicited message: it waits while something else runs, and once
+        posted it counts for the cards' spacing (R4) like any proactive card.
+        """
+        if self._busy():
+            return False
+        posted = await self._plan.timed_checkin()
+        if posted:
+            store = self._store_now()
+            previous = await store.mark("proactive")
+            await store.save_mark("proactive", previous[0] if previous else 0, time.time())
+        return posted
+
+    async def _open_card_titles(self) -> set[str]:
+        """Titles and topics of the cards waiting for a click (CS6 asks nothing a card already covers)."""
+        keys: set[str] = set()
+        for card in await self._store_now().open_proposals(time.time()):
+            payload = card.payload or {}
+            for value in (payload.get("title"), (payload.get("context") or {}).get("topic")):
+                if value:
+                    keys.add(topic_key(str(value)))
+        return keys
+
+    async def _say(self, text: str) -> None:
+        """Cadence speaks unasked in the group chat (a CS6 question): shown, remembered, heard by the observer."""
+        await self._post_text(text)
+        if self._catchup is not None:
+            await self._catchup.remember(self._conversation.conversation_id, "Cadence", "", text)
+
+    async def _post_text(self, text: str) -> None:
+        if getattr(self._conversation, "is_answering", False):
+            # Never in the middle of the main agent's answer: the two texts would mix.
+            wait_until_idle = getattr(self._conversation, "wait_until_idle", None)
+            if wait_until_idle is not None:
+                await wait_until_idle()
+        await self._outbound.put(AssistantTextMessage(text=text, is_final=True, modality="text"))
+        tell_observers = getattr(self._conversation, "tell_observers", None)
+        if tell_observers is not None:
+            await tell_observers(f"Cadence: {text}")
+
+    async def _recent_timed(self) -> list[tuple[float, str]]:
+        # Three days: the CS6 question sees Cadence's earlier questions (to vary
+        # its opening) and whether the task was discussed (CHAT_HOURS filters).
+        return await self._catchup.recent_timed(self._conversation.conversation_id, window=3 * 24 * 3600, limit=60)
 
     async def _recent_chat(self) -> list[str]:
         """This channel's last lines, so Cadence answers within the conversation."""

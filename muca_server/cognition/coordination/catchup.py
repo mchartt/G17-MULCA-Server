@@ -133,13 +133,19 @@ class CatchUp:
 
     async def recent_lines(self, conversation_id: str, *, window: float = 24 * 3600, limit: int = 30) -> list[str]:
         """The last lines of one channel's chat as "Name: text", Cadence's answers included."""
+        return [line for _, line in await self.recent_timed(conversation_id, window=window, limit=limit)]
+
+    async def recent_timed(
+        self, conversation_id: str, *, window: float = 24 * 3600, limit: int = 30
+    ) -> list[tuple[float, str]]:
+        """The same lines with their time (CS6: was a task talked about lately?)."""
         now = self._clock()
-        lines: list[str] = []
+        lines: list[tuple[float, str]] = []
         for r in await self.read(conversation_id, now - window, now):
             if r.content.strip():
-                lines.append(f"{r.speaker or 'member'}: {_clip(r.content)}")
+                lines.append((r.timestamp, f"{r.speaker or 'member'}: {_clip(r.content)}"))
             if r.assistant_output and r.assistant_output.strip():
-                lines.append(f"Cadence: {_clip(r.assistant_output)}")
+                lines.append((r.timestamp, f"Cadence: {_clip(r.assistant_output)}"))
         return lines[-limit:]
 
     async def _channel(self, conversation_id: str, since: float, now: float) -> dict[str, Any]:
