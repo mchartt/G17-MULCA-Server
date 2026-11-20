@@ -378,7 +378,8 @@ async def test_the_catch_up_recap_sums_up_the_messages_in_the_background(tmp_pat
     from .test_coordinator_links import command as group_command
 
     topics = {"topics": [{"title": "Dati del RASD", "summary": "Matías manda i dati entro venerdì."}]}
-    group = Group(tmp_path, topics)
+    recap = {"overview": "Matías ha promesso i dati per venerdì; il RASD slitta a lunedì.", **topics, "open": ["Chi rilegge il RASD?"]}
+    group = Group(tmp_path, recap)
     web, web_q = await open_web_space(group)
     now = clock.time()
     for n, text in enumerate(["mando i dati venerdì", "ok, allora il RASD lunedì", "perfetto", "ci sentiamo"]):
@@ -387,9 +388,18 @@ async def test_the_catch_up_recap_sums_up_the_messages_in_the_background(tmp_pat
     await web.wait_for_background()
     notice = [m for m in await drain(web_q) if getattr(m, "catchup", None)][-1]
     assert notice.catchup["topics"] == topics["topics"]
+    assert notice.catchup["recap"] == recap
     assert "mando i dati venerdì" in group.writer._client.calls[-1]["messages"][-1]["content"]
     # Without recap: no model call, no topics.
     calls = len(group.writer._client.calls)
     await web.route_coordinator(group_command("catchup", 100_000_001, peek=True))
     notice = [m for m in await drain(web_q) if getattr(m, "catchup", None)][-1]
     assert "topics" not in notice.catchup and len(group.writer._client.calls) == calls
+
+
+def test_the_catch_up_line_follows_the_groups_language():
+    from muca_server.cognition.coordination.catchup import summary_line
+
+    result = {"decisions": [{}], "tasks_done": [{}, {}], "tasks_added": [], "here": {"total": 7}, "elsewhere": [], "linked": True}
+    assert summary_line(result) == "Since your last catch-up: 1 decision, 2 tasks done, 7 messages here."
+    assert summary_line(result, it=True) == "Dalla tua ultima visita: 1 decisione, 2 attività completate, 7 messaggi qui."

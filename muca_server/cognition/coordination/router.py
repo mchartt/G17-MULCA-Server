@@ -87,8 +87,8 @@ logger = logging.getLogger(__name__)
 UNAVAILABLE = "The coordinator is not available right now. Try again in a few minutes."
 GROUP_ONLY = "The coordinator works only in a group channel, not in a direct message."
 MEMBERS_ONLY = "Only members of this group can use the coordinator here."
-# The catch-up recap needs a few messages to have topics worth naming.
-RECAP_MIN_MESSAGES = 4
+# The catch-up recap needs at least two messages to have something to sum up.
+RECAP_MIN_MESSAGES = 2
 KICKOFF_RUNNING = "A kickoff is already running for this group: its card will appear here."
 
 
@@ -641,11 +641,16 @@ class CoordinatorRouter:
             if recap:
                 places = [result.get("here") or {"messages": []}, *result["elsewhere"]]
                 lines = [f"{m['speaker']}: {m['text']}" for place in places for m in place["messages"]]
-                topics = await PlanWriter(self._writer).draft_topics(lines) if len(lines) >= RECAP_MIN_MESSAGES else None
-                result["topics"] = topics or []
+                recap = await PlanWriter(self._writer).draft_recap(lines) if len(lines) >= RECAP_MIN_MESSAGES else None
+                result["recap"] = recap or {"overview": "", "topics": [], "open": []}
+                result["topics"] = result["recap"]["topics"]  # older clients read the topics only
+            # The group's language, or the language its messages are in.
+            places = [result.get("here") or {"messages": []}, *result["elsewhere"]]
+            sample = " ".join(m["text"] for place in places for m in place["messages"][-10:])
+            it = italian(await self._store_now().setting("language"), sample)
             await self._outbound.put(
                 CoordinatorNoticeMessage(
-                    ok=True, text=summary_line(result), request_id=message.request_id, catchup=result
+                    ok=True, text=summary_line(result, it=it), request_id=message.request_id, catchup=result
                 )
             )
         except Exception:
