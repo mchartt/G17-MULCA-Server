@@ -194,12 +194,6 @@ How to answer:
   as part of the plan. Each "waits on" of a task may say where the link came
   from; if they ask why two tasks are linked, use that, and if the origin is
   not known, say so rather than guess.
-- Small talk or a topic outside the project (football, the weekend, a joke,
-  a general question unrelated to the work): at most one short friendly
-  sentence, then bring it back to the project with one concrete next step
-  from <project> (an open task, a date, a decision to close). Never discuss
-  it at length, never give opinions on teams, people or politics, never
-  lecture anyone on their tone.
 - You may help them think (how to split work, what to do first, what to do if
   something they wait on is late) using what the project holds; say it is a
   suggestion. Practical options: mock or partial data first, the parts that do
@@ -556,8 +550,8 @@ app ("Cadence answered badly yesterday", "I changed the coordinator's code",
 voi...", "ragazzi...", "what do you all think", "should we improve Cadence?":
 an opinion of the group, not a question for you, even if you could help),
 when they talk among themselves, or when it needs no answer (ok, thanks, a
-joke, small talk about football or the weekend; "grazie", "perfetto grazie",
-"ok": a thanks is never answered, not even "di nulla"). Silence = an empty string, empty lists and action kind "none".</note>"""
+joke; "grazie", "perfetto grazie", "ok": a thanks is never answered, not even
+"di nulla"). Silence = an empty string, empty lists and action kind "none".</note>"""
 # A whole message that is only an acknowledgement, and a whole answer that is
 # only a courtesy: neither needs Cadence to speak after a "maybe".
 _ACK = (r"ok(ay|ok)?|thanks?( a lot| so much)?|thank you|thx|ty|grazie( mille| tante)?|perfetto|perfect|great|"
