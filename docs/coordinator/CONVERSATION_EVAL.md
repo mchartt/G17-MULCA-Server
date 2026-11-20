@@ -133,3 +133,31 @@ python scripts/live_ask_corpus.py <path to .env> [repeats]
 
 Stopping rule used: at most 3 prompt iterations; stop when regression and
 holdout pass twice and no old corpus case regresses.
+
+## Awareness and reliability (20 Nov 2026, evening: Matteo's screenshots)
+
+Root causes found in code, each with a regression test. Fake model only:
+these prove routing, prompt contents and delivery, **not** how a real model
+answers. Real-model runs: NOT RUN (need Matteo's OK for tokens).
+
+| # | Screenshot failure | Root cause (layer) | Fix | Test |
+|---|---|---|---|---|
+| A | "Controlla le mie task" → "which Matteo Cesandri, Software Engineer or Design?" | prompt: the asker was never named; task owners by name only, and two member records share the name (why the space has two: NON VERIFICATO) | `<asker>` block built by the server from the member id: name, their tasks by owner id, a same-name record told apart; owners as "Name (id N)" | `test_coordinator_awareness.py` A tests |
+| B | after "Frontend Application", "sono al 30%" → "which task?" | no conversational state: the task in focus lived only in the chat text | per-member focus (task id, 30 min, this session only) from the answer's action or its one named task; given to the model | `test_coordinator_awareness.py` B tests |
+| C | "Oii Cadence, sono al 30%..." never answered | routing (client): "Oii" was not a greeting, and **a raw 0x08 byte** in `addressing.py` (a mangled `\b`) disabled every "greeting + Cadence" sure call; the message went to the lab's agent | stretched greetings; `\b` restored; the name anywhere is offered as "maybe" (the model stays silent on talk ABOUT Cadence) | `prototype/tests/test_addressing.py` |
+| C2 | a second message while the first was answered → "already working" / nothing | server refused concurrent asks (BUSY) | asks wait their turn (FIFO lock), every one answered | `test_two_messages_sent_at_once_are_both_answered_in_order` |
+| C3 | answer after 60 s dropped | web/Discord/Slack forgot the request id at the timeout | late answers posted when they come; web gives up visibly after 180 s more | `prototype/tests/test_web.py`, `test_cadence_chat_channels.py` |
+| D | progress not applied | (not a separate bug: never reached the ask) | existing update_task → card → click path | `test_coordinator_ask_updates.py` |
+| F | `**30%**` on the card | the card's reason (= Cadence's answer) rendered as plain text | same safe inline parser as the chat; no "Fonti:" line under a card | `webapp/src/console/Awareness.test.tsx` |
+
+Also: "Cadence is thinking…" (web banner after 0.7 s, Discord typing, Slack
+placeholder line replaced by the answer); Discord and Slack now route
+messages for Cadence to the coordinator like the web app (one rule,
+`addressing.for_cadence`); a message to Cadence is still mirrored to the
+group's linked channels (`args.said`).
+
+Not done here (decisions needed): soft delete / restore of tasks (schema
+change), reverting a confirmed change, milestone reschedule and dependency
+removal by chat, cancelling a pending card by chat. Pre-existing flaky test:
+`test_a_blocker_replaces_an_owner_card_still_being_drafted` (sleep 0.05 s)
+fails only under load; 12/12 sequential on HEAD and on this branch.

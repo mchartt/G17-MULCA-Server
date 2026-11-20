@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime
 from typing import Any
@@ -72,6 +73,8 @@ logger = logging.getLogger(__name__)
 MAX_DEPENDENCY_CARDS = 2
 
 BUSY = "The coordinator is already working on a request for this group: its answer will appear here."
+# How long the task a member was last talking about stays "it" for Cadence.
+FOCUS_SECONDS = 30 * 60
 MAX_TASKS_TEXT = 4000
 MAX_QUESTION = 500
 NOT_SAVED = (
@@ -94,6 +97,7 @@ class PlanCommands:
         today: Callable[[], date] = date.today,
         recent_chat: Callable[[], Awaitable[list[str]]] | None = None,
         remember: Callable[[int, str, str], Awaitable[None]] | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._participants = participants
         self._store = store
@@ -110,6 +114,18 @@ class PlanCommands:
         self._remember = remember
         self._task: asyncio.Task | None = None
         self._dependencies: asyncio.Task | None = None
+        # Messages to Cadence ("ask") wait their turn instead of being refused:
+        # on 20/11 a second message while the first was being answered got
+        # "already working" and, for a follow-up, nothing at all. One at a
+        # time per group (asyncio.Lock wakes waiters in arrival order), so two
+        # answers never read or draft cards from a half-updated plan.
+        self._ask_lock = asyncio.Lock()
+        self._asks: set[asyncio.Task] = set()
+        # The task each member was last talking about with Cadence, by task id
+        # (never a title): "sono al 30%" after "Frontend Application" needs no
+        # new question. Per member, in this session only, for FOCUS_SECONDS.
+        self._clock = clock
+        self._focus: dict[int, tuple[str, float]] = {}
 
     async def handle(self, message) -> None:
         """Entry point for planning, checkin, task, why and ask (router.py checked membership)."""
@@ -119,7 +135,12 @@ class PlanCommands:
         if message.command == "milestone":
             await self._on_milestone(message)
             return
-        handlers = {"planning": self._planning, "checkin": self._checkin, "why": self._why, "ask": self._ask}
+        if message.command == "ask":
+            task = asyncio.create_task(self._queued_ask(message))
+            self._asks.add(task)
+            task.add_done_callback(self._asks.discard)
+            return
+        handlers = {"planning": self._planning, "checkin": self._checkin, "why": self._why}
         if self._task is not None and not self._task.done():
             said = str(message.args.get("question") or message.args.get("text") or "")
             it = italian(await self._store().setting("language"), said)
@@ -127,7 +148,21 @@ class PlanCommands:
             return
         self._task = asyncio.create_task(self._run(handlers[message.command], message))
 
+    async def _queued_ask(self, message) -> None:
+        async with self._ask_lock:
+            await self._run(self._ask, message)
+
+    def focus(self, member_id: int) -> str | None:
+        """The task id this member was last talking about, if recent."""
+        found = self._focus.get(member_id)
+        if found is None or self._clock() - found[1] > FOCUS_SECONDS:
+            self._focus.pop(member_id, None)
+            return None
+        return found[0]
+
     async def wait(self) -> None:
+        while self._asks:
+            await asyncio.gather(*self._asks, return_exceptions=True)
         if self._task is not None:
             await asyncio.gather(self._task, return_exceptions=True)
         if self._dependencies is not None:
@@ -312,7 +347,7 @@ class PlanCommands:
 
     async def timed_checkin(self) -> bool:
         """Called by checkin_timer.py; skipped while a member's command is running."""
-        if self._task is not None and not self._task.done():
+        if (self._task is not None and not self._task.done()) or self._asks:
             return False
         return await self.run_checkin("group", "", quiet=True)
 
@@ -351,7 +386,17 @@ class PlanCommands:
             today=self._today(),
             maybe=maybe,
             pending=pending,
+            asker=message.member_id,
+            focus=self.focus(message.member_id),
         )
+        if answer is not None:
+            # What this answer was about becomes the member's focus: the task its
+            # action changes, else the one task it named (a list keeps the old one).
+            named = answer.action.task_id if answer.action is not None and answer.action.task_id else None
+            if named is None and len(answer.tasks) == 1:
+                named = answer.tasks[0].task_id
+            if named is not None:
+                self._focus[message.member_id] = (named, self._clock())
         if answer is None and not maybe:
             await self._unavailable(message.event, message.request_id)
             return
@@ -638,7 +683,9 @@ def ask_text(answer: AskAnswer, members: dict[int, str], *, it: bool = False) ->
     sources += [f"{milestone} “{m.title}”" for m in answer.milestones]
     sources += [f"{decision} “{d.choice}”" for d in answer.decisions]
     sources += [f"“{name}”" for name in answer.documents]
-    if not sources:
+    # A change on a card needs no sources line: the card shows what changes
+    # ("Fonti: attività Frontend Application" under "aggiorno al 30%", 20/11).
+    if not sources or answer.action is not None:
         return answer.answer
     return f"{answer.answer}\n{prefix}: {', '.join(sources)}."
 

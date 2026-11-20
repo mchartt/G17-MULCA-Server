@@ -43,6 +43,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
+from types import SimpleNamespace
 from datetime import date
 from typing import Any
 
@@ -260,7 +261,17 @@ class CoordinatorRouter:
                 await self._on_profile(message)
             elif message.command == "kickoff":
                 await self._start_kickoff(message)
-            elif message.command in ("planning", "checkin", "task", "milestone", "why", "ask"):
+            elif message.command == "ask":
+                # A chat message for Cadence is still a chat message: the group's
+                # other channels get their copy, as for any other (args.said is
+                # the message as written; older clients send only the question).
+                said = str(message.args.get("said") or message.args.get("question") or "")
+                try:
+                    await self._mirror(SimpleNamespace(speaker=message.member_id, speaker_name="", text=said))
+                except Exception:  # a copy elsewhere must never stop the answer
+                    logger.exception("%s could not mirror a message to Cadence", self._conversation.conversation_id)
+                await self._plan.handle(message)
+            elif message.command in ("planning", "checkin", "task", "milestone", "why"):
                 await self._plan.handle(message)
             elif message.command == "language":
                 await self._on_language(message)
