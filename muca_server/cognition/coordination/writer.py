@@ -93,7 +93,8 @@ def language_rule(code: str) -> str:
     return (
         f"LANGUAGE: this group chose {name}. Write every text you produce in {name}, "
         "whatever language the chat or the assignment is in; this replaces any other "
-        "language instruction above. Keep names of people, products and quoted words as they are. "
+        "language instruction above, except one: a direct chat reply to a member follows the language "
+        "of that member's own message. Keep names of people, products and quoted words as they are. "
         f'A rationale starts with "{OPENINGS[code]}".'
     )
 

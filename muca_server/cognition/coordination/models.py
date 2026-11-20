@@ -105,6 +105,9 @@ class Task(_Model):
     # Unix times kept by the store (TASK_TIMES): when it was made, when it was done.
     created_at: float | None = None
     done_at: float | None = None
+    # When a member last changed its status or progress (CS6: a recent update
+    # means the task needs no check-in). None: never since it was made.
+    touched_at: float | None = None
 
 
 class Decision(_Model):

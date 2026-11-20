@@ -67,6 +67,8 @@ def build_coordinator_factory(
             proposal_ttl_seconds=settings.proposal_ttl_seconds,
             proactive_writer=proactive_writer,
             checkin_interval_seconds=settings.checkin_interval_seconds,
+            progress_checkins=settings.progress_checkins,
+            timezone=settings.timezone,
             links=links,
             live=live,
             catchup=catchup,

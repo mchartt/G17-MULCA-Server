@@ -10,6 +10,10 @@ SQLite file (store mark "checkin"), so a restart neither skips nor repeats it.
 
 Off unless MUCA_COORDINATOR_CHECKIN_HOURS is set (settings.py). The first
 time a group is seen, the clock starts: no check-in at the very first open.
+
+CS6 (progress.py): at every look, first the progress assessment (one short
+question at most, often none). If it sent a question, the interval check-in
+waits for a later look: never two coordinator messages in one tick.
 """
 
 from __future__ import annotations
@@ -37,6 +41,7 @@ class CheckinTimer:
         interval_seconds: float,
         store: Callable[[], CoordinationStore],
         run_checkin: Callable[[], Awaitable[bool]],
+        run_progress: Callable[[], Awaitable[bool]] | None = None,
         clock: Callable[[], float] = time.time,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
@@ -44,13 +49,14 @@ class CheckinTimer:
         self._interval = interval_seconds
         self._store = store
         self._run_checkin = run_checkin
+        self._run_progress = run_progress
         self._clock = clock
         self._sleep = sleep
         self._task: asyncio.Task | None = None
 
     def start(self) -> None:
-        """Start looking (nothing happens when the interval is 0 = off)."""
-        if self._interval > 0 and self._task is None:
+        """Start looking (nothing to do when the interval is 0 and CS6 is off)."""
+        if (self._interval > 0 or self._run_progress is not None) and self._task is None:
             self._task = asyncio.create_task(self._loop())
 
     async def close(self) -> None:
@@ -73,6 +79,10 @@ class CheckinTimer:
         """One look. True when a check-in ran and posted a card."""
         conversation = self._conversation
         if conversation.is_private or conversation.is_ephemeral or not conversation.conversation_id:
+            return False
+        if self._run_progress is not None and await self._run_progress():
+            return True
+        if self._interval <= 0:
             return False
         store = self._store()
         now = self._clock()

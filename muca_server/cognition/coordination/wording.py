@@ -20,7 +20,9 @@ from collections.abc import Callable
 
 _ITALIAN_WORDS = re.compile(
     r"\b(il|la|di|che|è|per|un|una|del|della|sono|chi|si|non|perché|anche|ma|sì|deve|dai|dal|questa|questo|"
-    r"prima|fallo|aggiungi|crea|collega|intervengo|dipende|serve|servono)\b",
+    r"prima|fallo|aggiungi|crea|collega|intervengo|dipende|serve|servono|"
+    # 20/11 live: "procede, stasera lo chiudo" + "Grazie Matías, ricevuto!" read as English ("From:").
+    r"grazie|ricevuto|bene|stasera|domani|oggi|ancora|fatto|ho|sto|va|procede|ciao|capito|perfetto)\b",
     re.IGNORECASE,
 )
 

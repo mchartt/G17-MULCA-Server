@@ -1,0 +1,117 @@
+
+[PASS] dev/casual calcio #1 (5.7 s)
+  > Giochi spesso a calcio, Cadence?
+  Non gioco a calcio, ma ne parlo volentieri. Tu giochi spesso?
+
+[PASS] dev/casual musica #1 (4.2 s)
+  > Cadence, che musica ti piace?
+  Non ho gusti musicali personali, ma mi piace parlare di musica. Tu cosa ascolti di solito?
+
+[PASS] dev/casual come stai #1 (2.4 s)
+  > Ciao Cadence, come stai oggi?
+  Sto bene, grazie! Tu come stai?
+
+[PASS] holdout/casual partita #1 (2.4 s)
+  > Cadence hai visto la partita ieri sera?
+  Non l’ho vista. Di quale partita parli?
+
+[PASS] holdout/casual weekend #1 (3.0 s)
+  > Cadence, che fai nel weekend?
+  Non ho programmi personali per il weekend; qui posso darvi una mano a coordinarvi, senza decidere al posto vostro.
+
+[PASS] holdout/casual follow-up casual #1 (5.4 s)
+  > e tu sei più da pizza o da sushi?  (maybe)
+  Non ho gusti personali, ma vi faccio compagnia volentieri in chat, pizza o sushi che sia!
+
+[FAIL] dev/language it although group chose en #1 (2.7 s)
+  > Cadence, chi si occupa del dashboard?  [group chose en]
+  **Bruno Neri** is responsible for the Dashboard, as recorded in the plan.
+  !! not Italian
+
+[PASS] dev/language en question in en #1 (2.7 s)
+  > Cadence, who is doing the usability test?
+  **Chiara Bianchi** is responsible for the usability test in the plan.
+
+[PASS] holdout/language it after english chat #1 (3.1 s)
+  > Cadence, quando scade il RASD?
+  Nel piano, «Scrivere il RASD» scade il **28 novembre** ed è assegnato a Matteo Cesandri.
+
+[PASS] holdout/language switch back to english #1 (3.0 s)
+  > Cadence, what does Matteo's task depend on?
+  Matteo’s task, “Scrivere il RASD,” depends on **“Dati per il RASD,” owned by Matías Rodríguez**. This dependency is recorded in the plan, but its origin is not recorded.
+
+[PASS] dev/knowledge who and when #1 (2.8 s)
+  > Cadence, chi sta facendo il dashboard e per quando?
+  Nel piano, la dashboard è assegnata a **Bruno Neri**, con scadenza il **25 novembre**.
+
+[PASS] holdout/knowledge what is due tomorrow #1 (9.4 s)
+  > Cadence cosa scade domani?
+  Rispetto al 24 novembre indicato nel progetto, domani, **25 novembre**, nel piano scadono:
+  - Dashboard — Bruno Neri, al 70%.
+  - Dati per il RASD — Matías Rodríguez, allo 0%.
+  - Usability test — Chiara Bianchi, allo 0%.
+
+[PASS] holdout/knowledge do you see the plan #1 (3.9 s)
+  > Cadence, riesci a vedere il nostro piano?
+  Sì, vedo il piano: l’obiettivo è consegnare Cadence con RASD, prototipo e usability test. Sono registrate quattro attività: Dashboard, Dati per il RASD, Scrivere il RASD e Usability test, con responsabili, scadenze e avanzamento; non ci sono milestone o decisioni registrate.
+
+[FAIL] dev/progress bruno on track #1 (8.7 s)
+  > Tutto bene, mi manca solo un ultimo controllo.  (maybe)
+  Bene, Bruno: manca solo l’ultimo controllo. Il tuo aggiornamento è per ora solo in chat, non registrato nel piano.
+  !! progress None not t1 in ['on_track']
+
+[FAIL] holdout/progress bruno nearly done #1 (6.8 s)
+  > quasi fatto, stasera lo chiudo  (maybe)
+  Ricevuto, Bruno: conti di chiudere il dashboard stasera. L’aggiornamento è in chat, non ancora registrato nel piano.
+  !! progress None not t1 in ['on_track']
+
+[FAIL] dev/progress matias behind #1 (3.4 s)
+  > Sono indietro, non penso di riuscire a finire in tempo.  (maybe)
+  Nel piano i dati per il RASD sono previsti per il **25 novembre**, e Matteo li aspetta per scrivere il RASD. Ti suggerisco di concordare con lui una prima consegna parziale: quale parte riusciresti a passargli entro quella data?
+  !! progress None not t2 in ['behind', 'blocked']
+
+[FAIL] holdout/progress matias struggling paraphrase #1 (5.7 s)
+  > mmm non benissimo, sono in alto mare  (maybe)
+  Cosa ti sta bloccando con i dati? Se ne hai già una parte utilizzabile, potresti proporre a Matteo di partire da quella: nel piano la scrittura del RASD aspetta i tuoi dati.
+  !! progress None not t2 in ['behind', 'blocked']
+
+[FAIL] dev/progress matias missing data #1 (6.6 s)
+  > Mi manca una parte dei dati e serve ancora un giorno.  (maybe)
+  Nel piano, il RASD di Matteo aspetta i tuoi dati. Ti suggerisco di passargli intanto la parte già pronta, avvisandolo che per completarla ti serve ancora un giorno.
+  !! progress None not t2 in ['behind', 'blocked']
+
+[FAIL] holdout/progress matias waiting on prof #1 (5.5 s)
+  > sto aspettando che il prof ci mandi il dataset, finché non arriva sono fermo  (maybe)
+  Quindi i dati per il RASD sono bloccati in attesa del dataset del prof: questa attesa non è ancora registrata nel piano. Ti suggerisco di chiedergli quando può mandarlo e se può condividere intanto una parte dei dati.
+  !! progress None not t2 in ['behind', 'blocked']
+
+[FAIL] dev/progress bruno declines #1 (4.5 s)
+  > ne parliamo domani, ora non ho tempo  (maybe)
+  Ne riparliamo domani.
+  !! not Italian
+  !! progress None not t1 in ['declined']
+
+[FAIL] holdout/progress bruno later #1 (4.7 s)
+  > dopo ti dico, sono a lezione  (maybe)
+  Ci aggiorniamo dopo, buona lezione.
+  !! not Italian
+  !! progress None not t1 in ['declined']
+
+[PASS] holdout/routing talk among themselves #1 (2.9 s)
+  > Chiara ci vediamo alle 5 in aula?  (maybe)
+  (silence)
+
+=== by split and category ===
+dev: 5/10
+   casual       3/3
+   knowledge    1/1
+   language     1/2
+   progress     0/4
+holdout: 8/12
+   casual       3/3
+   knowledge    2/2
+   language     2/2
+   progress     0/4
+   routing      1/1
+
+13/22 passed; latency median 4.2 s, max 9.4 s (gpt-6.1-sol)
