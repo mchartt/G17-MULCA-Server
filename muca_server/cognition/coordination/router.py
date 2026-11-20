@@ -44,6 +44,7 @@ import re
 import logging
 import time
 from collections.abc import Callable
+from types import SimpleNamespace
 from datetime import date
 from typing import Any
 
@@ -147,6 +148,8 @@ class CoordinatorRouter:
         # Lines this router already sent to ask as late replies (text -> time):
         # the same line arriving as a web maybe-ask is then not read twice.
         self._late_read: dict[str, float] = {}
+        # Lines the client sent to ask as "maybe" (text -> time), for the same check the other way.
+        self._asked: dict[str, float] = {}
         # The kickoff running in the background, if any (one per group).
         self._kickoff: asyncio.Task | None = None
         # The reflection being built (it may ask the model for the week's topics).
@@ -308,6 +311,21 @@ class CoordinatorRouter:
                 await self._start_kickoff(message)
             elif message.command in ("planning", "checkin", "task", "milestone", "why", "ask"):
                 maybe = message.command == "ask" and message.args.get("maybe") is True
+                if message.command == "ask" and not maybe:
+                    # A sure call never goes on as user_text, so the group's other
+                    # channels get their copy here (args.said: the message as
+                    # written). A "maybe" also goes on as user_text, which mirrors it.
+                    said = str(message.args.get("said") or message.args.get("question") or "")
+                    try:
+                        await self._mirror(SimpleNamespace(speaker=message.member_id, speaker_name="", text=said))
+                    except Exception:  # a copy elsewhere must never stop the answer
+                        logger.exception("%s could not mirror a message to Cadence", self._conversation.conversation_id)
+                if maybe:
+                    # Read once: the same line arriving next as user_text is not
+                    # offered again as a late CS6 reply (with or without the bridge).
+                    now = time.time()
+                    self._asked = {k: at for k, at in self._asked.items() if now - at < 120}
+                    self._asked[claim_key(str(message.args.get("question", "")))] = now
                 if maybe and self.proactive is not None:
                     # R10: this message is Cadence's to answer (or to leave
                     # unanswered); the lab's agent must not reply to it too.
@@ -740,6 +758,8 @@ class CoordinatorRouter:
             return False
         if self.proactive is not None and self.proactive.is_claimed(text):
             return False  # the web already offered it to ask as a follow-up: read once
+        if time.time() - self._asked.get(claim_key(text), 0) < 120:
+            return False  # the same, without the proactive bridge
         if TO_THE_GROUP.search(text):
             return False
         now = time.time()

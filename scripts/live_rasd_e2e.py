@@ -165,7 +165,7 @@ async def main() -> int:
                 problems.append("stage 2b: 'Sì, fallo' made a second card")
             if not re.search(r"card|pulsante|conferm", said, re.I):
                 problems.append("stage 2b: 'Sì, fallo' did not point to the card")
-            if re.search(r"ho (aggiunto|salvato|collegato)", said, re.I):
+            if re.search(r"\bho (aggiunto|salvato|collegato)\b", said, re.I):
                 problems.append("stage 2b: claims a change before the click")
             if CONFIRM and pay.get("task_id"):
                 rid = uuid.uuid4().hex[:8]

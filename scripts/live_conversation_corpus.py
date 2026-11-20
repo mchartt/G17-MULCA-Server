@@ -122,6 +122,11 @@ class Case:
     action: dict | None = None  # expected action fields; {"kind": "none"} = no change drafted
     path: str = "ask"  # ask | cs7 | cs5
     max_sentences: int = 7
+    # Awareness (20/11 evening): who writes (member id), the task in focus,
+    # and the roster when it differs (two members with the same name).
+    asker: int | None = None
+    focus: str | None = None
+    members: dict[int, str] | None = None
 
 
 A = "Matteo Cesandri: "
@@ -133,7 +138,7 @@ CASES: list[Case] = [
     Case("rasd: direct request adds the prerequisite", "regression", "actions",
          "Mathias deve mandarmi prima i dati su cui si basa il RASD: aggiungilo come prerequisito", italian=True,
          action={"kind": "dependency", "task_id": "t1", "depends_on_owner_id": MATIAS, "depends_on_task_id": None},
-         must_not=[r"ho (gi[àa] )?(aggiunto|salvato|collegato)"]),
+         must_not=[r"\bho (gi[àa] )?(aggiunto|salvato|collegato)\b"]),
     Case("rasd: 'sì, fallo' after Cadence's offer", "regression", "actions", "Sì, fallo.",
          chat=BASE_CHAT + [A + "Mathias deve mandarmi prima però i dati su cui si basa il RASD.", CADENCE_OFFER], maybe=True,
          action={"kind": "dependency", "task_id": "t1", "depends_on_owner_id": MATIAS, "depends_on_task_id": None}, empty=False),
@@ -207,6 +212,43 @@ CASES: list[Case] = [
          chat=BASE_CHAT + ["Bruno Neri: dobbiamo preparare le slide per la presentazione finale", "Giulia Verdi: sì serve qualcuno",
                            "Matteo Cesandri: ok, poi vediamo"],
          action={"title_like": r"slide"}),
+
+    # --- awareness (20/11 evening, Matteo's screenshots): identity, focus, silence ------------
+    # The three "talk about Cadence" sentences are Matteo's and in the prompt (dev);
+    # the paraphrases below them are held out.
+    Case("A: my tasks, the asker is known", "awareness", "identity", "Controlla le mie task.", asker=BRUNO,
+         must_all=[r"api"], must_not=[r"quale (bruno|profilo)|which (bruno|profile)|chi sei"], action={"kind": "none"}, italian=True),
+    Case("A: my deadlines", "awareness", "identity", "quali sono le mie scadenze?", asker=GIULIA, must_all=[r"23"],
+         must_not=[r"quale (giulia|profilo)"]),
+    Case("A: same name, other record has the tasks", "awareness", "identity", "Controlla le mie task.", asker=9,
+         members={**MEMBERS, 9: "Matteo Cesandri"},
+         must_not=[r"quale (dei due|profilo|matteo)|which (one|profile)|sei (il|lo|quello)"],
+         must_any=[r"non hai|nessuna task|non risult|no tasks|non .*assegnat"]),
+    Case("B: progress with the task in focus", "awareness", "focus", "Sono al 70%.", asker=BRUNO, focus="t3",
+         action={"kind": "update_task", "task_id": "t3", "progress": 70}, must_not=[r"quale (task|attivit)"]),
+    Case("B: screenshot sentence, one open task", "awareness", "focus", "sono all'80% della mia task.", asker=BRUNO,
+         action={"kind": "update_task", "task_id": "t3", "progress": 80}, must_not=[r"quale (task|attivit)"]),
+    Case("B: move it to Friday", "awareness", "focus", "spostala a venerdì prossimo", asker=BRUNO, focus="t3",
+         action={"kind": "update_task", "task_id": "t3", "due_date": "2026-11-27"}),
+    Case("B: what does it depend on", "awareness", "focus", "e da cosa dipende?", asker=MATTEO, focus="t4",
+         must_any=[r"api"], action={"kind": "none"}),
+    Case("B: reassign it", "awareness", "focus", "allora riassegnala a Bruno", asker=MATTEO, focus="t6",
+         action={"kind": "update_task", "task_id": "t6", "owner_id": BRUNO}),
+    Case("S: Cadence è troppo forte", "awareness", "silence", "Cadence è troppo forte", maybe=True, empty=True),
+    Case("S: secondo me Cadence è inutile", "awareness", "silence", "Secondo me Cadence è inutile", maybe=True, empty=True),
+    Case("S: mannaggia", "awareness", "silence", "Mannaggia me sa che cadence non basta", maybe=True, empty=True),
+    Case("SH: praise in passing", "awareness_holdout", "silence", "oggi Cadence è stata utilissima col RASD", maybe=True, empty=True),
+    Case("SH: told someone about it", "awareness_holdout", "silence", "ho detto a Giulia che Cadence può aiutarla col mockup",
+         maybe=True, empty=True),
+    Case("SH: complaint", "awareness_holdout", "silence", "boh cadence a volte non capisce niente", maybe=True, empty=True),
+    Case("SH: comparison", "awareness_holdout", "silence", "meglio Cadence che i fogli Excel del prof", maybe=True, empty=True),
+    Case("RH: request with the name mid-sentence", "awareness_holdout", "mid_request",
+         "puoi dirmi tu cadence chi fa i test di integrazione?", maybe=True, empty=False,
+         must_any=[r"nessun|non ha|senza responsabil|no owner"]),
+    Case("RH: reminder with the name mid-sentence", "awareness_holdout", "mid_request", "mi ricordi cadence quando è la demo",
+         maybe=True, empty=False, must_any=[r"\b9\b"]),
+    Case("RH: dai cadence", "awareness_holdout", "mid_request", "dai cadence dimmi cosa manca per il RASD", maybe=True,
+         empty=False, must_any=[r"rasd"]),
 
     # --- holdout (frozen; never used to tune) --------------------------------------------------
     Case("H: english direct mention dependency", "holdout", "actions",
@@ -311,7 +353,7 @@ def check_action(case: Case, action) -> list[str]:
     problems = []
     if got != kind:
         return [f"action {got}, expected {kind}"]
-    for key in ("task_id", "depends_on_task_id", "owner_id", "depends_on_owner_id"):
+    for key in ("task_id", "depends_on_task_id", "owner_id", "depends_on_owner_id", "progress"):
         if key in want and getattr(action, key) != want[key]:
             problems.append(f"{key}={getattr(action, key)!r}, expected {want[key]!r}")
     if "due_date" in want and str(action.due_date) != want["due_date"]:
@@ -355,7 +397,8 @@ def chat_lines(lines: list[str]) -> list[ChatLine]:
 async def run_case(case: Case, plan: PlanWriter, proactive: ProactiveWriter) -> tuple[list[str], str]:
     if case.path == "ask":
         answer = await plan.answer_question(
-            case.question, members=MEMBERS, state=STATE, documents=DOCUMENTS, chat=case.chat, today=TODAY, maybe=case.maybe
+            case.question, members=case.members or MEMBERS, state=STATE, documents=DOCUMENTS, chat=case.chat, today=TODAY,
+            maybe=case.maybe, asker=case.asker, focus=case.focus,
         )
         if answer is None:
             return ["call failed or invalid twice"], "(no answer)"
@@ -379,7 +422,8 @@ async def main(env_path: str, split: str = "all", only: str = "", repeats: int =
     model = env.get("MUCA_COORDINATOR_MODEL", "gpt-4o")
     writer = ProposalWriter(build_openai_client(env), model=model)
     plan, proactive = PlanWriter(writer), ProactiveWriter(writer)
-    cases = [c for c in CASES if (split == "all" or c.split == split) and only.lower() in c.name.lower()]
+    cases = [c for c in CASES if (split == "all" or c.split == split or (split == "awareness" and c.split.startswith("awareness")))
+             and only.lower() in c.name.lower()]
     results: dict[tuple[str, str], list[bool]] = defaultdict(list)
     failed = 0
     started = time.monotonic()
@@ -395,7 +439,7 @@ async def main(env_path: str, split: str = "all", only: str = "", repeats: int =
             for p in problems:
                 print(f"  !! {p}")
     print("\n=== by split and category ===")
-    for split_name in ("regression", "dev", "holdout"):
+    for split_name in ("regression", "dev", "holdout", "awareness", "awareness_holdout"):
         rows = {k[1]: v for k, v in results.items() if k[0] == split_name}
         if not rows:
             continue

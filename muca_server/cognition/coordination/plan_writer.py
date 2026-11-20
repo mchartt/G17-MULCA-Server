@@ -184,7 +184,9 @@ request or a follow-up to what you said before: read <chat>). Everything the
 project holds is between <project> tags: the goal and deliverables, the
 members with their profiles, the milestones, the tasks (with owner, date,
 status, progress, description and what they wait on), the decision log with
-its reasons, and excerpts of the documents the group gave you. <chat> holds
+its reasons, and excerpts of the documents the group gave you. <asker> says
+who is writing (the app knows it from their login: never ask who they are),
+their tasks and the task they were last talking about with you. <chat> holds
 the last messages of the chat, yours included, oldest first.
 
 How to answer:
@@ -443,6 +445,8 @@ class PlanWriter:
         today: date | None = None,
         maybe: bool = False,
         pending: list[str] = (),
+        asker: int | None = None,
+        focus: str | None = None,
         checkins: list[str] = (),
     ) -> AskAnswer | None:
         """
@@ -478,7 +482,9 @@ class PlanWriter:
             + ("\n".join(f"- {line}" for line in pending) or "- (none)")
             + "\nProgress questions you asked (CS6):\n"
             + ("\n".join(f"- {line}" for line in checkins) or "- (none)")
-            + "\n</project>\n<chat>\n"
+            + "\n</project>\n"
+            + _asker(asker, focus, members, state)
+            + "<chat>\n"
             + ("\n".join(chat[-CHAT_LINES:]) or "(no recent messages)")
             + f"\n</chat>\n<question>\n{question}\n</question>"
             + (MAYBE_NOTE if maybe else "")
@@ -663,10 +669,13 @@ MAYBE_NOTE = """
 <note>This message may not be for you: it came right after your last answer
 without naming you, or it names you in passing. If it asks you something or
 asks you to do something, or continues the talk with you (a follow-up, a
-correction), answer it; a member answering a progress question you asked
-(listed in <project>) is talking to you too. Stay silent when the members talk ABOUT you or the
-app ("Cadence answered badly yesterday", "I changed the coordinator's code",
-"Cadence is slower now"), when the message asks the OTHER members ("secondo
+correction), answer it, even if your name is in the middle of the sentence
+("puoi dirmi tu Cadence chi fa le slide"); a member answering a progress
+question you asked (listed in <project>) is talking to you too. Stay silent
+when the members talk ABOUT you or the app: an opinion, praise, a complaint or
+a sigh is not a request ("Cadence answered badly yesterday", "I changed the
+coordinator's code", "Cadence is slower now", "Cadence è troppo forte",
+"secondo me Cadence è inutile", "mannaggia mi sa che Cadence non basta"); when the message asks the OTHER members ("secondo
 voi...", "ragazzi...", "what do you all think", "should we improve Cadence?":
 an opinion of the group, not a question for you, even if you could help),
 when they talk among themselves, or when it needs no answer (ok, thanks, a
@@ -713,7 +722,8 @@ def _tasks_in_full(state: ProjectState, members: dict[int, str]) -> str:
     titles = {t.task_id: t.title for t in state.tasks}
     lines = []
     for t in state.tasks:
-        owner = members.get(t.owner_id, "a member") if t.owner_id else "no owner"
+        # The owner's id too: two members may share a name (20/11 screenshots).
+        owner = f"{members.get(t.owner_id, 'a member')} (id {t.owner_id})" if t.owner_id else "no owner"
         waits = (
             " | waits on: "
             + "; ".join(
@@ -766,6 +776,46 @@ def _documents(question: str, documents: list[tuple[str, str]]) -> str:
             last = c[3]
         out.append(" ".join(c[4].split()))
     return "Documents:\n" + "\n".join(out)
+
+
+def _asker(asker: int | None, focus: str | None, members: dict[int, str], state: ProjectState) -> str:
+    """
+    Who is writing, resolved by the server from the member id the client
+    authenticated, never left to the model: on 20/11 "controlla le mie task"
+    got "which Matteo Cesandri are you?" because the prompt named nobody and
+    two member records shared the name. Their tasks are listed here by owner
+    id, and the task this member was last talking about (`focus`, a task id
+    kept by plan_commands.py) is named so "sono al 30%" needs no new question.
+    """
+    if asker is None or asker not in members:
+        return ""
+    name = members[asker]
+    tasks = {t.task_id: t for t in state.tasks}
+    mine = [
+        f"- task_id {t.task_id}: {t.title} | due: {t.due_date or '-'} | {t.status.value} | {t.progress}% done"
+        for t in state.tasks
+        if t.owner_id == asker
+    ]
+    lines = [
+        f"The member writing to you is id {asker}: {name}. \"I\", \"me\", \"my tasks\", \"la mia task\" mean this "
+        "member: you know who they are, never ask which member or which profile they are.",
+        f"Tasks whose owner is id {asker}:",
+        *(mine or ["- (none)"]),
+    ]
+    twins = [i for i, n in members.items() if i != asker and n.strip().casefold() == name.strip().casefold()]
+    if twins:
+        lines.append(
+            f"Member id {', '.join(map(str, twins))} has the same name but is another member record: its tasks are "
+            "not this member's. If they ask for their tasks and have none, say so and mention that the other record "
+            "with their name has tasks, without asking which profile they are."
+        )
+    if focus in tasks:
+        lines.append(
+            f"The task this member was last talking about with you: task_id {focus}: {tasks[focus].title}. "
+            "\"it\", \"la mia task\", \"sono al 30%\", \"spostala\" without another task named refer to it: do not ask "
+            "which task."
+        )
+    return "<asker>\n" + "\n".join(lines) + "\n</asker>\n"
 
 
 def _members(members: dict[int, str], profiles: list[MemberProfile]) -> str:
