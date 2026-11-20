@@ -157,31 +157,39 @@ class CatchUp:
         }
 
 
-def summary_line(catchup: dict[str, Any]) -> str:
-    """The notice's one line: what is in the catch-up, in plain words."""
+def summary_line(catchup: dict[str, Any], *, it: bool = False) -> str:
+    """The notice's one line: what is in the catch-up, in plain words (Italian when `it`)."""
+    def n(count: int, one: str, many: str) -> str:
+        return f"{count} {one if count == 1 else many}"
+
     parts = []
-    n = len(catchup["decisions"])
-    if n:
-        parts.append(f"{n} decision{'s' if n != 1 else ''}")
+    decided = len(catchup["decisions"])
+    if decided:
+        parts.append(n(decided, "decisione", "decisioni") if it else n(decided, "decision", "decisions"))
     done = len(catchup.get("tasks_done", []))
     if done:
-        parts.append(f"{done} task{'s' if done != 1 else ''} done")
+        parts.append(n(done, "attività completata", "attività completate") if it else n(done, "task done", "tasks done"))
     added = len(catchup.get("tasks_added", []))
     if added:
-        parts.append(f"{added} new task{'s' if added != 1 else ''}")
+        parts.append(n(added, "nuova attività", "nuove attività") if it else n(added, "new task", "new tasks"))
     here = (catchup.get("here") or {}).get("total", 0)
     if here:
-        parts.append(f"{here} message{'s' if here != 1 else ''} here")
+        parts.append(n(here, "messaggio qui", "messaggi qui") if it else n(here, "message here", "messages here"))
     for place in catchup["elsewhere"]:
         if place["total"]:
             m = place["total"]
-            parts.append(f"{m} message{'s' if m != 1 else ''} on {place['channel'].capitalize()}")
+            where = place["channel"].capitalize()
+            parts.append(f"{n(m, 'messaggio', 'messaggi')} su {where}" if it else f"{n(m, 'message', 'messages')} on {where}")
     if parts:
-        return "Since your last catch-up: " + ", ".join(parts) + "."
+        return ("Dalla tua ultima visita: " if it else "Since your last catch-up: ") + ", ".join(parts) + "."
     if not catchup["linked"]:
         # How to link is told by each channel in its own words (it knows the code).
-        return "Nothing new since your last catch-up. This group is not linked to another channel yet."
-    return "Nothing new since your last catch-up."
+        return (
+            "Niente di nuovo dalla tua ultima visita. Questo gruppo non è ancora collegato a un altro canale."
+            if it
+            else "Nothing new since your last catch-up. This group is not linked to another channel yet."
+        )
+    return "Niente di nuovo dalla tua ultima visita." if it else "Nothing new since your last catch-up."
 
 
 def _clip(text: str) -> str:

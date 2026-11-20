@@ -78,6 +78,11 @@ async def test_the_week_in_facts_and_topics_for_the_whole_group(tmp_path):
     assert {(t["channel"], t["messages"]) for t in week["talk"]} == {("web", 3), ("discord", 4)}
     assert week["progress"] == {"done": 1, "total": 3}
     assert week["topics"] == TOPICS["topics"]
+    # Day by day, for the charts: 7 days, the group's messages (both channels) on Tuesday 17th, counts only.
+    assert [d["day"] for d in week["days"]][0] == "2026-11-16" and len(week["days"]) == 7
+    assert week["days"][1]["messages"] == 7 and sum(d["messages"] for d in week["days"]) == 7
+    assert sum(d["done"] for d in week["days"]) == 1
+    assert all(set(d) == {"day", "messages", "done"} for d in week["days"])
 
     # The model saw the week's chat of both channels, and nothing from the week before.
     (call,) = group.writer._client.calls if hasattr(group.writer, "_client") else [None]
