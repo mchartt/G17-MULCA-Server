@@ -38,6 +38,7 @@ from .models import (
     TaskStatus,
 )
 from .plan_writes import (
+    DependencyError,
     add_decision,
     add_dependency,
     add_snooze,
@@ -222,13 +223,18 @@ def checkin_applier(option: CheckinOption) -> Applier:
     return apply
 
 
-def blocker_applier(payload: BlockerPayload, *, new_task_id: str, new_dependency_id: str | None = None) -> Applier:
+def blocker_applier(
+    payload: BlockerPayload, *, new_task_id: str, new_dependency_id: str | None = None, source: str = ""
+) -> Applier:
     """
     CS7 confirmed. The task is added if the plan did not have it. BLOCKED:
     the task is marked blocked. POSSIBLE: the status is left alone (nobody
     said it is blocked, the group only confirmed that it depends).
     In both cases the work it waits on is recorded: a plan task, or a new
-    task with the title said in the chat (no owner: the card never assigns).
+    task with the title said in the chat, owned by the member the chat named
+    as the one who delivers it (`depends_on_owner_id`), else by nobody.
+    The link keeps `source` (which card, which chat line) and is checked
+    like every link: never on itself, never a loop.
     """
 
     async def apply(db) -> None:
@@ -249,9 +255,18 @@ def blocker_applier(payload: BlockerPayload, *, new_task_id: str, new_dependency
                 depends_on = None
         elif payload.depends_on_title.strip() and new_dependency_id:
             depends_on = new_dependency_id
-            await add_task(db, task_id=depends_on, title=payload.depends_on_title.strip(), owner_id=None, due_date=None)
+            await add_task(
+                db, task_id=depends_on, title=payload.depends_on_title.strip(), owner_id=payload.depends_on_owner_id, due_date=None
+            )
         if depends_on:
-            await add_dependency(db, task_id=task_id, depends_on=depends_on)
+            try:
+                await add_dependency(db, task_id=task_id, depends_on=depends_on, source=source)
+            except DependencyError as error:
+                raise StaleProposal(
+                    "This link would make the plan go round in a circle, so it was not saved."
+                    if error.kind == "loop"
+                    else "A task cannot wait on itself."
+                ) from error
 
     return apply
 

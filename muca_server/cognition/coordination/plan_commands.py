@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime
 from typing import Any
@@ -55,11 +56,14 @@ from .models import (
     PlanPayload,
     ProactiveContext,
     ProposalKind,
+    TaskAssignmentPayload,
     TaskStatus,
 )
-from .plan_writes import topic_key
-from .plan_writer import AskAnswer, PlanWriter, WhyAnswer
+from .plan_writes import known_prerequisite, same_title_task, topic_key
+from .plan_writer import AskAction, AskAnswer, PlanWriter, WhyAnswer
 from .proposals import ProposalService, new_id
+from .writer import check_rationale
+from .wording import italian, localize, sources_label
 from .store import CoordinationStore, DependencyError
 
 logger = logging.getLogger(__name__)
@@ -119,7 +123,9 @@ class PlanCommands:
             return
         handlers = {"planning": self._planning, "checkin": self._checkin, "why": self._why, "ask": self._ask}
         if self._task is not None and not self._task.done():
-            await self._notice(False, BUSY, message.request_id)
+            said = str(message.args.get("question") or message.args.get("text") or "")
+            it = italian(await self._store().setting("language"), said)
+            await self._notice(False, localize(BUSY, it), message.request_id)
             return
         self._task = asyncio.create_task(self._run(handlers[message.command], message))
 
@@ -337,6 +343,7 @@ class PlanCommands:
         members = self._participants()
         chat = await self._recent_chat() if self._recent_chat is not None else []
         maybe = message.args.get("maybe") is True  # a follow-up that does not name Cadence
+        pending = [_card_line(c, members) for c in await store.open_proposals(self._service().now())][:8]
         answer = await self._writer.answer_question(
             question,
             members=members,
@@ -345,6 +352,7 @@ class PlanCommands:
             chat=chat,
             today=self._today(),
             maybe=maybe,
+            pending=pending,
         )
         if answer is None:
             if maybe:  # a guess that failed: silence, never "unavailable" for a message not sent to Cadence
@@ -355,12 +363,98 @@ class PlanCommands:
         if not answer.answer:  # not meant for Cadence: it stays silent, nothing is remembered
             await self._notice(True, "", message.request_id)
             return
-        text = ask_text(answer, members)
-        await self._notice(True, text, message.request_id)
+        text = ask_text(answer, members, it=italian(state.language, question))
+        card = None
+        if answer.action is not None:
+            # The member asked for a change: it becomes a card a member confirms,
+            # never a change made here. The server's own checks have the last word.
+            card, refusal = await self._action_card(answer.action, message, question, chat, state, answer.answer)
+            if refusal:
+                text = refusal
         if self._remember is not None:
             # The question and the answer join the chat's memory: the next
             # message, a follow-up or a catch-up sees them.
-            await self._remember(message.member_id, question, answer.answer)
+            await self._remember(message.member_id, question, text.split("\n")[0] if card is None and answer.action else answer.answer)
+        if card is not None:
+            await self._send_proposal(card)
+        # Last, so this request is over when the member reads the answer: a
+        # follow-up typed at once is never refused as "already working" (20/11 e2e).
+        await self._notice(True, text, message.request_id)
+
+    async def _action_card(self, action: AskAction, message, question: str, chat: list[str], state, said: str):
+        """
+        A change asked of Cadence in words, as a pending card (the same kinds
+        and buttons as the proactive ones). Returns (card, "") or (None, what
+        to tell the member instead): it is already in the plan, a card above
+        already asks it (so "sì, fallo" under a card points to that card), or
+        the link would close a loop. Never a change by itself.
+        """
+        members = self._participants()
+        asker = members.get(message.member_id, "A member")
+        it = italian(state.language, question)
+        evidence = [Evidence(speaker=line.split(": ", 1)[0][:80], text=line.split(": ", 1)[1][:300])
+                    for line in chat[-2:] if ": " in line and line.split(": ", 1)[1].strip()]
+        evidence = (evidence + [Evidence(speaker=asker, text=question[:300])])[-5:]
+        tasks = {t.task_id: t for t in state.tasks}
+        now = self._service().now()
+        open_cards = await self._store().open_proposals(now)
+        above = (
+            "C'è già una card qui sopra che propone proprio questo: confermala con il suo pulsante."
+            if it else "A card just above already proposes exactly this: confirm it with its button."
+        )
+        if action.kind == "new_task":
+            if same_title_task(action.title, state.tasks):
+                return None, (f"«{action.title}» è già nel piano." if it else f"“{action.title}” is already in the plan.")
+            if any(c.kind is ProposalKind.TASK_OWNER and topic_key(str(c.payload.get("title", ""))) == topic_key(action.title)
+                   for c in open_cards):
+                return None, above
+            kind = ProposalKind.TASK_OWNER
+            payload = TaskAssignmentPayload(
+                context=ProactiveContext(strategy_id="cs5_owner_and_date", topic=action.title[:120], evidence=evidence),
+                title=action.title,
+                owner_id=action.owner_id,
+                due_date=action.due_date,
+            )
+        else:
+            waiting = tasks.get(action.task_id) if action.task_id else None
+            depends_on_id = action.depends_on_task_id or same_title_task(action.depends_on_title, state.tasks, besides=action.task_id)
+            depends_title = tasks[depends_on_id].title if depends_on_id else action.depends_on_title
+            recorded = (depends_on_id in waiting.depends_on if depends_on_id else
+                        known_prerequisite(waiting, action.depends_on_title, action.depends_on_owner_id, state.tasks)) if waiting else None
+            if recorded:
+                shown = tasks[recorded].title if recorded in tasks else depends_title
+                return None, (f"Il piano registra già che «{waiting.title}» aspetta «{shown}»." if it
+                              else f"The plan already records that “{waiting.title}” waits on “{shown}”.")
+            if waiting is not None and depends_on_id and _reaches(tasks, depends_on_id, waiting.task_id):
+                return None, (
+                    f"«{depends_title}» aspetta già «{waiting.title}»: collegarle anche al contrario creerebbe un giro "
+                    "chiuso, quindi ho lasciato il piano com'è." if it else
+                    f"“{depends_title}” already waits on “{waiting.title}”: linking them the other way too "
+                    "would make a loop, so I left the plan as it is."
+                )
+            if any(c.kind is ProposalKind.BLOCKER and (
+                (action.task_id and c.payload.get("task_id") == action.task_id)
+                or topic_key(str(c.payload.get("title", ""))) == topic_key(action.title)
+            ) for c in open_cards):
+                return None, above
+            kind = ProposalKind.BLOCKER
+            payload = BlockerPayload(
+                context=ProactiveContext(strategy_id=DEPENDENCY_STRATEGY, topic=action.title[:120], evidence=evidence),
+                task_id=action.task_id,
+                title=action.title,
+                depends_on_task_id=depends_on_id,
+                depends_on_title=depends_title,
+                depends_on_owner_id=None if depends_on_id else action.depends_on_owner_id,
+                question="",
+                certainty=BlockerCertainty.POSSIBLE,
+            )
+        # The card's reason is what Cadence just told the member, in their language.
+        try:
+            rationale = check_rationale(said)
+        except ValueError:
+            rationale = f"{asker}: {question}"[:300]
+        card = await self._service().create(kind, payload, rationale=rationale, origin_channel=message.channel)
+        return card, ""
 
     async def _on_task(self, message) -> None:
         """
@@ -413,6 +507,7 @@ class PlanCommands:
             fields["description"] = description
 
         tasks = (await self._store().load_state()).tasks
+        by_hand = f"by hand ({members.get(message.member_id, 'a member')})"
         depends_on: list[str] | None = None
         if "depends_on" in args:
             depends_on = _task_ids(args.get("depends_on"), tasks)
@@ -423,7 +518,7 @@ class PlanCommands:
         if "add" in args:
             try:
                 await self._store().add_task_by_hand(
-                    new_id(), fields["title"], fields.get("owner_id"), fields.get("due_date"), fields.get("description", ""), depends_on
+                    new_id(), fields["title"], fields.get("owner_id"), fields.get("due_date"), fields.get("description", ""), depends_on, by_hand
                 )
             except DependencyError as error:
                 await self._notice(False, _dependency_refusal(error), message.request_id)
@@ -456,7 +551,7 @@ class PlanCommands:
             await self._notice(False, "Say what to change: status, owner, date, title, description, progress or what it waits on.", message.request_id)
             return
         try:
-            await self._store().edit_task(task.task_id, fields, depends_on)
+            await self._store().edit_task(task.task_id, fields, depends_on, by_hand)
         except DependencyError as error:
             await self._notice(False, _dependency_refusal(error), message.request_id)
             return
@@ -573,19 +668,45 @@ def why_text(answer: WhyAnswer, members: dict[int, str]) -> str:
     return "\n".join([answer.answer, *(_decision_source(d, members) for d in answer.decisions)])
 
 
-def ask_text(answer: AskAnswer, members: dict[int, str]) -> str:
+def _card_line(card, members: dict[int, str]) -> str:
+    """One open card in a few words, for Cadence's context."""
+    p = card.payload
+    if card.kind is ProposalKind.BLOCKER:
+        by = members.get(p.get("depends_on_owner_id")) if p.get("depends_on_owner_id") else None
+        return f"{card.kind.value}: “{p.get('title', '')}” waits on “{p.get('depends_on_title', '')}”" + (f" (delivered by {by})" if by else "")
+    if card.kind is ProposalKind.TASK_OWNER:
+        return f"new task: “{p.get('title', '')}”" + (f" for {members.get(p.get('owner_id'))}" if p.get("owner_id") else "")
+    return f"{card.kind.value}: {p.get('question') or p.get('title') or ''}"[:200]
+
+
+def _reaches(tasks: dict, start: str, target: str) -> bool:
+    """True when `start` already waits, through any tasks, on `target`."""
+    to_visit, seen = [start], set()
+    while to_visit:
+        current = to_visit.pop()
+        if current == target:
+            return True
+        if current not in seen and current in tasks:
+            seen.add(current)
+            to_visit.extend(tasks[current].depends_on)
+    return False
+
+
+def ask_text(answer: AskAnswer, members: dict[int, str], *, it: bool = False) -> str:
     """
-    The answer, then one short "From:" line naming what it rests on (tasks,
-    milestones, decisions, documents), so the group can check it. No line
-    when the answer rests on nothing saved (advice, or "it is not there").
+    The answer, then one short "From:" line ("Fonti:" for an Italian group)
+    naming what it rests on (tasks, milestones, decisions, documents), so the
+    group can check it. No line when the answer rests on nothing saved
+    (advice, or "it is not there").
     """
-    sources = [f"task “{t.title}”" for t in answer.tasks]
-    sources += [f"milestone “{m.title}”" for m in answer.milestones]
-    sources += [f"decision “{d.choice}”" for d in answer.decisions]
+    prefix, task, milestone, decision = sources_label(it)
+    sources = [f"{task} “{t.title}”" for t in answer.tasks]
+    sources += [f"{milestone} “{m.title}”" for m in answer.milestones]
+    sources += [f"{decision} “{d.choice}”" for d in answer.decisions]
     sources += [f"“{name}”" for name in answer.documents]
     if not sources:
         return answer.answer
-    return f"{answer.answer}\nFrom: {', '.join(sources)}."
+    return f"{answer.answer}\n{prefix}: {', '.join(sources)}."
 
 
 def _decision_source(d: Decision, members: dict[int, str]) -> str:

@@ -25,3 +25,11 @@ Needs `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_API_KEY` in the environment or `
 
 Every probe catches its own error and prints it, so one failing model does
 not hide the results of the others. The key is never printed.
+
+## Live evaluation scripts (real model, Azure credit: Matteo's OK)
+
+| Script | What it does |
+|---|---|
+| `live_ask_corpus.py` | 12 cases of Cadence's answers (ask path). |
+| `live_conversation_corpus.py` | LIVE (real model, Azure credit): 52 conversational cases (regression / dev / holdout) on the ask path and the CS7/CS5 card writer; deterministic checks on actions (ids, direction, owner). See `docs/coordinator/CONVERSATION_EVAL.md`. |
+| `live_rasd_e2e.py` | LIVE end-to-end against a running server: the RASD / Matías scenario (card, confirm, state = what the Dependencies board draws, follow-ups, prerequisite done). `--ask` for the direct-request path. |

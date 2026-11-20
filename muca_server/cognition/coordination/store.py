@@ -23,6 +23,7 @@ from pathlib import Path
 
 import aiosqlite
 
+from .plan_writes import DependencyError, check_dependencies
 from .models import (
     Charter,
     Decision,
@@ -75,6 +76,9 @@ CREATE TABLE IF NOT EXISTS coord_task (
 CREATE TABLE IF NOT EXISTS coord_task_dependency (
     task_id     TEXT NOT NULL,
     depends_on  TEXT NOT NULL,
+    -- Where the link came from, for "why are these linked?": "card <id>: <the
+    -- chat line behind it>", "by hand (<member>)"; '' = not known (older rows).
+    source      TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (task_id, depends_on)
 );
 CREATE TABLE IF NOT EXISTS coord_decision (
@@ -165,18 +169,6 @@ END;
 """
 
 
-class DependencyError(ValueError):
-    """
-    A dependency the plan cannot hold. `kind` is "unknown" (no such task),
-    "itself" (a task cannot wait on itself) or "loop" (A waits on B and B,
-    through any tasks, waits on A: neither could ever start).
-    """
-
-    def __init__(self, kind: str) -> None:
-        super().__init__(kind)
-        self.kind = kind
-
-
 class CoordinationStore:
     def __init__(self, db_path: str | Path) -> None:
         self._db_path = str(db_path)
@@ -212,6 +204,10 @@ class CoordinationStore:
                     await db.execute("ALTER TABLE coord_task ADD COLUMN progress INTEGER NOT NULL DEFAULT 0")
                     await db.execute("ALTER TABLE coord_task ADD COLUMN created_at REAL")
                     await db.execute("ALTER TABLE coord_task ADD COLUMN done_at REAL")
+                # Files made before link provenance get the column (old links: unknown).
+                cursor = await db.execute("PRAGMA table_info(coord_task_dependency)")
+                if "source" not in {row[1] for row in await cursor.fetchall()}:
+                    await db.execute("ALTER TABLE coord_task_dependency ADD COLUMN source TEXT NOT NULL DEFAULT ''")
                 await db.executescript(TASK_TIMES)
             except Exception:
                 await db.close()
@@ -420,6 +416,7 @@ class CoordinationStore:
         due_date: str | None,
         description: str = "",
         depends_on: list[str] | None = None,
+        source: str = "",
     ) -> None:
         """A new task; with `depends_on` the task and its dependencies are saved together or not at all."""
         db = await self._connect()
@@ -431,7 +428,7 @@ class CoordinationStore:
                     (task_id, title, owner_id, due_date, description),
                 )
                 if depends_on:
-                    await _replace_dependencies(db, task_id, depends_on)
+                    await _replace_dependencies(db, task_id, depends_on, source)
             except BaseException:
                 await db.execute("ROLLBACK")
                 raise
@@ -439,7 +436,7 @@ class CoordinationStore:
         finally:
             await db.close()
 
-    async def edit_task(self, task_id: str, fields: dict, depends_on: list[str] | None = None) -> bool:
+    async def edit_task(self, task_id: str, fields: dict, depends_on: list[str] | None = None, source: str = "") -> bool:
         """
         Set the given columns of a task (title, owner_id, due_date, status,
         description, progress; None clears owner or date) and, when `depends_on` is
@@ -461,7 +458,7 @@ class CoordinationStore:
                     )
                     found = cursor.rowcount > 0
                 if found and depends_on is not None:
-                    await _replace_dependencies(db, task_id, depends_on)
+                    await _replace_dependencies(db, task_id, depends_on, source)
             except BaseException:
                 await db.execute("ROLLBACK")
                 raise
@@ -621,8 +618,11 @@ class CoordinationStore:
                 for row in await _all(db, "SELECT * FROM coord_milestone ORDER BY position")
             ]
             dependencies: dict[str, list[str]] = {}
+            sources: dict[str, dict[str, str]] = {}
             for row in await _all(db, "SELECT * FROM coord_task_dependency"):
                 dependencies.setdefault(row["task_id"], []).append(row["depends_on"])
+                if row["source"]:
+                    sources.setdefault(row["task_id"], {})[row["depends_on"]] = row["source"]
             tasks = [
                 Task(
                     task_id=row["task_id"],
@@ -631,6 +631,7 @@ class CoordinationStore:
                     due_date=row["due_date"],
                     status=row["status"],
                     depends_on=sorted(dependencies.get(row["task_id"], [])),
+                    dependency_sources=sources.get(row["task_id"], {}),
                     description=row["description"],
                     progress=row["progress"],
                     created_at=row["created_at"],
@@ -709,33 +710,22 @@ async def _all(db: aiosqlite.Connection, sql: str) -> list[aiosqlite.Row]:
     return list(await cursor.fetchall())
 
 
-async def _replace_dependencies(db: aiosqlite.Connection, task_id: str, depends_on: list[str]) -> None:
+async def _replace_dependencies(db: aiosqlite.Connection, task_id: str, depends_on: list[str], source: str = "") -> None:
     """
     `task_id` now waits on exactly `depends_on`. Checked inside the caller's
     transaction, so two members changing the plan at once cannot sneak a loop in.
+    Links kept from before keep their source; new ones get `source`.
     """
     wanted = list(dict.fromkeys(depends_on))
-    if task_id in wanted:
-        raise DependencyError("itself")
-    for other in wanted:
-        if not await _all_params(db, "SELECT 1 FROM coord_task WHERE task_id = ?", (other,)):
-            raise DependencyError("unknown")
-    # Who waits on whom, leaving out this task's own old rows (they are being replaced).
-    waits_on: dict[str, list[str]] = {}
-    for row in await _all_params(db, "SELECT task_id, depends_on FROM coord_task_dependency WHERE task_id != ?", (task_id,)):
-        waits_on.setdefault(row[0], []).append(row[1])
-    # A loop closes if, following "waits on" from any wanted task, we come back to this one.
-    to_visit, seen = list(wanted), set()
-    while to_visit:
-        current = to_visit.pop()
-        if current == task_id:
-            raise DependencyError("loop")
-        if current not in seen:
-            seen.add(current)
-            to_visit.extend(waits_on.get(current, []))
+    await check_dependencies(db, task_id, wanted, replacing=True)
+    kept = {row[0]: row[1] for row in await _all_params(
+        db, "SELECT depends_on, source FROM coord_task_dependency WHERE task_id = ?", (task_id,))}
     await db.execute("DELETE FROM coord_task_dependency WHERE task_id = ?", (task_id,))
     for other in wanted:
-        await db.execute("INSERT INTO coord_task_dependency (task_id, depends_on) VALUES (?, ?)", (task_id, other))
+        await db.execute(
+            "INSERT INTO coord_task_dependency (task_id, depends_on, source) VALUES (?, ?, ?)",
+            (task_id, other, kept.get(other, source)),
+        )
 
 
 def _proposal_from_row(row: aiosqlite.Row) -> Proposal:

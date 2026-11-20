@@ -1,0 +1,83 @@
+task add -> Task added: “Rivedere e correggere il RASD” (Matteo Cesandri).
+task add -> Task added: “Create first mockup” (Bruno Neri).
+> Bruno Neri: Ho caricato la prima bozza del mockup su Figma
+> Matteo Cesandri: Bello, gli do un'occhiata stasera
+> Bruno Neri: Domani provo a sistemare la navbar
+> Matteo Cesandri: Io intanto devo chiudere il RASD entro il 24
+> Matteo Cesandri: Mathias deve mandarmi prima però i dati su cui si basa il RASD.
+> Matteo Cesandri: Mathias DEVE MANDARMI PRIMA I DATI affinché io possa fare il RASD.
+
+CARD: {
+ "rationale": "Intervengo perché Matteo indica i dati come prerequisito per il RASD, da chiudere entro il 24.",
+ "task_id": "e5f1b1b2c2e0",
+ "title": "Rivedere e correggere il RASD",
+ "depends_on_task_id": null,
+ "depends_on_title": "Dati su cui si basa il RASD",
+ "depends_on_owner_id": 2,
+ "helper_id": 2,
+ "question": "I dati di Matías servono per tutta la revisione, o Matteo può intanto correggere le parti che non li richiedono?",
+ "certainty": "possible",
+ "ways_forward": []
+}
+confirm -> Dependency saved: “Rivedere e correggere il RASD” waits on “Dati su cui si basa il RASD”. Matías Rodríguez owns “Dati su cui si basa il RASD”.
+
+STATE (what the Dependencies board draws):
+  [005bcd821a83] Dati su cui si basa il RASD owner=Matías Rodríguez status=todo waits_on=[] sources={}
+  [457bbeb725d0] Create first mockup owner=Bruno Neri status=todo waits_on=[] sources={}
+  [e5f1b1b2c2e0] Rivedere e correggere il RASD owner=Matteo Cesandri status=todo waits_on=['Dati su cui si basa il RASD'] sources={'005bcd821a83': 'card 1131c1922b20: “Mathias deve mandarmi prima però i dati su cui si basa il RASD.” (Matteo Cesandri)'}
+
+> Cadence, da cosa dipende adesso il RASD?
+CADENCE: Nel piano, «Rivedere e correggere il RASD» dipende dai «Dati su cui si basa il RASD», affidati a Matías Rodríguez. Il collegamento deriva dalla tua indicazione che ti servono prima quei dati; per la loro consegna non è ancora registrata una scadenza.
+From: task “Rivedere e correggere il RASD”, task “Dati su cui si basa il RASD”.
+
+> E se Matías non riesce a mandarmi i dati entro domani?
+CADENCE: Ti suggerisco di chiedere a Matías se può mandarti almeno una parte dei dati entro domani e quando riuscirebbe a consegnare il resto. Nel frattempo potresti rivedere le parti del RASD che non dipendono da quei dati, lasciando in sospeso quelle da verificare. Nel piano la revisione resta prevista per il 24 novembre; per i dati non è registrata una scadenza, quindi domani non risulta un termine concordato.
+From: task “Dati su cui si basa il RASD”, task “Rivedere e correggere il RASD”.
+
+> (Matías marks the data done) Cadence, il RASD aspetta ancora qualcosa?
+CADENCE: Nel piano, «Rivedere e correggere il RASD» è ancora collegato ai «Dati su cui si basa il RASD» di Matías, ma quei dati risultano completati al 100%. Quindi non risultano prerequisiti ancora aperti; se non li hai ricevuti, ti suggerisco di chiedere a Matías dove trovarli.
+From: task “Rivedere e correggere il RASD”, task “Dati su cui si basa il RASD”.
+
+PASS
+task add -> Task added: “Rivedere e correggere il RASD” (Matteo Cesandri).
+task add -> Task added: “Create first mockup” (Bruno Neri).
+> Bruno Neri: Ho caricato la prima bozza del mockup su Figma
+> Matteo Cesandri: Bello, gli do un'occhiata stasera
+> Bruno Neri: Domani provo a sistemare la navbar
+> Matteo Cesandri: Io intanto devo chiudere il RASD entro il 24
+> Matteo Cesandri: Mathias deve mandarmi prima però i dati su cui si basa il RASD.
+> Matteo Cesandri: Mathias DEVE MANDARMI PRIMA I DATI affinché io possa fare il RASD.
+
+CARD: {
+ "rationale": "Intervengo perché la chiusura del RASD entro il 24 dipende dai dati che Matías deve ancora inviare.",
+ "task_id": "9a08527c467b",
+ "title": "Rivedere e correggere il RASD",
+ "depends_on_task_id": null,
+ "depends_on_title": "Dati su cui si basa il RASD",
+ "depends_on_owner_id": 2,
+ "helper_id": 2,
+ "question": "I dati servono per tutta la revisione del RASD, o si possono rivedere prima le parti indipendenti?",
+ "certainty": "possible",
+ "ways_forward": [
+  "Rivedere prima le parti del RASD che non dipendono dai dati."
+ ]
+}
+confirm -> Dependency saved: “Rivedere e correggere il RASD” waits on “Dati su cui si basa il RASD”. Matías Rodríguez owns “Dati su cui si basa il RASD”.
+
+STATE (what the Dependencies board draws):
+  [232916596925] Dati su cui si basa il RASD owner=Matías Rodríguez status=todo waits_on=[] sources={}
+  [9a08527c467b] Rivedere e correggere il RASD owner=Matteo Cesandri status=todo waits_on=['Dati su cui si basa il RASD'] sources={'232916596925': 'card 4f3e05d12fe6: “Mathias deve mandarmi prima però i dati su cui si basa il RASD.” (Matteo Cesandri)'}
+  [ed753f82b8ff] Create first mockup owner=Bruno Neri status=todo waits_on=[] sources={}
+
+> Cadence, da cosa dipende adesso il RASD?
+CADENCE: Nel piano, «Rivedere e correggere il RASD» dipende da «Dati su cui si basa il RASD», assegnato a Matías Rodríguez e senza una scadenza indicata. Il collegamento deriva dal tuo messaggio in cui dicevi che ti servono prima quei dati; la revisione resta prevista entro il 24 novembre.
+From: task “Rivedere e correggere il RASD”, task “Dati su cui si basa il RASD”.
+
+> E se Matías non riesce a mandarmi i dati entro domani?
+CADENCE: The coordinator is already working on a request for this group: its answer will appear here.
+
+> (Matías marks the data done) Cadence, il RASD aspetta ancora qualcosa?
+CADENCE: Nel piano, «Rivedere e correggere il RASD» dipende solo dai dati di Matías, che ora risultano completati al 100%: non ci sono altri prerequisiti registrati. Hai ricevuto tutto ciò che ti serve per procedere?
+From: task “Rivedere e correggere il RASD”, task “Dati su cui si basa il RASD”.
+
+PASS

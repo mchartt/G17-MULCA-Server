@@ -18,6 +18,7 @@ retry, then silence (project rule 0: never invent).
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -26,6 +27,7 @@ from pydantic import ValidationError
 
 from .checkin import Finding
 from .models import (
+    MAX_TITLE,
     CheckinPayload,
     Decision,
     MemberProfile,
@@ -96,6 +98,24 @@ ASK_SCHEMA = _strict(
         "milestone_ids": _IDS,
         "decision_ids": _IDS,
         "documents": _IDS,
+        # A change of the plan the member asked for, drafted as a card a
+        # member confirms; kind "none" when the message asks for no change.
+        "action": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": ["none", "new_task", "dependency"]},
+                "task_id": {"type": ["string", "null"]},
+                "title": {"type": "string"},
+                "owner_id": {"type": ["integer", "null"]},
+                "due_date": {"type": ["string", "null"]},
+                "depends_on_task_id": {"type": ["string", "null"]},
+                "depends_on_title": {"type": "string"},
+                "depends_on_owner_id": {"type": ["integer", "null"]},
+            },
+            "required": ["kind", "task_id", "title", "owner_id", "due_date", "depends_on_task_id",
+                         "depends_on_title", "depends_on_owner_id"],
+            "additionalProperties": False,
+        },
     },
 )
 
@@ -161,15 +181,48 @@ the last messages of the chat, yours included, oldest first.
 
 How to answer:
 - Like a helpful teammate: natural, warm, direct, in the language of the
-  member's message. Usually 1 to 4 short sentences; a short list only when
-  they ask for several things. No headings, no "As an AI".
+  member's message. Answer first, no preamble ("Certo!", "Ottima domanda").
+  A simple question gets 1 to 3 short sentences. When the answer is several
+  items (tasks, steps, options), one short line before, then one item per
+  line starting with "- " (at most 6). You may put **bold** on the one fact
+  they asked for (a name, a date), at most twice. No headings, no tables, no
+  links, no HTML, no emoji, no "As an AI".
 - Facts about the project come only from <project> and <chat>. If the answer
   is not there, say so plainly and suggest the next step (e.g. paste the
   assignment, add the task, decide it together). Never invent a date, a
   person, a task or a decision.
-- You may help them think (how to split work, what to do first) using what
-  the project holds; say it is a suggestion. You never change the plan
-  yourself: to change it, a member edits it or confirms a card.
+- Say where a fact comes from when it matters: a task, link, owner or date in
+  <project> is recorded in the plan; something only said in <chat> is not
+  recorded yet ("Matteo said he needs Matías' data first, but the plan does
+  not record it yet"). Never present a chat statement or your own inference
+  as part of the plan. Each "waits on" of a task may say where the link came
+  from; if they ask why two tasks are linked, use that, and if the origin is
+  not known, say so rather than guess.
+- You may help them think (how to split work, what to do first, what to do if
+  something they wait on is late) using what the project holds; say it is a
+  suggestion. Practical options: mock or partial data first, the parts that do
+  not depend on it, a smaller first version, swapping the order, asking the
+  person concerned when it can arrive. Never blame anyone, never treat silence
+  as a delay, never move a fixed deadline on your own.
+- You never change the plan yourself. When the member asks you to change it
+  (create or add a task, link two tasks, add a prerequisite), or answers yes to
+  your own offer to do so in <chat> ("sì, fallo", "yes please"), fill `action`
+  and say in `answer` that the change is ready on a card to confirm (never
+  that it is saved). If a card waiting for a click (in <project>) already
+  proposes that change, do not draft it again: action.kind = "none" and tell
+  them to confirm that card with its button. Otherwise action.kind = "none".
+action (ids only from <project>, member ids only from the member list; names
+may be spelled differently in the chat: Mathias = Matías, match them to the
+member list; if a name or task matches nothing or more than one, use
+kind "none" and ask one precise question instead):
+- "new_task": title (short, concrete), owner_id (the member it is for, if
+  said, else null), due_date (YYYY-MM-DD if said, else null); task_id null.
+- "dependency": task_id = the task that WAITS (or null if it is new: then
+  title = its name); the work it waits on is depends_on_task_id (a plan task)
+  or, if not in the plan, depends_on_title (its name) with depends_on_owner_id
+  = the member who must deliver it, if named. Direction: if A needs B first,
+  task_id = A, depends_on = B. Never the same task on both sides.
+- "none": every other field null or "".
 - Use the members' names, never their ids. Dates as people say them.
 task_ids, milestone_ids, decision_ids: only the ids of the saved items your
 answer actually names or states facts from (not everything you looked at).
@@ -221,6 +274,20 @@ class WhyAnswer:
 
 
 @dataclass(frozen=True, slots=True)
+class AskAction:
+    """A plan change a member asked Cadence for, checked against the plan; it becomes a card."""
+
+    kind: str  # "new_task" | "dependency"
+    task_id: str | None
+    title: str
+    owner_id: int | None = None
+    due_date: date | None = None
+    depends_on_task_id: str | None = None
+    depends_on_title: str = ""
+    depends_on_owner_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class AskAnswer:
     """An answer and the saved items and documents it rests on (it may rest on none)."""
 
@@ -229,6 +296,7 @@ class AskAnswer:
     milestones: list[Milestone]
     decisions: list[Decision]
     documents: list[str] = ()
+    action: AskAction | None = None
 
     @property
     def found(self) -> bool:
@@ -310,13 +378,19 @@ class PlanWriter:
         chat: list[str] = (),
         today: date | None = None,
         maybe: bool = False,
+        pending: list[str] = (),
     ) -> AskAnswer | None:
         """
         Answer a member as Cadence, from everything the project holds and the
         recent chat. Every id and document name the model cites is checked.
         `maybe`: a follow-up that does not name Cadence; an empty answer
-        (silence) is then accepted.
+        (silence) is then accepted. A "maybe" that is only a thanks or an ok
+        gets silence without a model call, and a "maybe" answered with only a
+        courtesy ("You're welcome!") is silence too: the 20/11 corpus showed
+        the prompt alone does not hold this.
         """
+        if maybe and ACK_ONLY.match(question):
+            return AskAnswer("", [], [], [])
         tasks = {t.task_id: t for t in state.tasks}
         milestones = {m.milestone_id: m for m in state.milestones}
         decisions = {d.decision_id: d for d in state.decisions}
@@ -335,6 +409,8 @@ class PlanWriter:
             + _decision_log(state.decisions)
             + "\n"
             + _documents(question, documents)
+            + "\nCards waiting for a member's click (proposed, NOT saved):\n"
+            + ("\n".join(f"- {line}" for line in pending) or "- (none)")
             + "\n</project>\n<chat>\n"
             + ("\n".join(chat[-CHAT_LINES:]) or "(no recent messages)")
             + f"\n</chat>\n<question>\n{question}\n</question>"
@@ -358,9 +434,14 @@ class PlanWriter:
                 pick(data["decision_ids"], decisions, "decision"),
                 used,
             )
+            if maybe and COURTESY_ONLY.match(found.answer):
+                return AskAnswer("", [], [], [])
             if not found.answer and not maybe:
                 raise ValueError("empty answer")
-            return found
+            action = _ask_action(data.get("action") or {}, tasks, members, today)
+            if action is not None and not found.answer:
+                raise ValueError("a change without a word to the member")
+            return AskAnswer(found.answer, found.tasks, found.milestones, found.decisions, found.documents, action)
 
         return await self._run("ask", ASK_SYSTEM, user, ASK_SCHEMA, check)
 
@@ -428,14 +509,72 @@ class PlanWriter:
         return None
 
 
-# A message right after Cadence answered that does not name it (the web's
-# follow-up window): it may be for Cadence, or the members talking together.
+def _ask_action(data: dict, tasks: dict[str, Task], members: dict[int, str], today: date | None) -> AskAction | None:
+    """The `action` of an ask answer, checked; None when it asks for no change. Raises on a bad one (retry)."""
+    kind = data.get("kind") or "none"
+    if kind == "none":
+        return None
+    title = " ".join(str(data.get("title") or "").split())[:MAX_TITLE]
+    for key in ("owner_id", "depends_on_owner_id"):
+        if data.get(key) is not None and data[key] not in members:
+            raise ValueError(f"{key} is not a member")
+    for key in ("task_id", "depends_on_task_id"):
+        if data.get(key) is not None and data[key] not in tasks:
+            raise ValueError(f"{key} is not a plan task")
+    if kind == "new_task":
+        if not title:
+            raise ValueError("a new task needs a title")
+        due = date.fromisoformat(data["due_date"]) if data.get("due_date") else None
+        if due is not None and today is not None and due < today:
+            raise ValueError("due date in the past")
+        return AskAction("new_task", None, title, owner_id=data.get("owner_id"), due_date=due)
+    if kind != "dependency":
+        raise ValueError("unknown action")
+    task_id, depends_on = data.get("task_id"), data.get("depends_on_task_id")
+    depends_title = " ".join(str(data.get("depends_on_title") or "").split())[:MAX_TITLE]
+    if task_id is not None:
+        title = tasks[task_id].title
+    if not title or not (depends_on or depends_title):
+        raise ValueError("a dependency needs both sides")
+    if task_id is not None and task_id == depends_on:
+        raise ValueError("a task cannot wait on itself")
+    if depends_on is not None:
+        depends_title = tasks[depends_on].title
+    return AskAction(
+        "dependency",
+        task_id,
+        title,
+        depends_on_task_id=depends_on,
+        depends_on_title=depends_title,
+        depends_on_owner_id=None if depends_on is not None else data.get("depends_on_owner_id"),
+    )
+
+
+# A message that may or may not be for Cadence: right after it answered without
+# naming it (the web's follow-up window), or naming it without the shape of a
+# call ("Cadence ieri ha risposto male", "dobbiamo migliorare Cadence?").
 MAYBE_NOTE = """
-<note>This message came right after your last answer and does not name you.
-If it continues the talk with you (a follow-up, a thanks with a question, a
-correction), answer it. If the members are talking among themselves, or it
-needs no answer from you (ok, thanks, a joke), answer with an empty string and
-empty lists: you stay silent.</note>"""
+<note>This message may not be for you: it came right after your last answer
+without naming you, or it names you in passing. If it asks you something or
+asks you to do something, or continues the talk with you (a follow-up, a
+correction), answer it. Stay silent when the members talk ABOUT you or the
+app ("Cadence answered badly yesterday", "I changed the coordinator's code",
+"Cadence is slower now"), when the message asks the OTHER members ("secondo
+voi...", "ragazzi...", "what do you all think", "should we improve Cadence?":
+an opinion of the group, not a question for you, even if you could help),
+when they talk among themselves, or when it needs no answer (ok, thanks, a
+joke; "grazie", "perfetto grazie", "ok": a thanks is never answered, not even
+"di nulla"). Silence = an empty string, empty lists and action kind "none".</note>"""
+# A whole message that is only an acknowledgement, and a whole answer that is
+# only a courtesy: neither needs Cadence to speak after a "maybe".
+_ACK = (r"ok(ay|ok)?|thanks?( a lot| so much)?|thank you|thx|ty|grazie( mille| tante)?|perfetto|perfect|great|"
+        r"top|benissimo|ottimo|va bene|d'accordo|capito|got it|cool|nice|super|👍|🙏|👌")
+ACK_ONLY = re.compile(rf"^\s*(?:(?:{_ACK})[\s,.!]*)+$", re.IGNORECASE)
+COURTESY_ONLY = re.compile(
+    r"^\s*(you'?re welcome|no problem|any ?time|glad to help|di nulla|prego|figurati|nessun problema|a disposizione)"
+    r"[\s!.,😊🙂]*$",
+    re.IGNORECASE,
+)
 CHAT_LINES = 30
 DOCUMENT_BUDGET = 12_000
 CHUNK = 900
@@ -453,7 +592,16 @@ def _tasks_in_full(state: ProjectState, members: dict[int, str]) -> str:
     lines = []
     for t in state.tasks:
         owner = members.get(t.owner_id, "a member") if t.owner_id else "no owner"
-        waits = f" | waits on: {', '.join(titles.get(i, i) for i in t.depends_on)}" if t.depends_on else ""
+        waits = (
+            " | waits on: "
+            + "; ".join(
+                f"{titles.get(i, i)} (linked {t.dependency_sources[i]})" if i in t.dependency_sources
+                else f"{titles.get(i, i)} (origin of the link not recorded)"
+                for i in t.depends_on
+            )
+            if t.depends_on
+            else ""
+        )
         about = f" | about: {' '.join(t.description.split())[:300]}" if t.description else ""
         lines.append(
             f"- task_id {t.task_id}: {t.title} | owner: {owner} | due: {t.due_date or '-'} | {t.status.value}"

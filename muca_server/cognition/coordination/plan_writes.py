@@ -91,11 +91,82 @@ async def delete_task(db: aiosqlite.Connection, task_id: str) -> None:
     await db.execute("DELETE FROM coord_task WHERE task_id = ?", (task_id,))
 
 
-async def add_dependency(db: aiosqlite.Connection, *, task_id: str, depends_on: str) -> None:
-    """`task_id` waits on `depends_on`."""
+class DependencyError(ValueError):
+    """
+    A dependency the plan cannot hold. `kind` is "unknown" (no such task),
+    "itself" (a task cannot wait on itself) or "loop" (A waits on B and B,
+    through any tasks, waits on A: neither could ever start).
+    """
+
+    def __init__(self, kind: str) -> None:
+        super().__init__(kind)
+        self.kind = kind
+
+
+async def check_dependencies(db: aiosqlite.Connection, task_id: str, wanted: list[str], *, replacing: bool = False) -> None:
+    """
+    Raise DependencyError if `task_id` cannot wait on `wanted`: itself, a task
+    not in the plan, or a loop. The one check for every way a link is made
+    (by hand, or a confirmed card), inside the caller's transaction.
+    `replacing`: the task's own current links are about to be replaced, so
+    they are left out of the loop search.
+    """
+    if task_id in wanted:
+        raise DependencyError("itself")
+    for other in wanted:
+        cursor = await db.execute("SELECT 1 FROM coord_task WHERE task_id = ?", (other,))
+        if await cursor.fetchone() is None:
+            raise DependencyError("unknown")
+    waits_on: dict[str, list[str]] = {}
+    cursor = await db.execute("SELECT task_id, depends_on FROM coord_task_dependency")
+    for row in await cursor.fetchall():
+        if not (replacing and row[0] == task_id):
+            waits_on.setdefault(row[0], []).append(row[1])
+    # A loop closes if, following "waits on" from any wanted task, we come back to this one.
+    to_visit, seen = list(wanted), set()
+    while to_visit:
+        current = to_visit.pop()
+        if current == task_id:
+            raise DependencyError("loop")
+        if current not in seen:
+            seen.add(current)
+            to_visit.extend(waits_on.get(current, []))
+
+
+def known_prerequisite(waiting, depends_on_title: str, depends_on_owner_id, tasks) -> str | None:
+    """
+    The id of a task `waiting` already waits on that is the same work as a new
+    prerequisite (same title, or same member delivering it), or None. Saying
+    "Mathias must send me the data" again after the link was confirmed must
+    not add a second "data" task.
+    """
+    if waiting is None:
+        return None
+    by_id = {t.task_id: t for t in tasks}
+    key = topic_key(depends_on_title)
+    for other_id in waiting.depends_on:
+        other = by_id.get(other_id)
+        if other is None:
+            continue
+        if (key and topic_key(other.title) == key) or (
+            depends_on_owner_id is not None and other.owner_id == depends_on_owner_id
+        ):
+            return other_id
+    return None
+
+
+def same_title_task(title: str, tasks, *, besides: str | None = None) -> str | None:
+    """The id of a plan task with exactly this title (ignoring case and punctuation), or None."""
+    key = topic_key(title)
+    return next((t.task_id for t in tasks if key and topic_key(t.title) == key and t.task_id != besides), None)
+
+
+async def add_dependency(db: aiosqlite.Connection, *, task_id: str, depends_on: str, source: str = "") -> None:
+    """`task_id` waits on `depends_on` (checked: no self-link, no loop; a repeat is a no-op)."""
+    await check_dependencies(db, task_id, [depends_on])
     await db.execute(
-        "INSERT OR IGNORE INTO coord_task_dependency (task_id, depends_on) VALUES (?, ?)",
-        (task_id, depends_on),
+        "INSERT OR IGNORE INTO coord_task_dependency (task_id, depends_on, source) VALUES (?, ?, ?)",
+        (task_id, depends_on, source),
     )
 
 

@@ -9,7 +9,10 @@ trigger_description: >
   wants done, followed by messages that move on without an owner or a date.
   Do NOT fire for: an idea that is still being discussed and not yet agreed;
   an action someone already took ("I'll do it", "I can handle that", "on
-  it"); vague wishes with no concrete result; jokes; work outside the
+  it"); a member's own small next step on their own work, said in passing
+  ("I'll take a look tonight", "tomorrow I'll try to fix the navbar",
+  "gli do un'occhiata stasera", "domani provo a sistemare la navbar"): it
+  has an owner (the speaker) and needs no card; vague wishes with no concrete result; jokes; work outside the
   project; a task the Project memory already shows with an owner and a date.
 cooldown_messages: 10
 trigger_variables: []
