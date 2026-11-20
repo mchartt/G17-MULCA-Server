@@ -100,8 +100,10 @@ general. The judge (Realtime) was exercised only in the 4 e2e runs.
 ## Not verified / limits
 
 - Deployed app (Render/Vercel): not touched. The Project's `vendor/muca-server`
-  copy is still at `0acb4ce`: the web app and the Jam show the new fields only
-  after that copy is re-synced (the usual "Render: muca-server copy" step).
+  is re-synced to this work with `deploy/render/update-vendor.sh` (local commits
+  on the `claude/cadence-conversational-optimization-*` branches, not pushed):
+  it reaches Render only when that branch is merged into `gitlab-dev`. From the
+  vendor copy: server 745 passed, client 362 passed, Playwright 16/16.
 - Web UI: Vitest 149/149 + `tsc`; Playwright 16/16 on the offline fake stack (SCRIPTED model: proves the UI path only) with this worktree's server code. Not checked by hand in a browser.
 - Removing a link, "la API è pronta" (status) and "generate the whole graph"
   are not actions of `ask`: a member does them on the Dependencies/Tasks pages
