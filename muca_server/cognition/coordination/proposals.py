@@ -101,6 +101,10 @@ class ProposalService:
         self._ttl = ttl_seconds
         self._clock = clock
 
+    def now(self) -> float:
+        """The service's clock (tests set it), for callers that check expiry and snoozes."""
+        return self._clock()
+
     async def create(
         self,
         kind: ProposalKind,

@@ -459,6 +459,7 @@ class CoordinatorRouter:
         )
 
     async def _on_response(self, message: ProposalResponseMessage) -> None:
+        before = {t.task_id for t in (await self._store_now().load_state()).tasks}
         outcome = await self._service().respond(
             message.proposal_id,
             action=message.action,
@@ -476,6 +477,10 @@ class CoordinatorRouter:
             if proposal is not None and proposal.kind is ProposalKind.CHARTER and proposal.status is ProposalStatus.APPLIED:
                 # In the background: the click's answer and state go out first.
                 self.opener.after_charter(message.channel)
+            if proposal is not None and proposal.kind is ProposalKind.PLAN and proposal.status is ProposalStatus.APPLIED:
+                # A confirmed plan adds tasks: look for likely dependencies among them, in the background.
+                added = [t.task_id for t in (await self._store_now().load_state()).tasks if t.task_id not in before]
+                self._plan.suggest_dependencies(added, message.channel)
 
     async def _on_approach(self, message: CoordinatorCommandMessage) -> None:
         """"Plan together": ask how the group plans the work, now (a member's action)."""

@@ -21,6 +21,10 @@ PlanCommands: the M4 commands of one group session, used by router.py.
               milestones and decisions, each named as the source; when none
               of them answers, the server says so (spec: "@coordinator")
 
+After tasks are added (by hand, or a confirmed plan card) the coordinator looks
+for a likely dependency in the background (`suggest_dependencies`): a CS7
+"possible" card per pair, at most two, which the group confirms or not.
+
 The check-in also runs on time (spec FR15): checkin_timer.py calls
 `timed_checkin`, which posts a card only when something is late or at risk.
 
@@ -40,12 +44,30 @@ from typing import Any
 from .checkin import findings, owners_report
 from pydantic import ValidationError
 
-from .models import MAX_TEXT, MAX_TITLE, Decision, PlanItem, PlanPayload, ProposalKind, TaskStatus
+from .models import (
+    MAX_TEXT,
+    MAX_TITLE,
+    BlockerCertainty,
+    BlockerPayload,
+    Decision,
+    Evidence,
+    PlanItem,
+    PlanPayload,
+    ProactiveContext,
+    ProposalKind,
+    TaskStatus,
+)
+from .plan_writes import topic_key
 from .plan_writer import AskAnswer, PlanWriter, WhyAnswer
 from .proposals import ProposalService, new_id
 from .store import CoordinationStore, DependencyError
 
 logger = logging.getLogger(__name__)
+
+# The strategy a dependency card belongs to: "Not now" on one silences the
+# same strategy and topic (the task's title) as a CS7 card from the chat.
+DEPENDENCY_STRATEGY = "cs7_blockers_dependencies"
+MAX_DEPENDENCY_CARDS = 2
 
 BUSY = "The coordinator is already working on a request for this group: its answer will appear here."
 MAX_TASKS_TEXT = 4000
@@ -79,6 +101,7 @@ class PlanCommands:
         self._unavailable = unavailable
         self._today = today
         self._task: asyncio.Task | None = None
+        self._dependencies: asyncio.Task | None = None
 
     async def handle(self, message) -> None:
         """Entry point for planning, checkin, task, why and ask (router.py checked membership)."""
@@ -97,6 +120,69 @@ class PlanCommands:
     async def wait(self) -> None:
         if self._task is not None:
             await asyncio.gather(self._task, return_exceptions=True)
+        if self._dependencies is not None:
+            await asyncio.gather(self._dependencies, return_exceptions=True)
+
+    def suggest_dependencies(self, new_ids: list[str], channel: str) -> None:
+        """
+        After tasks are added, look for a likely dependency without making the
+        member wait: one model call in the background, then a CS7 "possible"
+        card per new pair (at most two). One look at a time per group: tasks
+        added while one runs are not looked at again (no queue of calls).
+        """
+        if not new_ids or (self._dependencies is not None and not self._dependencies.done()):
+            return
+        self._dependencies = asyncio.create_task(self._dependency_cards(list(new_ids), channel))
+
+    async def _dependency_cards(self, new_ids: list[str], channel: str) -> None:
+        try:
+            store = self._store()
+            state = await store.load_state()
+            open_tasks = [t for t in state.tasks if t.status != TaskStatus.DONE]
+            if len(open_tasks) < 2:
+                return
+            members = self._participants()
+            drafted = await self._writer.draft_dependencies(new_ids, state=state, members=members)
+            if not drafted or not drafted[0]:
+                return
+            links, rationale = drafted
+            tasks = {t.task_id: t for t in state.tasks}
+            now = self._service().now()
+            silenced = {topic for sid, topic in await store.active_snoozes(now) if sid == DEPENDENCY_STRATEGY}
+            waiting = {
+                topic_key(str(p.payload.get("title", "")))
+                for p in await store.open_proposals(now)
+                if p.kind is ProposalKind.BLOCKER
+            }
+            posted = 0
+            for link in links:
+                task, other = tasks[link.task_id], tasks[link.waits_on]
+                if topic_key(task.title) in silenced | waiting or posted >= MAX_DEPENDENCY_CARDS:
+                    continue
+                payload = BlockerPayload(
+                    context=ProactiveContext(
+                        strategy_id=DEPENDENCY_STRATEGY,
+                        topic=task.title[:120],
+                        evidence=[
+                            Evidence(speaker="Plan", text=f"New task: {task.title}"[:300]),
+                            Evidence(speaker="Plan", text=f"Open task: {other.title}"[:300]),
+                        ],
+                    ),
+                    task_id=task.task_id,
+                    title=task.title,
+                    depends_on_task_id=other.task_id,
+                    question=f"Does “{task.title}” wait on “{other.title}”? {link.reason}"[:300],
+                    certainty=BlockerCertainty.POSSIBLE,
+                )
+                proposal = await self._service().create(
+                    ProposalKind.BLOCKER, payload, rationale=rationale, origin_channel=channel
+                )
+                await self._send_proposal(proposal)
+                waiting.add(topic_key(task.title))
+                posted += 1
+        except Exception:
+            # Project rule: a suggestion that fails never breaks the plan or the chat.
+            logger.exception("dependency suggestion failed")
 
     async def _run(self, handler, message) -> None:
         try:
@@ -288,6 +374,13 @@ class PlanCommands:
             owner_name = members.get(fields.get("owner_id"), "nobody yet")
             await self._notice(True, f"Task added: “{fields['title']}” ({owner_name}).", message.request_id)
             await self._send_state("")
+            if not depends_on:  # the member already said what it waits on: nothing to suggest
+                added = next(
+                    (t.task_id for t in (await self._store().load_state()).tasks if t.task_id not in {x.task_id for x in tasks}),
+                    None,
+                )
+                if added:
+                    self.suggest_dependencies([added], message.channel)
             return
 
         ref = str(args.get("task", "")).strip()
