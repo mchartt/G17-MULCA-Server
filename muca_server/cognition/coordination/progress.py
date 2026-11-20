@@ -37,8 +37,9 @@ member who has not written is not behind; the question only asks.
 Shared budget (budget(), with the proactive bridge's own rules): never in a
 DM, never while a card draft runs or the plan opener listens, never in quiet
 hours, at most one time-driven question per SPACING_SECONDS for the group,
-never within MIN_SECONDS_AFTER_CARD of any proactive card (the same marker
-the cards use, so neither bypasses the other), never two questions to the
+never within MIN_SECONDS_AFTER_CARD of any proactive card (it reads the
+cards' marker; a question does not move it, so a CS7 card answering the
+owner's reply is not blocked), never two questions to the
 same member within MEMBER_SECONDS, never right after Cadence's own message.
 """
 
@@ -255,10 +256,12 @@ class ProgressMonitor:
             # the chat) or failed: silence, and this deadline is not asked again.
             await store.record_progress(choice.task.task_id, choice.due_key, "skipped", now)
             return False
+        # Only CS6's own marker: the cards' R4 marker is NOT moved, so the
+        # owner's reply ("sto aspettando il dataset, sono fermo") can still
+        # get its CS7 card right away. The burst to prevent is card ->
+        # unrelated question (MIN_SECONDS_AFTER_CARD), not question -> the
+        # card that answers it.
         await store.save_mark(MARK, 0, now)
-        previous = await store.mark("proactive")
-        # The cards' own spacing (R4) sees this question too: one budget for all.
-        await store.save_mark("proactive", previous[0] if previous else 0, now)
         await self._say(text)
         logger.info(
             "%s progress check-in on %s (%.0f h left, %d waiting on it)",

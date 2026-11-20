@@ -378,8 +378,8 @@ Evidence and runs: `CONVERSATION_EVAL.md`.
   the model sees in the chat that the status was already given.
 - **Budget, shared with the cards:** quiet hours 22:00-08:00 local; one
   time-driven question per group every 4 h; none within 30 min of any
-  proactive card; a question moves the cards' R4 marker too, so a card does
-  not follow it within 5 min; no two questions to one member within 24 h; not
+  proactive card (a question does NOT move the cards' R4 marker: the owner's
+  reply may need its CS7 card at once); no two questions to one member within 24 h; not
   while a card draft runs, the plan opener listens or a member's request runs;
   never right after Cadence's own message; never in a DM. The interval
   check-in card (`MUCA_COORDINATOR_CHECKIN_HOURS`) now uses the same gate and
@@ -395,6 +395,14 @@ Evidence and runs: `CONVERSATION_EVAL.md`.
   and a click.
 - **Switch:** on with the coordinator; `MUCA_COORDINATOR_PROGRESS_CHECKINS=off`
   disables it. Coordinator off: nothing built, unchanged.
+- **Known limit (reply window):** the web offers a message to Cadence as
+  "maybe" only within 3 minutes of Cadence's last message (`FOLLOW_UP_SECONDS`).
+  An owner who answers a question later, without naming Cadence, is not read
+  by `ask`: no acknowledgement and no `progress` recorded (the CS7 judge still
+  sees the message). NOT VERIFIED / not handled; the question is then not
+  repeated for that due date anyway.
+- **R8 in the chat:** while the plan opener listens, a "maybe" message gets
+  silence without a model call (its answers belong to the opener).
 - **Known limit:** the timer runs only while the group's server session is
   open (the web adapter opens it when a member uses the space). A group where
   nobody opens the app gets no question: NON VERIFICATO how long Render keeps

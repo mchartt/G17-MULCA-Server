@@ -281,11 +281,18 @@ class CoordinatorRouter:
             elif message.command == "kickoff":
                 await self._start_kickoff(message)
             elif message.command in ("planning", "checkin", "task", "milestone", "why", "ask"):
-                if message.command == "ask" and message.args.get("maybe") is True and self.proactive is not None:
+                maybe = message.command == "ask" and message.args.get("maybe") is True
+                if maybe and self.proactive is not None:
                     # R10: this message is Cadence's to answer (or to leave
                     # unanswered); the lab's agent must not reply to it too.
                     self.proactive.claim(str(message.args.get("question", "")))
-                await self._plan.handle(message)
+                if maybe and self.opener.listening:
+                    # R8 for the chat too: the members are answering "How do you
+                    # want to plan the work?"; their lines go to the opener, not
+                    # to an ask reply or a task card. Silence, no model call.
+                    await self._notice(True, "", request_id)
+                else:
+                    await self._plan.handle(message)
             elif message.command == "language":
                 await self._on_language(message)
             elif message.command == "charter":

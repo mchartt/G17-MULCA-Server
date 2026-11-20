@@ -212,8 +212,9 @@ async def test_t1_the_sweep_sends_one_short_question_and_records_it(store):
     assert h.said == ["Bruno, come sta andando il dashboard? Ti manca qualcosa?"]
     (row,) = await store.progress_checkins()
     assert row["task_id"] == "t1" and row["due_date"] == "2026-11-25" and row["member_id"] == BRUNO
-    # The question counts for the cards' spacing too (one budget).
-    assert (await store.mark("proactive"))[1] == at(24, 14)
+    # Only CS6's own marker moves: a CS7 card answering the reply is not blocked.
+    assert (await store.mark("progress"))[1] == at(24, 14)
+    assert await store.mark("proactive") is None
 
 
 async def test_t3_t6_nothing_to_ask_means_silence_and_no_model_call(store):
@@ -482,3 +483,36 @@ async def test_from_the_router_the_question_is_said_in_the_chat_and_joins_its_me
     # The question names the task and the owner; its prompt saw the deadline.
     prompt = group.writer._client.calls[-1]["messages"][-1]["content"]
     assert "it is due tomorrow" in prompt and "owner: Bruno" in prompt
+
+
+
+async def test_t5_a_cs7_card_right_after_the_question_is_not_vetoed_by_the_shared_budget(store):
+    """Matías answers "sono fermo" 2 minutes after the question: the CS7 judge may still get its card."""
+    await add(store, "t1", "Dashboard", BRUNO)
+    h = Harness(store, now=at(24, 14))
+    assert await h.monitor.sweep() is True
+
+    class NoDraft:
+        async def draft(self, *_, **__):
+            return None
+
+    bridge = ProactiveBridge(
+        FakeConversation(conversation_id="web:G1"), writer=NoDraft(), store=lambda: store, service=lambda: None,
+        send_proposal=None, clock=lambda: at(24, 14, 2),
+    )
+    history = [SimpleNamespace(content="sto aspettando il dataset del prof, sono fermo", speaker_id=BRUNO,
+                               speaker_name="Bruno", timestamp_ms=0)]
+    verdict = await bridge.offer("cs7_blockers_dependencies", history=history, message_count=40, assistant_id=0)
+    await bridge.wait()
+    assert verdict is Verdict.TAKEN
+
+
+async def test_while_the_plan_opener_listens_a_maybe_message_gets_silence_without_a_model_call(tmp_path, monkeypatch):
+    group = Group(tmp_path)  # no scripted answer: a model call would fail the test
+    web, web_q = await open_web_space(group)
+    monkeypatch.setattr(type(web.opener), "listening", property(lambda self: True))
+    await web.route_coordinator(command("ask", 100_000_002, question="prendo io l'API", maybe=True))
+    await web.wait_for_background()
+    notice = [m for m in await drain(web_q) if isinstance(m, CoordinatorNoticeMessage)][-1]
+    assert notice.ok and notice.text == ""
+    assert group.writer._client.calls == []
