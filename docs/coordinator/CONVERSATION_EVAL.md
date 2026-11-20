@@ -119,12 +119,50 @@ general. The judge (Realtime) was exercised only in the 4 e2e runs.
 - The R2 preemption was never observed live (CS5 stopped firing on the casual
   lines); it is proven offline only.
 
+## Stability and CS6 progress check-ins (20/11 evening)
+
+Code: Server `d599ef8` + this docs commit, Project `8e686c6` (branches
+`claude/cadence-conversational-stability-*`, not pushed). Corpus:
+`scripts/live_stability_corpus.py` (27 cases: 13 dev, 14 holdout written
+together before any iteration; 6 categories). Raw outputs in `live/STABILITY_2026-11-20_*.txt`.
+The screenshots themselves were not available in this session: the failures
+below were reproduced from the code paths and the corpus, not from them.
+
+| # | Failure | Layer / root cause | Fix | Proof | Status |
+|---|---|---|---|---|---|
+| F16 | Duplicate / English / "I have no access beyond the chat" / "keep the conversation useful" replies | Turn ownership: a web follow-up went BOTH to Cadence's `ask` ("maybe") and, as `user_text`, to the lab agent (persona MULCA: "formal moderator", "Reply in English by default", no project state), whose `respond_when_addressed` could answer it too. Baseline `ask` already handled "Giochi spesso a calcio?" well (3/3 casual in the baseline run), so the redirect/no-access lines most likely came from this second responder | R10: the `ask` command with maybe claims its text; the bridge vetoes the lab's solicited strategies on that text for 120 s (`proactive.claim`) | `test_r10_*` (2); baseline vs after below | IMPLEMENTED/TESTED OFFLINE (the double reply itself not reproduced live: needs the Realtime judge) |
+| F17 | A group that chose English got English answers to Italian questions | `language_rule` said "whatever language the chat is in; replaces any other instruction" for every call, chat replies included | The rule keeps cards in the chosen language, but a direct chat reply follows the member's own message | baseline 1/2 → after 2/2 + 4/4 (language) | REAL-MODEL TESTED |
+| F18 | Project question answered with "I cannot access the project" | Prompt allowed it; nothing checked it | ASK: "You DO see the project"; server refuses an answer matching `NO_ACCESS` when the plan is not empty (one retry, then the usual failure) | `test_t13_*`; knowledge 6/7 live (the miss is F21) | REAL-MODEL TESTED |
+| F19 | Casual question could be met with a lecture / capability list | "If the answer is not there, say so and suggest the next step" applied to any question | Scoped to project questions; casual clause (short, friendly, no redirect, no "as an AI", no claimed life) | casual 3/3 baseline, 9/9 after (no regression; guard for the wording) | REAL-MODEL TESTED |
+| F20 | No progress check-in near a deadline; the old timed check-in card bypassed R2-R5/R8/R9 and the R4 marker | Missing capability + budget not shared | CS6 (`progress.py`, D-CS6 in DECISIONS.md): one question at most, shared budget both ways; replies stored via `progress` | 35 offline tests T1-T16; live: question 7/7 (incl. 3/3 silent when the status was in the chat), progress replies 12/12 | IMPLEMENTED/TESTED OFFLINE + REAL-MODEL TESTED (wording and reading of replies only) |
+| F21 | "Cosa scade domani?" answered with the real date (21 Nov) although the prompt said today is 24 Nov | Corpus artifact: the model follows its own clock over the prompt's simulated date | None (in production both are the same day) | holdout 1/2 | OBSERVED, NOT FIXED |
+
+Checker defect fixed after run 1 (not a model failure): Italian task titles
+quoted in an English answer were counted as Italian; quoted titles are now
+left out of the language count. Baseline run uses the same checker.
+
+| Run | dev | holdout | Notes |
+|---|---|---|---|
+| Baseline (`16ddf50`, no CS6) | 5/10 | 8/12 | progress 0/8 (no `progress` field); language 1/2 in dev (F17); acks added "non registrato nel piano" each time; 2 "not Italian" are checker misses on 4-word replies |
+| After, run 1 | 13/13 | 13/14 | 1 checker defect |
+| After, run 2 (holdout ×2) | — | 27/28 | 1 = F21 |
+
+Latency (ask and question, model `gpt-6.1-sol`): median 3.0-3.2 s, max
+8.5-12.5 s. Tokens: NOT MEASURED per call. Observed: the three CS6 questions
+open the same way ("X, come sta andando…"); with one question per 4 h this
+is mild, but a variety rule is IDEA, not done.
+
+Not verified: the whole flow in a browser with the real model; the Realtime
+judge with R10 under load; a group whose session is closed (no timer runs,
+no question: by design of the existing timer, NON VERIFICATO on Render).
+
 ## How to rerun
 
 ```
 python scripts/live_conversation_corpus.py <path to .env> [dev|regression|holdout|all] [name part] [repeats]
 python scripts/live_rasd_e2e.py ws://localhost:<port>/ --confirm [--ask]
 python scripts/live_ask_corpus.py <path to .env> [repeats]
+python scripts/live_stability_corpus.py <path to .env> [dev|holdout|all] [name part] [repeats]
 ```
 
 Stopping rule used: at most 3 prompt iterations; stop when regression and

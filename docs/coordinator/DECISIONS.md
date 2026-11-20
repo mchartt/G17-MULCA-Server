@@ -358,3 +358,59 @@ Evidence and runs: `CONVERSATION_EVAL.md`.
 - **Open question:** hand-added tasks accept a past date (the planning list
   refuses it). Left as is: a member may log work that is already late.
 - **Status:** IMPLEMENTED/TESTED OFFLINE (9 tests, `test_coordinator_task_details.py`).
+
+## 2026-11-20 · D-CS6 progress check-ins: one question at most, under one shared budget
+
+- **Decision:** Cadence may ask ONE short question about a task's progress
+  when its deadline is close (`progress.py`), as a plain chat message, never a
+  card. The timer (`checkin_timer.py`, every 10 min while the session is open)
+  starts an *assessment*; most assessments end in silence.
+- **Deadline convention:** `due_date` has no time, so it means the end of
+  that day (23:59:59) in the project time zone (`MUCA_COORDINATOR_TIMEZONE`,
+  default `Europe/Rome`, `zoneinfo` handles daylight saving). The assessment
+  window opens 36 h before (noon the day before: "la consegna è domani" in
+  daytime, about 24 h ahead) and closes 24 h after (one gentle question about
+  a task just overdue, never repeated).
+- **No question when:** done; no owner (CS5's gap); no date; already asked or
+  answered for this due date; status/progress changed by a member in the last
+  48 h (unless blocked); "Not now" on the task (strategy `cs6_progress_checkin`);
+  the task discussed in the chat in the last 12 h; a card about it is open;
+  the model sees in the chat that the status was already given.
+- **Budget, shared with the cards:** quiet hours 22:00-08:00 local; one
+  time-driven question per group every 4 h; none within 30 min of any
+  proactive card; a question moves the cards' R4 marker too, so a card does
+  not follow it within 5 min; no two questions to one member within 24 h; not
+  while a card draft runs, the plan opener listens or a member's request runs;
+  never right after Cadence's own message; never in a DM. The interval
+  check-in card (`MUCA_COORDINATOR_CHECKIN_HOURS`) now uses the same gate and
+  marker, and never runs in the same tick as a question.
+- **Idempotence:** one row per (task, due date) in `coord_progress_checkin`,
+  claimed with INSERT OR IGNORE before the model call: two timers, two
+  workers on one file or a restart never send it twice; a moved deadline is a
+  new key, so the old question cannot fire.
+- **The reply:** the web opens the follow-up window whenever Cadence speaks,
+  so the owner's reply reaches `ask` as "maybe". The answer's `progress`
+  field (on_track / behind / blocked / done / declined) is stored as
+  coordinator memory only: no status, owner or date changes without a card
+  and a click.
+- **Switch:** on with the coordinator; `MUCA_COORDINATOR_PROGRESS_CHECKINS=off`
+  disables it. Coordinator off: nothing built, unchanged.
+- **Known limit:** the timer runs only while the group's server session is
+  open (the web adapter opens it when a member uses the space). A group where
+  nobody opens the app gets no question: NON VERIFICATO how long Render keeps
+  sessions open.
+- **Status:** IMPLEMENTED/TESTED OFFLINE (`test_coordinator_cs6_progress.py`).
+
+## 2026-11-20 · R10 one responder per message
+
+- **Decision:** a message the client already sent to Cadence's `ask` (web
+  follow-up as "maybe") is not answered again by the lab's solicited
+  strategies (`respond_when_addressed`, `remember`, `provide_summary`): the
+  bridge vetoes them for 120 s on the same text (`proactive.claim`).
+- **Why:** such a follow-up was also sent on as `user_text`; the lab agent
+  (persona "MULCA", "Reply in English by default", no project state) could
+  answer it too: two replies, the second in English, saying it has no access
+  to the project. Discord/Slack are unchanged (no follow-up routing there).
+- **Residual race:** the claim is recorded when the ask command arrives; the
+  lab judge needs a model call before the bridge sees its strategy, so in
+  practice the claim is first. Not proven under load.

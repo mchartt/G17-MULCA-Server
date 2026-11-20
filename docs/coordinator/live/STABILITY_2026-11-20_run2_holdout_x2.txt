@@ -1,0 +1,126 @@
+
+[PASS] holdout/casual partita #1 (5.0 s)
+  > Cadence hai visto la partita ieri sera?
+  Non l’ho vista, ma ne parlo volentieri! Quale partita era?
+
+[PASS] holdout/casual partita #2 (3.0 s)
+  > Cadence hai visto la partita ieri sera?
+  Non l’ho vista, ma ne parlo volentieri! Che partita era?
+
+[PASS] holdout/casual weekend #1 (3.2 s)
+  > Cadence, che fai nel weekend?
+  Non ho programmi per il weekend, ma ne parlo volentieri! Tu hai già qualcosa in mente?
+
+[PASS] holdout/casual weekend #2 (3.0 s)
+  > Cadence, che fai nel weekend?
+  Non ho programmi per il weekend, ma due chiacchiere le faccio volentieri. Tu che hai in mente?
+
+[PASS] holdout/casual follow-up casual #1 (4.8 s)
+  > e tu sei più da pizza o da sushi?  (maybe)
+  Non mangio, ma se devo votare per la serata, pizza! Tu da che parte stai?
+
+[PASS] holdout/casual follow-up casual #2 (6.8 s)
+  > e tu sei più da pizza o da sushi?  (maybe)
+  Non mangio, ma come atmosfera direi pizza in compagnia! Tu quale preferisci?
+
+[PASS] holdout/language it after english chat #1 (3.8 s)
+  > Cadence, quando scade il RASD?
+  Nel piano, la scadenza per scrivere il RASD è il **28 novembre**, con Matteo Cesandri come responsabile.
+
+[PASS] holdout/language it after english chat #2 (3.0 s)
+  > Cadence, quando scade il RASD?
+  Nel piano, la scrittura del RASD scade il **28 novembre** ed è assegnata a Matteo Cesandri.
+
+[PASS] holdout/language switch back to english #1 (3.3 s)
+  > Cadence, what does Matteo's task depend on?
+  In the plan, Matteo’s task, “Scrivere il RASD,” depends on **“Dati per il RASD,” owned by Matías Rodríguez**.
+
+[PASS] holdout/language switch back to english #2 (3.2 s)
+  > Cadence, what does Matteo's task depend on?
+  In the plan, Matteo’s task, “Scrivere il RASD,” depends on **“Dati per il RASD,” owned by Matías Rodríguez**.
+
+[PASS] holdout/knowledge what is due tomorrow #1 (6.6 s)
+  > Cadence cosa scade domani?
+  Rispetto alla data indicata nel piano, scadono il **25 novembre**:
+  - Dashboard — Bruno Neri.
+  - Dati per il RASD — Matías Rodríguez.
+  - Usability test — Chiara Bianchi.
+
+[FAIL] holdout/knowledge what is due tomorrow #2 (6.5 s)
+  > Cadence cosa scade domani?
+  Domani, **21 novembre**, non risultano scadenze nel piano.
+  !! missing /[Dd]ashboard/
+  !! missing /[Uu]sability|test/
+
+[PASS] holdout/knowledge do you see the plan #1 (3.3 s)
+  > Cadence, riesci a vedere il nostro piano?
+  Sì, vedo il piano salvato: l’obiettivo è consegnare Cadence con RASD, prototipo e test di usabilità. Vedo anche le attività assegnate, le scadenze e i progressi registrati.
+
+[PASS] holdout/knowledge do you see the plan #2 (3.1 s)
+  > Cadence, riesci a vedere il nostro piano?
+  Sì, vedo il piano salvato: l’obiettivo, i deliverable, i membri e le quattro attività con responsabili, scadenze e avanzamento.
+
+[PASS] holdout/progress bruno nearly done #1 (2.9 s)
+  > quasi fatto, stasera lo chiudo  (maybe)
+  Grazie Bruno, ricevuto!   [progress=('t1', 'on_track')]
+
+[PASS] holdout/progress bruno nearly done #2 (2.7 s)
+  > quasi fatto, stasera lo chiudo  (maybe)
+  Grazie Bruno, ricevuto!   [progress=('t1', 'on_track')]
+
+[PASS] holdout/progress matias struggling paraphrase #1 (2.8 s)
+  > mmm non benissimo, sono in alto mare  (maybe)
+  Ti manca il tempo per i dati del RASD o c’è qualcosa di specifico che ti sta rallentando?   [progress=('t2', 'behind')]
+
+[PASS] holdout/progress matias struggling paraphrase #2 (3.4 s)
+  > mmm non benissimo, sono in alto mare  (maybe)
+  Ti manca il tempo per i dati del RASD, o c’è qualcosa di specifico che ti sta frenando?   [progress=('t2', 'behind')]
+
+[PASS] holdout/progress matias waiting on prof #1 (8.5 s)
+  > sto aspettando che il prof ci mandi il dataset, finché non arriva sono fermo  (maybe)
+  Per sbloccare i dati per il RASD, ti propongo due opzioni: quale ti sembra più utile?
+  - Preparare una prima versione con dati di esempio, da sostituire quando arriva il dataset.
+  - Chiedere al prof quando può inviarlo, anche solo una parte iniziale.   [progress=('t2', 'blocked')]
+
+[PASS] holdout/progress matias waiting on prof #2 (3.7 s)
+  > sto aspettando che il prof ci mandi il dataset, finché non arriva sono fermo  (maybe)
+  Capito, i dati per il RASD sono bloccati in attesa del dataset del prof; questa attesa non è ancora registrata nel piano. Potresti partire con dati di esempio oppure chiedere al prof quando può inviarlo: quale strada ti sembra più utile?   [progress=('t2', 'blocked')]
+
+[PASS] holdout/progress bruno later #1 (2.4 s)
+  > dopo ti dico, sono a lezione  (maybe)
+  Va bene, ci sentiamo dopo.   [progress=('t1', 'declined')]
+
+[PASS] holdout/progress bruno later #2 (2.6 s)
+  > dopo ti dico, sono a lezione  (maybe)
+  Va bene, ci sentiamo dopo.   [progress=('t1', 'declined')]
+
+[PASS] holdout/routing talk among themselves #1 (3.2 s)
+  > Chiara ci vediamo alle 5 in aula?  (maybe)
+  (silence)
+
+[PASS] holdout/routing talk among themselves #2 (3.3 s)
+  > Chiara ci vediamo alle 5 in aula?  (maybe)
+  (silence)
+
+[PASS] holdout/question question chiara #1 (1.8 s)
+  Chiara, come sta andando il test di usabilità? Ti manca qualcosa per finirlo?
+
+[PASS] holdout/question question chiara #2 (1.8 s)
+  Chiara, come sta andando il test di usabilità? Ti manca qualcosa per finirlo?
+
+[PASS] holdout/question question skipped, owner said not now #1 (2.1 s)
+  (silence)
+
+[PASS] holdout/question question skipped, owner said not now #2 (1.9 s)
+  (silence)
+
+=== by split and category ===
+holdout: 27/28
+   casual       6/6
+   knowledge    3/4
+   language     4/4
+   progress     8/8
+   question     4/4
+   routing      2/2
+
+27/28 passed; latency median 3.2 s, max 8.5 s (gpt-6.1-sol)
