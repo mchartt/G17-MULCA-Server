@@ -26,7 +26,7 @@ import sys
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from dotenv import dotenv_values
@@ -38,22 +38,25 @@ from muca_server.cognition.coordination.progress import candidates
 from muca_server.cognition.coordination.writer import ProposalWriter, language_rule
 
 ROME = ZoneInfo("Europe/Rome")
-NOW = datetime(2026, 11, 24, 15, 0, tzinfo=ROME).timestamp()
-TODAY = date(2026, 11, 24)
+# Real dates (run 1-2 used a simulated 24/11 and the model answered from its own
+# clock: F21). Today at 15:00 in Rome; the tasks are due tomorrow / in 4 days.
+TODAY = datetime.now(ROME).date()
+NOW = datetime.combine(TODAY, datetime.min.time(), tzinfo=ROME).timestamp() + 15 * 3600
+TOMORROW, LATER = TODAY + timedelta(days=1), TODAY + timedelta(days=4)
 MATTEO, MATIAS, BRUNO, CHIARA = 1, 2, 3, 4
 MEMBERS = {MATTEO: "Matteo Cesandri", MATIAS: "Matías Rodríguez", BRUNO: "Bruno Neri", CHIARA: "Chiara Bianchi"}
 STATE = ProjectState(
     charter=Charter(goal="Deliver Cadence, a proactive coordinator for student groups, with RASD and a prototype.",
                     deliverables=["RASD", "Prototype", "Usability test"], confirmed_by=MATTEO, confirmed_at=1.0),
     tasks=[
-        Task(task_id="t1", title="Dashboard", owner_id=BRUNO, due_date=date(2026, 11, 25), progress=70),
-        Task(task_id="t2", title="Dati per il RASD", owner_id=MATIAS, due_date=date(2026, 11, 25)),
-        Task(task_id="t3", title="Scrivere il RASD", owner_id=MATTEO, due_date=date(2026, 11, 28), depends_on=["t2"]),
-        Task(task_id="t4", title="Usability test", owner_id=CHIARA, due_date=date(2026, 11, 25)),
+        Task(task_id="t1", title="Dashboard", owner_id=BRUNO, due_date=TOMORROW, progress=70),
+        Task(task_id="t2", title="Dati per il RASD", owner_id=MATIAS, due_date=TOMORROW),
+        Task(task_id="t3", title="Scrivere il RASD", owner_id=MATTEO, due_date=LATER, depends_on=["t2"]),
+        Task(task_id="t4", title="Usability test", owner_id=CHIARA, due_date=TOMORROW),
     ],
 )
-ASKED_BRUNO = ["task_id t1 (Dashboard, due 2026-11-25): asked Bruno Neri 1 h ago; answer: no answer yet"]
-ASKED_MATIAS = ["task_id t2 (Dati per il RASD, due 2026-11-25): asked Matías Rodríguez 1 h ago; answer: no answer yet"]
+ASKED_BRUNO = [f"task_id t1 (Dashboard, due {TOMORROW}): asked Bruno Neri 1 h ago; answer: no answer yet"]
+ASKED_MATIAS = [f"task_id t2 (Dati per il RASD, due {TOMORROW}): asked Matías Rodríguez 1 h ago; answer: no answer yet"]
 
 REDIRECT = re.compile(r"progett|productiv|produttiv|concentr|torniamo|ricordiamoci|back to (the|your) (project|work)|stay on topic|focus", re.I)
 DISCLAIMER = re.compile(r"\b(an ai|un'?ia|intelligenza artificiale|language model|modello linguistico|non ho accesso|no access|I can help you with)\b", re.I)
@@ -107,11 +110,11 @@ CASES = [
         must=[r"Bruno"]),
     ask("en question in en", "dev", "language", "Cadence, who is doing the usability test?", lang="en", must=[r"Chiara"]),
     ask("it after english chat", "holdout", "language", "Cadence, quando scade il RASD?",
-        chat=["Bruno Neri: the dashboard build passes now", "Chiara Bianchi: nice, I'll test it tomorrow"], must=[r"28"]),
+        chat=["Bruno Neri: the dashboard build passes now", "Chiara Bianchi: nice, I'll test it tomorrow"], must=[rf"{LATER.day}"]),
     ask("switch back to english", "holdout", "language", "Cadence, what does Matteo's task depend on?", lang="en",
         chat=["Matías Rodríguez: Cadence ciao!", "Cadence: Ciao Matías!"], must=[r"[Dd]ati|data|Matías"]),
     # --- T13 project data available
-    ask("who and when", "dev", "knowledge", "Cadence, chi sta facendo il dashboard e per quando?", must=[r"Bruno", r"25|domani"]),
+    ask("who and when", "dev", "knowledge", "Cadence, chi sta facendo il dashboard e per quando?", must=[r"Bruno", rf"{TOMORROW.day}|domani"]),
     ask("what is due tomorrow", "holdout", "knowledge", "Cadence cosa scade domani?", must=[r"[Dd]ashboard", r"[Uu]sability|test"]),
     ask("do you see the plan", "holdout", "knowledge", "Cadence, riesci a vedere il nostro piano?", must=[r"[Dd]ashboard|RASD|attivit|task"],
         must_not=[r"non (riesco|posso)"]),

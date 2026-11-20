@@ -1,0 +1,125 @@
+
+[PASS] dev/casual calcio #1 (5.0 s)
+  > Giochi spesso a calcio, Cadence?
+  Non gioco a calcio, ma ne parlo volentieri! Tu giochi spesso?
+
+[PASS] dev/casual musica #1 (3.4 s)
+  > Cadence, che musica ti piace?
+  Non ho gusti personali, ma di musica parlo volentieri: tu cosa ascolti di solito?
+
+[PASS] dev/casual come stai #1 (3.7 s)
+  > Ciao Cadence, come stai oggi?
+  Ciao! Sono qui, pronto a fare due chiacchiere. Tu come stai oggi?
+
+[PASS] holdout/casual partita #1 (3.7 s)
+  > Cadence hai visto la partita ieri sera?
+  Non l’ho vista: di quale partita parli?
+
+[PASS] holdout/casual weekend #1 (3.4 s)
+  > Cadence, che fai nel weekend?
+  Non ho programmi per il weekend, ma ne parlo volentieri! Tu hai già qualcosa in mente?
+
+[PASS] holdout/casual follow-up casual #1 (3.7 s)
+  > e tu sei più da pizza o da sushi?  (maybe)
+  Non mangio, ma tra pizza e sushi ne parlo volentieri: tu quale scegli?
+
+[PASS] dev/language it although group chose en #1 (3.1 s)
+  > Cadence, chi si occupa del dashboard?  [group chose en]
+  Del dashboard si occupa **Bruno Neri**, come indicato nel piano.
+
+[PASS] dev/language en question in en #1 (2.8 s)
+  > Cadence, who is doing the usability test?
+  **Chiara Bianchi** is assigned to the usability test in the plan.
+
+[PASS] holdout/language it after english chat #1 (3.0 s)
+  > Cadence, quando scade il RASD?
+  Nel piano, la scadenza per scrivere il RASD è il **28 novembre**.
+
+[PASS] holdout/language switch back to english #1 (4.3 s)
+  > Cadence, what does Matteo's task depend on?
+  Matteo’s task, “Scrivere il RASD,” depends on **“Dati per il RASD,” assigned to Matías Rodríguez**. That dependency is recorded in the plan, but its origin isn’t recorded.
+
+[PASS] dev/knowledge who and when #1 (3.1 s)
+  > Cadence, chi sta facendo il dashboard e per quando?
+  Nel piano, la dashboard è assegnata a **Bruno Neri**, con scadenza il **25 novembre**.
+
+[FAIL] holdout/knowledge what is due tomorrow #1 (5.5 s)
+  > Cadence cosa scade domani?
+  Nel piano non ci sono attività con scadenza domani, **21 novembre**.
+  !! missing /[Dd]ashboard/
+  !! missing /[Uu]sability|test/
+
+[PASS] holdout/knowledge do you see the plan #1 (3.8 s)
+  > Cadence, riesci a vedere il nostro piano?
+  Sì, vedo il piano salvato: l’obiettivo, i membri e le quattro attività con responsabili, scadenze e avanzamento.
+
+[PASS] dev/progress bruno on track #1 (2.9 s)
+  > Tutto bene, mi manca solo un ultimo controllo.  (maybe)
+  Grazie per l’aggiornamento, Bruno!   [progress=('t1', 'on_track')]
+
+[PASS] holdout/progress bruno nearly done #1 (3.0 s)
+  > quasi fatto, stasera lo chiudo  (maybe)
+  Grazie Bruno, manca poco!   [progress=('t1', 'on_track')]
+
+[PASS] dev/progress matias behind #1 (4.3 s)
+  > Sono indietro, non penso di riuscire a finire in tempo.  (maybe)
+  Grazie per avermelo detto. È una questione di tempo o c’è qualcosa di specifico che ti sta rallentando?   [progress=('t2', 'behind')]
+
+[PASS] holdout/progress matias struggling paraphrase #1 (3.0 s)
+  > mmm non benissimo, sono in alto mare  (maybe)
+  Ti manca il tempo o c’è qualcosa di specifico che ti sta mettendo in difficoltà con i dati?   [progress=('t2', 'behind')]
+
+[PASS] dev/progress matias missing data #1 (7.7 s)
+  > Mi manca una parte dei dati e serve ancora un giorno.  (maybe)
+  Potresti passare a Matteo i dati già pronti, così può iniziare con una versione parziale del RASD, oppure chiedere al gruppo una mano sulla parte mancante. Quale opzione ti aiuterebbe di più?   [progress=('t2', 'blocked')]
+
+[PASS] holdout/progress matias waiting on prof #1 (10.9 s)
+  > sto aspettando che il prof ci mandi il dataset, finché non arriva sono fermo  (maybe)
+  L’attesa del dataset del prof non è ancora registrata nel piano. Ti suggerisco due possibilità:
+  - Iniziare con dati di esempio, da sostituire quando arriva il dataset.
+  - Chiedere al prof quando potrà inviarlo.
+  Quale ti sembra praticabile?   [progress=('t2', 'blocked')]
+
+[PASS] dev/progress bruno declines #1 (3.5 s)
+  > ne parliamo domani, ora non ho tempo  (maybe)
+  Va bene, ne parliamo domani.   [progress=('t1', 'declined')]
+
+[PASS] holdout/progress bruno later #1 (2.9 s)
+  > dopo ti dico, sono a lezione  (maybe)
+  Va bene, ci sentiamo dopo.   [progress=('t1', 'declined')]
+
+[PASS] holdout/routing talk among themselves #1 (3.2 s)
+  > Chiara ci vediamo alle 5 in aula?  (maybe)
+  (silence)
+
+[PASS] dev/question question bruno #1 (1.9 s)
+  Bruno, come sta andando la dashboard? Ti manca qualcosa per finirla?
+
+[PASS] dev/question question matias downstream #1 (2.1 s)
+  Matías, come sta andando con i dati per il RASD? Ti manca qualcosa per completarli?
+
+[PASS] holdout/question question chiara #1 (1.9 s)
+  Chiara, come sta andando il test di usabilità? Ti manca qualcosa per finirlo?
+
+[PASS] dev/question question skipped, status in chat #1 (1.9 s)
+  (silence)
+
+[PASS] holdout/question question skipped, owner said not now #1 (2.0 s)
+  (silence)
+
+=== by split and category ===
+dev: 13/13
+   casual       3/3
+   knowledge    1/1
+   language     2/2
+   progress     4/4
+   question     3/3
+holdout: 13/14
+   casual       3/3
+   knowledge    1/2
+   language     2/2
+   progress     4/4
+   question     2/2
+   routing      1/1
+
+26/27 passed; latency median 3.2 s, max 10.9 s (gpt-6.1-sol)

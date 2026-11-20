@@ -141,6 +141,21 @@ below were reproduced from the code paths and the corpus, not from them.
 | F20 | No progress check-in near a deadline; the old timed check-in card bypassed R2-R5/R8/R9 and the R4 marker | Missing capability + budget not shared | CS6 (`progress.py`, D-CS6 in DECISIONS.md): one question at most, shared budget both ways; replies stored via `progress` | 35 offline tests T1-T16; live: question 7/7 (incl. 3/3 silent when the status was in the chat), progress replies 12/12 | IMPLEMENTED/TESTED OFFLINE + REAL-MODEL TESTED (wording and reading of replies only) |
 | F21 | "Cosa scade domani?" answered with the real date (21 Nov) although the prompt said today is 24 Nov | Corpus artifact: the model follows its own clock over the prompt's simulated date | None (in production both are the same day) | holdout 1/2 | OBSERVED, NOT FIXED |
 
+| F22 | A reply hours after a CS6 question was never read (web follow-up window = 3 min) | Routing: only the web window reached `ask` | Server reads the asked member's messages for 3 days (`_late_progress_reply`), any channel | 8 offline tests; live flow 5-9 h later: 20/21 then 7/7 | REAL-MODEL TESTED |
+| F23 | A late reply that asked for a change crashed (no card) | Code: the synthetic message had no `channel` | `channel="group"` | found live (`CS6_FLOW_..._run1`); `test_a_late_reply_that_asks_for_a_change_*` | IMPLEMENTED/TESTED OFFLINE + REAL-MODEL TESTED |
+| F24 | "qualcuno ha gli appunti di ieri?" from the asked member got an answer | Routing: a group question looked like a reply | `TO_THE_GROUP` filter before the model (as F8) | found live 1/2; test; then 1/1 | REAL-MODEL TESTED |
+| F25 | Opener card and CS3 card never came after a pending card (Playwright opener/plan red) | Routing (PR #33): follow-ups no longer sent as `user_text` | Sent again; R10 on the server stops the double reply; dedupe in either order | Playwright 34/34 (×2) on a free port | IMPLEMENTED/TESTED OFFLINE |
+| F26 | Playwright reds earlier today (15/16, 6 failed) | Test infra: `reuseExistingServer` reused ANOTHER session's fake stack on :8090 | `FAKE_WEB_PORT` in `playwright.config.ts` | 34/34 on :8190 | FIXED |
+| F21 (closed) | Model answered with the real date | Corpus used a simulated date | Corpus dates are now relative to today | holdout ×2 28/28 | FIXED (corpus) |
+
+Final numbers (code `c4d9224`, Project `50dcb0d`): pytest server 801,
+Project 365, Vitest 164, Playwright 34/34 (17 specs ×2, incl. thinking line +
+axe 0 WCAG A/AA violations in the chat), live stability corpus holdout ×2
+28/28 and dev 13/13, live CS6 flow (question → reply 5-9 h later) 7/7 after
+the fixes (13/14 before F24). Tokens, live CS6 flow: about 1,450 prompt and
+75 completion tokens per call, 2 calls per scenario (question + reading the
+reply). Not yet: the Realtime judge under load (R10 live), the deployed app.
+
 Checker defect fixed after run 1 (not a model failure): Italian task titles
 quoted in an English answer were counted as Italian; quoted titles are now
 left out of the language count. Baseline run uses the same checker.

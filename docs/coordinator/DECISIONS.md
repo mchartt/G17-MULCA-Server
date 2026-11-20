@@ -388,25 +388,31 @@ Evidence and runs: `CONVERSATION_EVAL.md`.
   claimed with INSERT OR IGNORE before the model call: two timers, two
   workers on one file or a restart never send it twice; a moved deadline is a
   new key, so the old question cannot fire.
-- **The reply:** the web opens the follow-up window whenever Cadence speaks,
-  so the owner's reply reaches `ask` as "maybe". The answer's `progress`
+- **The reply:** see "Replies however late" below. The answer's `progress`
   field (on_track / behind / blocked / done / declined) is stored as
   coordinator memory only: no status, owner or date changes without a card
   and a click.
 - **Switch:** on with the coordinator; `MUCA_COORDINATOR_PROGRESS_CHECKINS=off`
   disables it. Coordinator off: nothing built, unchanged.
-- **Known limit (reply window):** the web offers a message to Cadence as
-  "maybe" only within 3 minutes of Cadence's last message (`FOLLOW_UP_SECONDS`).
-  An owner who answers a question later, without naming Cadence, is not read
-  by `ask`: no acknowledgement and no `progress` recorded (the CS7 judge still
-  sees the message). NOT VERIFIED / not handled; the question is then not
-  repeated for that due date anyway.
+- **Replies however late:** a member's chat message, up to 3 days after an
+  unanswered question to them, is read by `ask` as "maybe" on the server
+  (`router._late_progress_reply`, any channel), at most 3 of their messages
+  per question; a message asking the group ("qualcuno…", "ragazzi…",
+  "anyone…") is never taken as a reply. Answered once: the same line coming
+  also as a web follow-up is read once, in either order. The answer is posted
+  in the chat; a change it asks for is a card.
+- **Wake-up:** the web hub, every 30 min, sends the additive command
+  `progress` for groups whose last saved plan has an open, owned task due from
+  yesterday to the day after tomorrow, so the assessment runs even if nobody
+  opened the space since the adapter started (`MULCA_WEB_WAKE=off` disables).
+  It opens a session (and its Realtime connection) only for those groups.
+- **Openings vary:** a question may not start like one of Cadence's lines of
+  the last 3 days (three words, names left out); one retry, then silence.
 - **R8 in the chat:** while the plan opener listens, a "maybe" message gets
   silence without a model call (its answers belong to the opener).
-- **Known limit:** the timer runs only while the group's server session is
-  open (the web adapter opens it when a member uses the space). A group where
-  nobody opens the app gets no question: NON VERIFICATO how long Render keeps
-  sessions open.
+- **Known limit:** Discord/Slack have no wake-up (the web hub does it); on
+  Render the adapter itself must be running (free instances sleep):
+  NON VERIFICATO on the deployed app.
 - **Status:** IMPLEMENTED/TESTED OFFLINE (`test_coordinator_cs6_progress.py`).
 
 ## 2026-11-20 · R10 one responder per message
@@ -422,3 +428,14 @@ Evidence and runs: `CONVERSATION_EVAL.md`.
 - **Residual race:** the claim is recorded when the ask command arrives; the
   lab judge needs a model call before the bridge sees its strategy, so in
   practice the claim is first. Not proven under load.
+
+## 2026-11-20 · Web follow-ups reach Cadence AND the group's chat again
+
+- **Decision:** a web follow-up (a message within 3 min of Cadence's answer
+  or of a new card) goes to `ask` as "maybe" and is ALSO sent on as
+  `user_text`, as before PR #33. PR #33 had stopped the second path to avoid
+  the lab agent's double reply; the side effect was that the plan opener never
+  heard its answers and CS3/CS7 never saw those lines (a pending card opens
+  the window), which broke `opener.spec` and the CS3 step of `plan.spec`.
+  The double reply is now stopped on the server (R10). Approval needed:
+  this reverses a choice made in PR #33.
