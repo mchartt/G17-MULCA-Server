@@ -73,3 +73,28 @@ async def test_a_document_the_project_does_not_have_is_never_cited(tmp_path):
     web, web_q = await open_web_space(group)
     notice = await ask(web, web_q, "What does the syllabus say?")
     assert not notice.ok
+
+
+async def test_a_follow_up_that_is_not_for_cadence_gets_silence(tmp_path):
+    """Matteo, 20/11: after Cadence answered, the next messages may be for it; when they are not, it stays quiet."""
+    group = Group(tmp_path, answer(""), answer("Yes, Friday."))
+    web, web_q = await open_web_space(group)
+    await web.route_coordinator(command("ask", 100_000_002, question="ok Bruno I'll send you the file", maybe=True))
+    await web.wait_for_background()
+    (notice,) = [m for m in await drain(web_q) if isinstance(m, CoordinatorNoticeMessage)]
+    assert notice.ok and notice.text == ""
+    assert "does not name you" in prompt(group)
+    # Nothing was said, so nothing joins the chat's memory.
+    await web.route_coordinator(command("catchup", 100_000_001, peek=True))
+    catchup = [m for m in await drain(web_q) if getattr(m, "catchup", None)][-1].catchup
+    assert catchup["here"]["total"] == 0
+
+    notice = await ask(web, web_q, "and is that still friday?")
+    assert notice.text == "Yes, Friday."
+
+
+async def test_an_empty_answer_to_a_direct_question_is_not_accepted(tmp_path):
+    group = Group(tmp_path, answer(""), answer(""))
+    web, web_q = await open_web_space(group)
+    notice = await ask(web, web_q, "Cadence, who owns the slides?")
+    assert not notice.ok  # named directly: silence is not an answer

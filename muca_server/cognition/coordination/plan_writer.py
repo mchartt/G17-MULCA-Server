@@ -308,10 +308,13 @@ class PlanWriter:
         documents: list[tuple[str, str]] = (),
         chat: list[str] = (),
         today: date | None = None,
+        maybe: bool = False,
     ) -> AskAnswer | None:
         """
         Answer a member as Cadence, from everything the project holds and the
         recent chat. Every id and document name the model cites is checked.
+        `maybe`: a follow-up that does not name Cadence; an empty answer
+        (silence) is then accepted.
         """
         tasks = {t.task_id: t for t in state.tasks}
         milestones = {m.milestone_id: m for m in state.milestones}
@@ -334,6 +337,7 @@ class PlanWriter:
             + "\n</project>\n<chat>\n"
             + ("\n".join(chat[-CHAT_LINES:]) or "(no recent messages)")
             + f"\n</chat>\n<question>\n{question}\n</question>"
+            + (MAYBE_NOTE if maybe else "")
         )
 
         def pick(ids: Any, known: dict[str, Any], what: str) -> list[Any]:
@@ -353,7 +357,7 @@ class PlanWriter:
                 pick(data["decision_ids"], decisions, "decision"),
                 used,
             )
-            if not found.answer:
+            if not found.answer and not maybe:
                 raise ValueError("empty answer")
             return found
 
@@ -423,6 +427,14 @@ class PlanWriter:
         return None
 
 
+# A message right after Cadence answered that does not name it (the web's
+# follow-up window): it may be for Cadence, or the members talking together.
+MAYBE_NOTE = """
+<note>This message came right after your last answer and does not name you.
+If it continues the talk with you (a follow-up, a thanks with a question, a
+correction), answer it. If the members are talking among themselves, or it
+needs no answer from you (ok, thanks, a joke), answer with an empty string and
+empty lists: you stay silent.</note>"""
 CHAT_LINES = 30
 DOCUMENT_BUDGET = 12_000
 CHUNK = 900

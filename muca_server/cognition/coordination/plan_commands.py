@@ -305,6 +305,7 @@ class PlanCommands:
         state = await store.load_state()
         members = self._participants()
         chat = await self._recent_chat() if self._recent_chat is not None else []
+        maybe = message.args.get("maybe") is True  # a follow-up that does not name Cadence
         answer = await self._writer.answer_question(
             question,
             members=members,
@@ -312,9 +313,16 @@ class PlanCommands:
             documents=await store.document_texts(),
             chat=chat,
             today=self._today(),
+            maybe=maybe,
         )
         if answer is None:
-            await self._unavailable(message.event, message.request_id)
+            if maybe:  # a guess that failed: silence, never "unavailable" for a message not sent to Cadence
+                await self._notice(True, "", message.request_id)
+            else:
+                await self._unavailable(message.event, message.request_id)
+            return
+        if not answer.answer:  # not meant for Cadence: it stays silent, nothing is remembered
+            await self._notice(True, "", message.request_id)
             return
         text = ask_text(answer, members)
         await self._notice(True, text, message.request_id)
