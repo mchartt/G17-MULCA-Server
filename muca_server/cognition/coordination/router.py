@@ -87,6 +87,8 @@ logger = logging.getLogger(__name__)
 UNAVAILABLE = "The coordinator is not available right now. Try again in a few minutes."
 GROUP_ONLY = "The coordinator works only in a group channel, not in a direct message."
 MEMBERS_ONLY = "Only members of this group can use the coordinator here."
+# The catch-up recap needs a few messages to have topics worth naming.
+RECAP_MIN_MESSAGES = 4
 KICKOFF_RUNNING = "A kickoff is already running for this group: its card will appear here."
 
 
@@ -128,6 +130,7 @@ class CoordinatorRouter:
         self._kickoff: asyncio.Task | None = None
         # The reflection being built (it may ask the model for the week's topics).
         self._reflecting: asyncio.Task | None = None
+        self._recapping: asyncio.Task | None = None
         # M3: proactive cards (CS5, CS2, CS3), plugged into the policy by wiring.py.
         self.proactive = (
             ProactiveBridge(
@@ -286,6 +289,8 @@ class CoordinatorRouter:
             await asyncio.gather(self._kickoff, return_exceptions=True)
         if self._reflecting is not None:
             await asyncio.gather(self._reflecting, return_exceptions=True)
+        if self._recapping is not None:
+            await asyncio.gather(self._recapping, return_exceptions=True)
         if self.proactive is not None:
             await self.proactive.wait()
         await self._plan.wait()
@@ -606,21 +611,47 @@ class CoordinatorRouter:
             )
             await self._notice(True, "You are caught up.", message.request_id)
             return
-        since = message.args.get("since")
-        group = self._links.group(self._home()) if self._links is not None else [self._home()]
-        result = await self._catchup.build(
-            store=self._store_now(),
-            conversation_id=self._conversation.conversation_id,
-            group=group,
-            member_id=message.member_id,
-            since=float(since) if isinstance(since, (int, float)) else None,
-            move_mark=message.args.get("peek") is not True,
-        )
-        await self._outbound.put(
-            CoordinatorNoticeMessage(
-                ok=True, text=summary_line(result), request_id=message.request_id, catchup=result
+        if message.args.get("recap") is True:
+            # The recap asks the model for the topics: in the background, like the reflection.
+            if self._recapping is not None and not self._recapping.done():
+                await self._notice(False, "Cadence is already writing your recap.", message.request_id)
+                return
+            self._recapping = asyncio.create_task(self._run_catchup(message, recap=True))
+            return
+        await self._run_catchup(message, recap=False)
+
+    async def _run_catchup(self, message: CoordinatorCommandMessage, *, recap: bool) -> None:
+        """
+        The catch-up since the member's last one, or since `args.since` (a day
+        the member chose). With `recap`, also "In brief": the topics of those
+        messages, summed up by the model from the messages only (the same
+        writer as the reflection's topics); without enough messages, none.
+        """
+        try:
+            since = message.args.get("since")
+            group = self._links.group(self._home()) if self._links is not None else [self._home()]
+            result = await self._catchup.build(
+                store=self._store_now(),
+                conversation_id=self._conversation.conversation_id,
+                group=group,
+                member_id=message.member_id,
+                since=float(since) if isinstance(since, (int, float)) else None,
+                move_mark=message.args.get("peek") is not True,
             )
-        )
+            if recap:
+                places = [result.get("here") or {"messages": []}, *result["elsewhere"]]
+                lines = [f"{m['speaker']}: {m['text']}" for place in places for m in place["messages"]]
+                topics = await PlanWriter(self._writer).draft_topics(lines) if len(lines) >= RECAP_MIN_MESSAGES else None
+                result["topics"] = topics or []
+            await self._outbound.put(
+                CoordinatorNoticeMessage(
+                    ok=True, text=summary_line(result), request_id=message.request_id, catchup=result
+                )
+            )
+        except Exception:
+            if not recap:
+                raise
+            await self._fail(message.event, message.request_id)
 
     async def _recent_chat(self) -> list[str]:
         """This channel's last lines, so Cadence answers within the conversation."""
