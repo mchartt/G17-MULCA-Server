@@ -31,6 +31,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from ..memory.records import EpisodicRecord
 from ..memory.sqlite import SqliteEpisodicStore
 from .store import CoordinationStore
 
@@ -115,6 +116,31 @@ class CatchUp:
     async def read(self, conversation_id: str, since: float, until: float) -> list:
         """One channel's chat between two times (read only): also used by reflection.py."""
         return await self._episodic_for(conversation_id).records_between(conversation_id, since, until)
+
+    async def remember(self, conversation_id: str, speaker: str, said: str, answer: str) -> None:
+        """A member's words to Cadence and its answer, kept in the chat's log (asked by command, not by user_text)."""
+        await self._episodic_for(conversation_id).log(
+            EpisodicRecord(
+                timestamp=self._clock(),
+                conversation_id=conversation_id,
+                intervention_path="strategy",
+                strategy_id="coordinator_ask",
+                speaker=speaker,
+                content=said,
+                assistant_output=answer,
+            )
+        )
+
+    async def recent_lines(self, conversation_id: str, *, window: float = 24 * 3600, limit: int = 30) -> list[str]:
+        """The last lines of one channel's chat as "Name: text", Cadence's answers included."""
+        now = self._clock()
+        lines: list[str] = []
+        for r in await self.read(conversation_id, now - window, now):
+            if r.content.strip():
+                lines.append(f"{r.speaker or 'member'}: {_clip(r.content)}")
+            if r.assistant_output and r.assistant_output.strip():
+                lines.append(f"Cadence: {_clip(r.assistant_output)}")
+        return lines[-limit:]
 
     async def _channel(self, conversation_id: str, since: float, now: float) -> dict[str, Any]:
         records = await self.read(conversation_id, since, now)

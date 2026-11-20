@@ -154,6 +154,8 @@ class CoordinatorRouter:
             send_state=self._send_state,
             unavailable=self._fail,
             today=today,
+            recent_chat=self._recent_chat if catchup is not None else None,
+            remember=self._remember if catchup is not None else None,
         )
         # Helpful and "send me this card again": no model, no state change.
         self._cards = CardRequests(store=self._store_now, notice=self._notice)
@@ -616,6 +618,14 @@ class CoordinatorRouter:
                 ok=True, text=summary_line(result), request_id=message.request_id, catchup=result
             )
         )
+
+    async def _recent_chat(self) -> list[str]:
+        """This channel's last lines, so Cadence answers within the conversation."""
+        return await self._catchup.recent_lines(self._conversation.conversation_id)
+
+    async def _remember(self, member_id: int, said: str, answer: str) -> None:
+        name = self._roster().get(member_id, "member")
+        await self._catchup.remember(self._conversation.conversation_id, name, said, answer)
 
     async def _start_reflection(self, message: CoordinatorCommandMessage) -> None:
         """

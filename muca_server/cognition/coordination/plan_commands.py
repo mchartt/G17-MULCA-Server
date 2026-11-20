@@ -90,6 +90,8 @@ class PlanCommands:
         send_state: Callable[[str], Awaitable[None]],
         unavailable: Callable[[str, str], Awaitable[None]],
         today: Callable[[], date] = date.today,
+        recent_chat: Callable[[], Awaitable[list[str]]] | None = None,
+        remember: Callable[[int, str, str], Awaitable[None]] | None = None,
     ) -> None:
         self._participants = participants
         self._store = store
@@ -100,6 +102,10 @@ class PlanCommands:
         self._send_state = send_state
         self._unavailable = unavailable
         self._today = today
+        # The last lines of the chat (Cadence's own included), and where a
+        # question and its answer are written so the next turn sees them.
+        self._recent_chat = recent_chat
+        self._remember = remember
         self._task: asyncio.Task | None = None
         self._dependencies: asyncio.Task | None = None
 
@@ -293,17 +299,29 @@ class PlanCommands:
     async def _ask(self, message) -> None:
         question = str(message.args.get("question", "")).strip()[:MAX_QUESTION]
         if not question:
-            await self._notice(False, "Write your question after @coordinator.", message.request_id)
+            await self._notice(False, "Write what you want to ask Cadence.", message.request_id)
             return
-        state = await self._store().load_state()
-        if not (state.tasks or state.milestones or state.decisions):
-            await self._notice(True, NOT_SAVED, message.request_id)  # nothing to read: no model call
-            return
-        answer = await self._writer.answer_question(question, members=self._participants(), state=state)
+        store = self._store()
+        state = await store.load_state()
+        members = self._participants()
+        chat = await self._recent_chat() if self._recent_chat is not None else []
+        answer = await self._writer.answer_question(
+            question,
+            members=members,
+            state=state,
+            documents=await store.document_texts(),
+            chat=chat,
+            today=self._today(),
+        )
         if answer is None:
             await self._unavailable(message.event, message.request_id)
             return
-        await self._notice(True, ask_text(answer, self._participants()), message.request_id)
+        text = ask_text(answer, members)
+        await self._notice(True, text, message.request_id)
+        if self._remember is not None:
+            # The question and the answer join the chat's memory: the next
+            # message, a follow-up or a catch-up sees them.
+            await self._remember(message.member_id, question, answer.answer)
 
     async def _on_task(self, message) -> None:
         """
@@ -517,18 +535,18 @@ def why_text(answer: WhyAnswer, members: dict[int, str]) -> str:
 
 
 def ask_text(answer: AskAnswer, members: dict[int, str]) -> str:
-    """The answer, then every saved item it rests on; with no source, the fixed "nothing saved" line."""
-    if not answer.found:
-        return NOT_SAVED
-    lines = [answer.answer]
-    for t in answer.tasks:
-        owner = members.get(t.owner_id, "a member") if t.owner_id else "no owner"
-        due = t.due_date.strftime("%d %b") if t.due_date else "no date"
-        lines.append(f"Source: task “{t.title}” ({owner}, due {due}, {t.status.value}).")
-    for m in answer.milestones:
-        lines.append(f"Source: milestone “{m.title}” ({m.due_date.strftime('%d %b') if m.due_date else 'no date'}).")
-    lines.extend(_decision_source(d, members) for d in answer.decisions)
-    return "\n".join(lines)
+    """
+    The answer, then one short "From:" line naming what it rests on (tasks,
+    milestones, decisions, documents), so the group can check it. No line
+    when the answer rests on nothing saved (advice, or "it is not there").
+    """
+    sources = [f"task “{t.title}”" for t in answer.tasks]
+    sources += [f"milestone “{m.title}”" for m in answer.milestones]
+    sources += [f"decision “{d.choice}”" for d in answer.decisions]
+    sources += [f"“{name}”" for name in answer.documents]
+    if not sources:
+        return answer.answer
+    return f"{answer.answer}\nFrom: {', '.join(sources)}."
 
 
 def _decision_source(d: Decision, members: dict[int, str]) -> str:

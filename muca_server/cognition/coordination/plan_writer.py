@@ -89,7 +89,14 @@ CHECKIN_SCHEMA = _strict(
 WHY_SCHEMA = _strict("decision_answer", {"answer": {"type": "string"}, "decision_ids": {"type": "array", "items": {"type": "string"}}})
 _IDS = {"type": "array", "items": {"type": "string"}}
 ASK_SCHEMA = _strict(
-    "saved_answer", {"answer": {"type": "string"}, "task_ids": _IDS, "milestone_ids": _IDS, "decision_ids": _IDS}
+    "project_answer",
+    {
+        "answer": {"type": "string"},
+        "task_ids": _IDS,
+        "milestone_ids": _IDS,
+        "decision_ids": _IDS,
+        "documents": _IDS,
+    },
 )
 
 TOPICS_SCHEMA = _strict(
@@ -143,12 +150,30 @@ there is no recorded decision about it and return an empty list."""
 
 ASK_SYSTEM = COMMON + """
 
-A member asks the coordinator a question, between <question> tags. What the
-group has saved is between <saved> tags: the plan (tasks, each with a task_id),
-the milestones (each with a milestone_id) and the decision log (each with an
-id). Answer only from it, in at most three sentences. task_ids, milestone_ids
-and decision_ids: the ids your answer rests on. If nothing saved answers the
-question, return three empty lists: the server then says so itself."""
+You are Cadence, the group's coordinator, in their group chat. A member talks
+to you; their message is between <question> tags (it may be a question, a
+request or a follow-up to what you said before: read <chat>). Everything the
+project holds is between <project> tags: the goal and deliverables, the
+members with their profiles, the milestones, the tasks (with owner, date,
+status, progress, description and what they wait on), the decision log with
+its reasons, and excerpts of the documents the group gave you. <chat> holds
+the last messages of the chat, yours included, oldest first.
+
+How to answer:
+- Like a helpful teammate: natural, warm, direct, in the language of the
+  member's message. Usually 1 to 4 short sentences; a short list only when
+  they ask for several things. No headings, no "As an AI".
+- Facts about the project come only from <project> and <chat>. If the answer
+  is not there, say so plainly and suggest the next step (e.g. paste the
+  assignment, add the task, decide it together). Never invent a date, a
+  person, a task or a decision.
+- You may help them think (how to split work, what to do first) using what
+  the project holds; say it is a suggestion. You never change the plan
+  yourself: to change it, a member edits it or confirms a card.
+- Use the members' names, never their ids. Dates as people say them.
+task_ids, milestone_ids, decision_ids: the ids of the saved items your answer
+states facts from. documents: the names of the documents you used. Empty
+lists when the answer rests on none of them."""
 
 
 TOPICS_SYSTEM = COMMON + """
@@ -196,12 +221,13 @@ class WhyAnswer:
 
 @dataclass(frozen=True, slots=True)
 class AskAnswer:
-    """An answer and what it rests on. With no source there is no answer (found is False)."""
+    """An answer and the saved items and documents it rests on (it may rest on none)."""
 
     answer: str
     tasks: list[Task]
     milestones: list[Milestone]
     decisions: list[Decision]
+    documents: list[str] = ()
 
     @property
     def found(self) -> bool:
@@ -273,14 +299,41 @@ class PlanWriter:
 
         return await self._run("why", WHY_SYSTEM, user, WHY_SCHEMA, check)
 
-    async def answer_question(self, question: str, *, members: dict[int, str], state: ProjectState) -> AskAnswer | None:
-        """Answer from the saved plan, milestones and decisions, or with no source at all."""
+    async def answer_question(
+        self,
+        question: str,
+        *,
+        members: dict[int, str],
+        state: ProjectState,
+        documents: list[tuple[str, str]] = (),
+        chat: list[str] = (),
+        today: date | None = None,
+    ) -> AskAnswer | None:
+        """
+        Answer a member as Cadence, from everything the project holds and the
+        recent chat. Every id and document name the model cites is checked.
+        """
         tasks = {t.task_id: t for t in state.tasks}
         milestones = {m.milestone_id: m for m in state.milestones}
         decisions = {d.decision_id: d for d in state.decisions}
+        names = {name for name, _ in documents}
         user = (
-            f"<saved>\n{_plan_only(state, members)}\n{_milestones_with_ids(state.milestones)}\n"
-            f"{_decision_log(state.decisions)}\n</saved>\n<question>\n{question}\n</question>"
+            "<project>\n"
+            + (f"Today is {today.isoformat()}.\n" if today else "")
+            + _charter(state)
+            + "\n"
+            + _members(members, state.members)
+            + "\n"
+            + _milestones_with_ids(state.milestones)
+            + "\n"
+            + _tasks_in_full(state, members)
+            + "\n"
+            + _decision_log(state.decisions)
+            + "\n"
+            + _documents(question, documents)
+            + "\n</project>\n<chat>\n"
+            + ("\n".join(chat[-CHAT_LINES:]) or "(no recent messages)")
+            + f"\n</chat>\n<question>\n{question}\n</question>"
         )
 
         def pick(ids: Any, known: dict[str, Any], what: str) -> list[Any]:
@@ -290,13 +343,17 @@ class PlanWriter:
             return [known[i] for i in unique]
 
         def check(data: dict) -> AskAnswer:
+            used = list(dict.fromkeys(str(n) for n in data["documents"]))
+            if any(n not in names for n in used):
+                raise ValueError("unknown document")
             found = AskAnswer(
-                str(data["answer"]).strip()[:1000],
+                str(data["answer"]).strip()[:1500],
                 pick(data["task_ids"], tasks, "task"),
                 pick(data["milestone_ids"], milestones, "milestone"),
                 pick(data["decision_ids"], decisions, "decision"),
+                used,
             )
-            if found.found and not found.answer:
+            if not found.answer:
                 raise ValueError("empty answer")
             return found
 
@@ -364,6 +421,68 @@ class PlanWriter:
             except Exception:
                 logger.exception("%s draft call failed (attempt %d)", name, attempt)
         return None
+
+
+CHAT_LINES = 30
+DOCUMENT_BUDGET = 12_000
+CHUNK = 900
+
+
+def _charter(state: ProjectState) -> str:
+    if state.charter is None:
+        return "Goal: not set yet (no charter confirmed)."
+    deliverables = "; ".join(state.charter.deliverables) or "-"
+    return f"Goal: {state.charter.goal}\nDeliverables: {deliverables}"
+
+
+def _tasks_in_full(state: ProjectState, members: dict[int, str]) -> str:
+    titles = {t.task_id: t.title for t in state.tasks}
+    lines = []
+    for t in state.tasks:
+        owner = members.get(t.owner_id, "a member") if t.owner_id else "no owner"
+        waits = f" | waits on: {', '.join(titles.get(i, i) for i in t.depends_on)}" if t.depends_on else ""
+        about = f" | about: {' '.join(t.description.split())[:300]}" if t.description else ""
+        lines.append(
+            f"- task_id {t.task_id}: {t.title} | owner: {owner} | due: {t.due_date or '-'} | {t.status.value}"
+            f" | {t.progress}% done{waits}{about}"
+        )
+    return "Tasks:\n" + "\n".join(lines or ["- (no tasks yet)"])
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in "".join(c.lower() if c.isalnum() else " " for c in text).split() if len(w) > 3}
+
+
+def _documents(question: str, documents: list[tuple[str, str]]) -> str:
+    """
+    Excerpts of the project documents within a budget: the start of each
+    document, then the passages that share the most words with the question.
+    """
+    if not documents:
+        return "Documents: (none)"
+    asked = _words(question)
+    chunks: list[tuple[int, int, int, str, str]] = []  # (doc, position, score, name, text)
+    for d, (name, text) in enumerate(documents):
+        for p in range(0, len(text), CHUNK):
+            piece = text[p : p + CHUNK]
+            chunks.append((d, p, len(asked & _words(piece)), name, piece))
+    chosen: set[tuple[int, int]] = {(c[0], c[1]) for c in chunks if c[1] == 0}
+    used = sum(len(c[4]) for c in chunks if (c[0], c[1]) in chosen)
+    for c in sorted(chunks, key=lambda c: -c[2]):
+        if c[2] == 0 or used + len(c[4]) > DOCUMENT_BUDGET:
+            continue
+        if (c[0], c[1]) not in chosen:
+            chosen.add((c[0], c[1]))
+            used += len(c[4])
+    out, last = [], None
+    for c in sorted(chunks, key=lambda c: (c[0], c[1])):
+        if (c[0], c[1]) not in chosen:
+            continue
+        if c[3] != last:
+            out.append(f"[document: {c[3]}]")
+            last = c[3]
+        out.append(" ".join(c[4].split()))
+    return "Documents:\n" + "\n".join(out)
 
 
 def _members(members: dict[int, str], profiles: list[MemberProfile]) -> str:
