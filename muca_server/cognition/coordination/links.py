@@ -53,6 +53,19 @@ CREATE TABLE IF NOT EXISTS coord_link (
 """
 
 
+def invite_code(text: str) -> str:
+    """
+    The invite code out of what a member typed: the code itself, or the
+    whole invite link (".../join/AB12CD34EF"), with or without spaces, in
+    any case. On 21/11 a pasted link got "Write the invite code": it is
+    longer than a code, and nothing said why.
+    """
+    text = (text or "").strip().strip("<>\"'")
+    if "/" in text:
+        text = [part for part in text.split("?")[0].split("/") if part][-1] if text.strip("/") else ""
+    return "".join(text.split()).replace("-", "").upper()
+
+
 class LinkError(ValueError):
     """A link that cannot be made; the message is shown to the member."""
 
@@ -95,9 +108,12 @@ class GroupLinks:
         """
         if not conversation_id.startswith(LINKABLE):
             raise LinkError("Run this in the Discord or Slack channel you want to link to the web space.")
-        code = code.strip()
+        code = invite_code(code)
         if not code or len(code) > 20:
-            raise LinkError("Write the invite code of the web space (you find it in the web app).")
+            raise LinkError(
+                "Write the invite code of the web space: the 10 letters and digits shown "
+                "in the web app, bottom left (or paste the invite link)."
+            )
         home_id = WEB_PREFIX + code
         # A web space has a file as soon as its members have used it.
         if not db_path_for(home_id, base_dir=self._db_dir).exists():
