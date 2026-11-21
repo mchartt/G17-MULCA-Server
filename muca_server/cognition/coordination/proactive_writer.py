@@ -154,7 +154,22 @@ and the plan. Never invent a fact, a person, a task, a date or a decision.
 - evidence: the numbers of 1 to 5 chat lines that show the situation.
 - rationale: one short sentence (max 40 words) starting with "Stepping in
   because" (or the same in the group's language) that says why now.
+The card is about what the group is talking about NOW: the highest-numbered
+chat lines, and the "Noticed just now" line when there is one. Older lines
+are background. Never go back to an earlier subject the chat has left, and
+never make a card out of something listed under "Decisions already taken":
+how the group organises itself (who splits the tasks, when it checks in,
+where it decides) is a way of working, not a piece of work to hand out.
+If a member has already said they will do the thing ("lo cerco io", "ci penso
+io", "me ne occupo io", "I'll do it", "on it"), it has an owner and there is
+nothing to hand out: return title "" (for a blocker or a decision card this
+does not apply).
 Write every text in the language of the chat."""
+
+
+class NothingToDraft(ValueError):
+    """The model found nothing to make a card of (title ""): no retry, no card."""
+
 
 TASK_RULES = {
     ProposalKind.TASK_OWNER: """\
@@ -251,8 +266,15 @@ class ProactiveWriter:
         silenced_topics: list[str],
         today: date,
         decisions: list[Decision] = (),
+        noticed: str = "",
     ) -> ProactiveDraft | None:
-        """A validated card for this strategy, or None (model failed twice, or nothing to ground it)."""
+        """
+        A validated card for this strategy, or None (model failed twice, or
+        nothing to ground it). `noticed`: the intervention agent's own words on
+        why the strategy fired, so the card is about that and not about an
+        older line (21/11 live test: "someone should prepare the survey
+        questions" got a card on how the group splits its tasks).
+        """
         kind = STRATEGY_KINDS.get(strategy_id)
         if kind is None or not chat:
             return None
@@ -260,11 +282,14 @@ class ProactiveWriter:
         open_decisions = [d for d in decisions if d.reopened_at is None]
         if kind is ProposalKind.REVISIT and not open_decisions:
             return None  # nothing in the log to revisit: no model call
-        user = _context(chat, members, profiles, tasks, silenced_topics, today, open_decisions)
+        user = _context(chat, members, profiles, tasks, silenced_topics, today, open_decisions, noticed)
         for attempt in range(1, ATTEMPTS + 1):
             try:
                 data = await self._writer.call_json(system, user, SCHEMAS[kind])
                 return _validate(kind, strategy_id, data, chat, members, tasks, today, open_decisions)
+            except NothingToDraft:
+                logger.info("%s: nothing to hand out (a member already took it)", strategy_id)
+                return None
             except (ValidationError, ValueError, KeyError, TypeError, IndexError) as exc:
                 logger.warning("%s draft invalid (attempt %d): %s", strategy_id, attempt, exc)
             except Exception:
@@ -272,7 +297,7 @@ class ProactiveWriter:
         return None
 
 
-def _context(chat, members, profiles, tasks, silenced_topics, today: date, decisions=()) -> str:
+def _context(chat, members, profiles, tasks, silenced_topics, today: date, decisions=(), noticed: str = "") -> str:
     """The user message: today, members with profiles, plan, silenced topics, chat."""
     by_id = {p.member_id: p for p in profiles}
     member_lines = []
@@ -306,12 +331,15 @@ def _context(chat, members, profiles, tasks, silenced_topics, today: date, decis
         f"Plan:\n" + "\n".join(task_lines) + "\n"
         f"Decisions already taken:\n" + "\n".join(decision_lines) + "\n"
         f"Topics the group asked you not to raise now (do not draft about them): {silenced}\n"
-        f"<chat>\n" + "\n".join(chat_lines) + "\n</chat>"
+        + (f"Noticed just now: {json.dumps(' '.join(noticed.split())[:300], ensure_ascii=False)}\n" if noticed.strip() else "")
+        + f"<chat>\n" + "\n".join(chat_lines) + "\n</chat>"
     )
 
 
 def _validate(kind, strategy_id, data, chat, members, tasks, today, decisions=()) -> ProactiveDraft:
     """Turn the model's JSON into a payload, or raise (= one retry)."""
+    if kind in (ProposalKind.TASK_OWNER, ProposalKind.DELEGATION) and not str(data.get("title", "")).strip():
+        raise NothingToDraft(strategy_id)
     numbers = data.pop("evidence")
     if not numbers:
         raise ValueError("no evidence")

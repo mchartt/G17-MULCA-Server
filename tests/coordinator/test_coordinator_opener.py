@@ -14,6 +14,7 @@ from datetime import date
 
 from muca_server.cognition.coordination.opener import (
     ACKS,
+    NO_CARD,
     MARK,
     MAX_OPEN_SECONDS,
     MIN_OPEN_SECONDS,
@@ -449,3 +450,40 @@ async def test_no_ack_when_nobody_answers(store):
     await router.route_user_text(said(1, "Ada", "Late answer"))
     await router.opener.wait()
     assert of_type(await drain(queue), AssistantTextMessage) == []
+
+
+async def test_a_question_to_the_group_gets_no_i_am_listening_line(store):
+    # Live test 21/11: "qualcuno sa se il prof ha caricato le slide?" got "Ricevuto".
+    # The line comes once, for the first message that is not a question
+    # (a window with questions only stays silent: see the last test below).
+    router, queue, _ = make_router(store, ITALIAN_CHARTER, AGREED)
+    await confirm_charter(router, queue)
+    sent = await answer(
+        router, queue,
+        (1, "Ada", "qualcuno sa se il prof ha caricato le slide di ieri?"),
+        (2, "Bruno", "Dividiamo i compiti il lunedì."),
+        (1, "Ada", "E decidiamo in chat."),
+    )
+    assert [m.text for m in of_type(sent, AssistantTextMessage)] == [ACKS["it"]]
+
+
+async def test_the_line_says_cadence_listens_not_that_an_answer_was_received():
+    for text in ACKS.values():
+        assert "Ricevuto" not in text and "Got it" not in text
+
+
+async def test_when_no_card_follows_cadence_says_so_and_how_to_ask_again(store):
+    nothing = {**AGREED, "outcome": "none", "agreements": [], "open_points": []}
+    router, queue, _ = make_router(store, ITALIAN_CHARTER, nothing)
+    await confirm_charter(router, queue)
+    sent = await answer(router, queue, (1, "Ada", "oii che dobbiamo fare"))
+    assert [m.text for m in of_type(sent, AssistantTextMessage)] == [ACKS["it"], NO_CARD["it"]]
+    assert of_type(sent, CoordinatorProposalMessage) == []
+
+
+async def test_only_questions_and_no_card_means_silence(store):
+    nothing = {**AGREED, "outcome": "none", "agreements": [], "open_points": []}
+    router, queue, _ = make_router(store, ITALIAN_CHARTER, nothing)
+    await confirm_charter(router, queue)
+    sent = await answer(router, queue, (1, "Ada", "a che ora è la lezione domani?"))
+    assert of_type(sent, AssistantTextMessage) == []

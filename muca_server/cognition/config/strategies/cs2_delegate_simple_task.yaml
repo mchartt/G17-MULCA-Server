@@ -11,7 +11,9 @@ trigger_description: >
   purpose (architecture, database schema, evaluation method, the project
   goal); a real choice between options that affects others (that is a
   decision, not a simple task); a short exchange of one or two messages;
-  someone who already said they will do it.
+  someone who already said they will do it ("I'll do it", "on it", "lo
+  cerco io", "ci penso io", "lo faccio io"): the task has an owner, even
+  if they said it one message ago.
 cooldown_messages: 10
 trigger_variables: []
 prompt_template: |

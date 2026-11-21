@@ -73,12 +73,37 @@ QUESTIONS = {
     ),
 }
 
-# Said once, at the first answer (live test 21/11): without it the group waited
-# 60 seconds in silence, with no "thinking" line, and thought Cadence was stuck.
+# Said once, at the first message that is not a question (live test 21/11):
+# without it the group waited 60 seconds in silence, with no "thinking" line,
+# and thought Cadence was stuck. It says what Cadence is doing, not that an
+# answer was received: the same day "qualcuno sa se il prof ha caricato le
+# slide?" and "oii che dobbiamo fare" both got "Ricevuto", and no card followed.
 ACKS = {
-    "en": "Got it. I'll listen for about a minute in case others want to add something, then sum it up on a card for you to confirm.",
-    "it": "Ricevuto. Ascolto ancora un minuto circa se qualcuno vuole aggiungere qualcosa, poi riassumo su una card da confermare.",
+    "en": (
+        "I'm listening for about a minute more. Write how you want to organise the work "
+        "and I'll sum it up on a card for you to confirm."
+    ),
+    "it": (
+        "Ascolto ancora un minuto circa. Scrivete come volete organizzarvi e lo riassumo "
+        "su una card da confermare."
+    ),
 }
+# Said when the window closes with no card after the line above: the promise is closed.
+NO_CARD = {
+    "en": (
+        "I did not hear enough about how you want to plan the work, so there is no card. "
+        "Use “Plan together” whenever you want to try again."
+    ),
+    "it": (
+        "Non ho raccolto abbastanza su come volete organizzarvi, quindi niente card. "
+        "Potete riprovare quando volete con “Plan together”."
+    ),
+}
+
+
+def is_question(text: str) -> bool:
+    """A member asking something is not answering "how do you want to plan the work?"."""
+    return "?" in text
 
 
 def close_at(asked_at: float, last_answer_at: float | None) -> float:
@@ -259,6 +284,9 @@ class PlanOpener:
         self._answers: list[ChatLine] = []
         self._last_answer_at: float | None = None
         self._closed = True
+        # The "I'm listening" line: said once per question, and in which language.
+        self._acked = False
+        self._ack_language = "en"
         self._tasks: set[asyncio.Task] = set()
         self._window: asyncio.Task | None = None
 
@@ -318,6 +346,7 @@ class PlanOpener:
         self._answers = []
         self._last_answer_at = None
         self._closed = False
+        self._acked = False
         await self._outbound.put(AssistantTextMessage(text=self._question, is_final=True, modality="text"))
         tell_observers = getattr(conversation, "tell_observers", None)
         if tell_observers is not None:
@@ -342,19 +371,23 @@ class PlanOpener:
         name = getattr(message, "speaker_name", "") or members[speaker]
         self._answers.append(ChatLine(speaker=name, text=text, at_ms=int(now * 1000)))
         self._last_answer_at = now
-        if len(self._answers) == 1:
+        if not self._acked and not is_question(text):
+            # A question ("has the prof uploaded the slides?") stays in the
+            # window for the summary to judge, but gets no "I'm listening".
+            self._acked = True
             self._spawn(self._acknowledge(text))
         if self._window is None or self._window.done():
             self._window = self._spawn(self._close_then_draft())
 
     async def _acknowledge(self, answer: str) -> None:
-        """The first answer: say Cadence heard it and when the card comes."""
+        """The first message that is not a question: say Cadence is listening and when the card comes."""
         language = await self._language()
         if language in ACKS:
             it = language == "it"
         else:
             it = italian(language, answer) or self._question == QUESTIONS["it"]
-        await self._outbound.put(AssistantTextMessage(text=ACKS["it" if it else "en"], is_final=True, modality="text"))
+        self._ack_language = "it" if it else "en"
+        await self._outbound.put(AssistantTextMessage(text=ACKS[self._ack_language], is_final=True, modality="text"))
 
     async def _close_then_draft(self) -> None:
         assert self._asked_at is not None
@@ -369,6 +402,11 @@ class PlanOpener:
         draft = await draft_approach(self._writer, self._question, self._members(), answers)
         if draft is None:
             logger.info("%s plan opener: no card (nothing to sum up, or no valid draft)", self._conversation.conversation_id)
+            if self._acked:
+                # Cadence said a card would come: say that none does, and how to ask again.
+                await self._outbound.put(
+                    AssistantTextMessage(text=NO_CARD[self._ack_language], is_final=True, modality="text")
+                )
             return
         kind, payload, rationale = draft
         proposal = await self._service().create(kind, payload, rationale=rationale, origin_channel=self._channel)
