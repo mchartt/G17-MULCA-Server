@@ -73,6 +73,9 @@ class UserTextMessage(IncomingMessage):
     # The client knows its own @mention ("<@1557...>"); the text alone doesn't
     # say whose id that is.
     mentions_assistant: bool = Field(default=False, alias="mentionsAssistant")
+    # Group Coordinator: the client also sent this text to Cadence's ask as a
+    # possible follow-up ("maybe"); nobody else answers it (proactive.py, R10).
+    offered_to_ask: bool = Field(default=False, alias="offeredToAsk")
     attachments: list[Attachment] = Field(default_factory=list)
 
 

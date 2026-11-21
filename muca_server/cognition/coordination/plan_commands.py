@@ -374,18 +374,23 @@ class PlanCommands:
             return
         await self._notice(True, why_text(answer, self._participants()), message.request_id)
 
-    def answer_late(self, member_id: int, text: str, post: Callable[[str], Awaitable[None]]) -> bool:
+    def answer_late(
+        self, member_id: int, text: str, post: Callable[[str], Awaitable[None]], *, maybe: bool = True
+    ) -> bool:
         """
-        CS6: a member's chat message, any time after Cadence asked them about
-        a task's progress, read as a possible reply (a "maybe": silence when it
-        is about something else). The answer goes to the chat with `post`, not
-        as the reply to a command. False when a request is already running.
+        A member's chat message answered by Cadence in the chat (with `post`),
+        not as the reply to a command. False when a request is already running.
+
+        maybe=True (CS6): any time after Cadence asked them about a task's
+        progress, read as a possible reply; silence when it is about something else.
+        maybe=False (R11): the intervention agent judged the message addressed
+        to the assistant; Cadence answers it, the lab's main agent does not.
         """
         if self._task is not None and not self._task.done():
             return False
         message = SimpleNamespace(
             event="coordinator_command", command="ask", member_id=member_id, request_id="",
-            channel="group", args={"question": text, "maybe": True},
+            channel="group", args={"question": text, **({"maybe": True} if maybe else {})},
         )
 
         async def quiet() -> None:  # a failure on a message not sent to Cadence is never announced
@@ -438,7 +443,8 @@ class PlanCommands:
             if named is not None:
                 self._focus[message.member_id] = (named, self._clock())
         if answer is None and not maybe:
-            await self._unavailable(message.event, message.request_id)
+            if post is None:  # a chat message has no request to fail: silence
+                await self._unavailable(message.event, message.request_id)
             return
         if answer is None or not answer.answer:
             # A "maybe" Cadence stays silent on (not meant for it, or the call

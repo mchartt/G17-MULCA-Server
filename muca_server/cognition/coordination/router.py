@@ -186,6 +186,11 @@ class CoordinatorRouter:
             recent_chat=self._recent_chat if catchup is not None else None,
             remember=self._remember if catchup is not None else None,
         )
+        if self.proactive is not None:
+            # R11: what the lab's agent would answer in the group chat, Cadence answers.
+            self.proactive.set_answer(
+                lambda member_id, text: self._plan.answer_late(member_id, text[:500], self._say_unlogged, maybe=False)
+            )
         # Helpful and "send me this card again": no model, no state change.
         self._cards = CardRequests(store=self._store_now, notice=self._notice)
         # CS-OPEN-01: "How do you want to plan the work?" after the charter.
@@ -249,6 +254,16 @@ class CoordinatorRouter:
         not answered yet, is also read by Cadence as a possible reply, however
         late it comes (before the Conversation, so R10 holds for it).
         """
+        if getattr(message, "offered_to_ask", False):
+            # R10 without a race: the client says on the message itself that it
+            # also sent it to Cadence's ask, so the claim is there before the
+            # intervention agent judges it, whichever of the two arrives first.
+            text = getattr(message, "text", "") or ""
+            now = time.time()
+            self._asked = {k: at for k, at in self._asked.items() if now - at < 120}
+            self._asked[claim_key(text)] = now
+            if self.proactive is not None:
+                self.proactive.claim(text)
         try:
             await self._late_progress_reply(message)
         except Exception:  # reading a late reply must never break the chat
