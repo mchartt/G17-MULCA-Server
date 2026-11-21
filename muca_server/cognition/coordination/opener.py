@@ -44,6 +44,7 @@ from .models import ApproachPayload, DecisionPayload, Evidence, ProactiveContext
 from .proactive_writer import MAX_EVIDENCE, ChatLine
 from .proposals import ProposalService
 from .store import CoordinationStore
+from .wording import italian
 from .writer import ATTEMPTS, ProposalWriter, check_rationale
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,13 @@ QUESTIONS = {
         "i compiti, ogni quanto fate il punto, dove decidete. Rispondete qui: riassumo io e "
         "voi confermate."
     ),
+}
+
+# Said once, at the first answer (live test 21/11): without it the group waited
+# 60 seconds in silence, with no "thinking" line, and thought Cadence was stuck.
+ACKS = {
+    "en": "Got it. I'll listen for about a minute in case others want to add something, then sum it up on a card for you to confirm.",
+    "it": "Ricevuto. Ascolto ancora un minuto circa se qualcuno vuole aggiungere qualcosa, poi riassumo su una card da confermare.",
 }
 
 
@@ -297,7 +305,14 @@ class PlanOpener:
         now = self.clock()
         await store.save_mark(MARK, 0, now)
         language = await self._language()
-        self._question = QUESTIONS.get(language, QUESTIONS["en"])
+        if language not in QUESTIONS:
+            # No language chosen: the chat is still empty here, so follow the
+            # charter the group just confirmed (an Italian brief got the
+            # question in English, live test 21/11).
+            charter = (await store.load_state()).charter
+            sample = " ".join([charter.goal, *charter.deliverables]) if charter else ""
+            language = "it" if italian(language, sample) else "en"
+        self._question = QUESTIONS[language]
         self._asked_at = now
         self._channel = channel or "group"
         self._answers = []
@@ -327,8 +342,19 @@ class PlanOpener:
         name = getattr(message, "speaker_name", "") or members[speaker]
         self._answers.append(ChatLine(speaker=name, text=text, at_ms=int(now * 1000)))
         self._last_answer_at = now
+        if len(self._answers) == 1:
+            self._spawn(self._acknowledge(text))
         if self._window is None or self._window.done():
             self._window = self._spawn(self._close_then_draft())
+
+    async def _acknowledge(self, answer: str) -> None:
+        """The first answer: say Cadence heard it and when the card comes."""
+        language = await self._language()
+        if language in ACKS:
+            it = language == "it"
+        else:
+            it = italian(language, answer) or self._question == QUESTIONS["it"]
+        await self._outbound.put(AssistantTextMessage(text=ACKS["it" if it else "en"], is_final=True, modality="text"))
 
     async def _close_then_draft(self) -> None:
         assert self._asked_at is not None
