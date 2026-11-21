@@ -14,6 +14,8 @@ from datetime import date
 
 from muca_server.cognition.coordination.opener import (
     ACKS,
+    NO_CARD,
+    is_question,
     MARK,
     MAX_OPEN_SECONDS,
     MIN_OPEN_SECONDS,
@@ -449,3 +451,76 @@ async def test_no_ack_when_nobody_answers(store):
     await router.route_user_text(said(1, "Ada", "Late answer"))
     await router.opener.wait()
     assert of_type(await drain(queue), AssistantTextMessage) == []
+
+
+async def test_a_question_to_the_group_gets_no_i_am_listening_line(store):
+    # Live test 21/11: "qualcuno sa se il prof ha caricato le slide?" got "Ricevuto".
+    # The line comes once, for the first message that is not a question
+    # (a window with questions only stays silent: see the last test below).
+    router, queue, _ = make_router(store, ITALIAN_CHARTER, AGREED)
+    await confirm_charter(router, queue)
+    sent = await answer(
+        router, queue,
+        (1, "Ada", "qualcuno sa se il prof ha caricato le slide di ieri?"),
+        (2, "Bruno", "Dividiamo i compiti il lunedì."),
+        (1, "Ada", "E decidiamo in chat."),
+    )
+    assert [m.text for m in of_type(sent, AssistantTextMessage)] == [ACKS["it"]]
+
+
+async def test_the_line_says_cadence_listens_not_that_an_answer_was_received():
+    for text in ACKS.values():
+        assert "Ricevuto" not in text and "Got it" not in text
+
+
+async def test_when_no_card_follows_cadence_says_so_and_how_to_ask_again(store):
+    nothing = {**AGREED, "outcome": "none", "agreements": [], "open_points": []}
+    router, queue, _ = make_router(store, ITALIAN_CHARTER, nothing)
+    await confirm_charter(router, queue)
+    sent = await answer(router, queue, (1, "Ada", "oii che dobbiamo fare"))
+    assert [m.text for m in of_type(sent, AssistantTextMessage)] == [ACKS["it"], NO_CARD["it"]]
+    assert of_type(sent, CoordinatorProposalMessage) == []
+
+
+async def test_only_questions_and_no_card_means_silence(store):
+    nothing = {**AGREED, "outcome": "none", "agreements": [], "open_points": []}
+    router, queue, _ = make_router(store, ITALIAN_CHARTER, nothing)
+    await confirm_charter(router, queue)
+    sent = await answer(router, queue, (1, "Ada", "a che ora è la lezione domani?"))
+    assert of_type(sent, AssistantTextMessage) == []
+
+
+def test_a_question_is_recognised_without_a_question_mark_but_an_answer_is_not():
+    for text in ("ok good, whats the goal", "what is the deadline", "quando è la consegna", "scusate, chi fa le slide",
+                 "a che ora è la lezione?", "why for a minute only"):
+        assert is_question(text), text
+    for text in ("Dividiamo i compiti il lunedì.", "E decidiamo in chat.", "e come sempre decidiamo in chat",
+                 "ok, facciamo il punto il giovedì", "per me va bene"):
+        assert not is_question(text), text
+
+
+def test_the_lines_do_not_say_listen_or_hear():
+    # Slack, 21/11: "hear???? im just writing".
+    for text in [*ACKS.values(), *NO_CARD.values()]:
+        assert "listen" not in text.lower() and "hear" not in text.lower() and "ascolt" not in text.lower()
+
+
+async def test_a_question_to_cadence_while_the_window_is_open_is_answered_not_silenced(store):
+    # Slack, 21/11: "ok good, whats the goal" right after Cadence's reply got the opener's line instead of the goal.
+    answer_json = {"answer": "The goal is to write a paper about AI and education.", "task_ids": [], "milestone_ids": [],
+                   "decision_ids": [], "documents": [],
+                   "action": {"kind": "none", "task_id": None, "title": "", "owner_id": None, "due_date": None,
+                              "depends_on_task_id": None, "depends_on_title": "", "depends_on_owner_id": None}}
+    router, queue, _ = make_router(store, GOOD_CHARTER, answer_json)
+    await confirm_charter(router, queue)
+    await drain(queue)
+    assert router.opener.listening
+    await router.route_coordinator(command("ask", member=1, question="ok good, whats the goal", maybe=True))
+    await router.wait_for_background()
+    notices = of_type(await drain(queue), CoordinatorNoticeMessage)
+    assert notices and notices[-1].text.startswith("The goal is to write a paper")
+    # A line that is not a question is still the opener's: silence from the ask, no model call.
+    await router.route_coordinator(command("ask", member=1, question="dividiamo i compiti il lunedì", maybe=True))
+    await router.wait_for_background()
+    notices = of_type(await drain(queue), CoordinatorNoticeMessage)
+    assert notices and notices[-1].text == ""

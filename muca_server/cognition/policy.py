@@ -716,6 +716,7 @@ class CoalaPolicy:
                 history=list(wm.history),
                 message_count=wm.total_message_count,
                 assistant_id=self._assistant_id,
+                reason=prompt_fragment or "",
             )
             if verdict != "not_mine":
                 if verdict == "taken":

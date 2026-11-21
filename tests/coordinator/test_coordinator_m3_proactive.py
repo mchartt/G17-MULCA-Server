@@ -89,9 +89,11 @@ def deleg_draft(topic="Fonts and margins"):
     return ProactiveDraft(ProposalKind.DELEGATION, payload, "Stepping in because one person can do it.")
 
 
-async def test_a_lab_strategy_is_not_the_coordinators(store):
+async def test_a_lab_unsolicited_strategy_gets_no_card_and_no_reply_in_a_group_chat(store):
+    # R12 (21/11): not the coordinator's, and not the lab agent's to answer either.
     bridge, sent, _ = make_bridge(store, FakeWriter())
-    assert await bridge.offer("maintain_focus", history=HISTORY, message_count=5, assistant_id=0) is Verdict.NOT_MINE
+    assert await bridge.offer("maintain_focus", history=HISTORY, message_count=5, assistant_id=0) is Verdict.VETOED
+    assert sent == []
 
 
 async def test_a_fired_strategy_becomes_a_pending_card(store):
@@ -161,7 +163,7 @@ async def test_linked_channels_share_the_five_minutes_but_not_the_message_count(
         store, FakeWriter(deleg_draft("b")), FakeConversation(conversation_id="channel:9"), clock=clock
     )
     # Discord already looked at the marker once, before the web card existed.
-    assert await offer(discord, strategy="not_a_coordinator_strategy") is Verdict.NOT_MINE
+    assert await offer(discord, strategy="not_a_coordinator_strategy") is Verdict.VETOED  # R12
     assert await offer(web, count=200) is Verdict.TAKEN and len(sent_web) == 1
     # R4 is the group's: a card on the web a moment ago silences Discord too.
     assert await offer(discord, count=3) is Verdict.VETOED and sent_discord == []

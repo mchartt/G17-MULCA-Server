@@ -678,7 +678,11 @@ coordinator's code", "Cadence is slower now", "Cadence è troppo forte",
 "secondo me Cadence è inutile", "mannaggia mi sa che Cadence non basta"); when the message asks the OTHER members ("secondo
 voi...", "ragazzi...", "what do you all think", "should we improve Cadence?":
 an opinion of the group, not a question for you, even if you could help),
-when they talk among themselves, or when it needs no answer (ok, thanks, a
+when they talk among themselves; when a member only shares an idea, a need or
+a plan with the group and asks nothing ("ci servono dati veri dagli studenti,
+un questionario breve sarebbe perfetto", "io partirei dalle fonti", "we need
+real data": the teammates answer that, not you, even when you could add
+something); or when it needs no answer (ok, thanks, a
 joke; "grazie", "perfetto grazie", "ok": a thanks is never answered, not even
 "di nulla"). Silence = an empty string, empty lists and action kind "none".</note>"""
 # A whole message that is only an acknowledgement, and a whole answer that is

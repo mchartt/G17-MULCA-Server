@@ -420,6 +420,116 @@ async def test_r10_the_ask_command_with_maybe_claims_its_text(tmp_path):
     assert web.proactive.is_claimed("E tu che ne pensi?")
 
 
+async def test_r10_a_message_cadences_ask_already_has_gets_no_proactive_card_either():
+    # 21/11 live test: one line got a card from the ask and a second one from CS5.
+    bridge = _bridge()
+    bridge.claim("qualcuno dovrebbe preparare le domande entro venerdì")
+    history = [SimpleNamespace(content="Qualcuno dovrebbe preparare le domande entro venerdì", speaker_id=7)]
+    verdict = await bridge.offer("cs5_owner_and_date", history=history, message_count=30, assistant_id=0)
+    assert verdict is Verdict.VETOED
+
+
+async def test_r10_a_user_text_marked_as_offered_to_ask_is_claimed_when_it_arrives(tmp_path):
+    # No race: the claim does not wait for the ask command, which may arrive after the message.
+    group = Group(tmp_path)
+    web, _ = await open_web_space(group)
+    web.proactive = _bridge()
+    await web.route_user_text(
+        SimpleNamespace(text="ok perfetto, hai suggerimenti?", speaker=100_000_002, speaker_name="Bruno", offered_to_ask=True)
+    )
+    assert web.proactive.is_claimed("ok perfetto, hai suggerimenti?")
+    plain = SimpleNamespace(text="ci vediamo domani", speaker=100_000_002, speaker_name="Bruno")
+    await web.route_user_text(plain)
+    assert not web.proactive.is_claimed("ci vediamo domani")
+
+
+# ----------------------------------------------------------------------
+# R11: one voice (the lab's solicited strategies are answered by Cadence)
+# ----------------------------------------------------------------------
+
+
+def _bridge_with_ask(taken=True, **conversation):
+    asked = []
+
+    def ask(member_id, text):
+        asked.append((member_id, text))
+        return taken
+
+    bridge = ProactiveBridge(
+        FakeConversation(conversation_id="web:G1", **conversation),
+        writer=None, store=lambda: None, service=lambda: None, send_proposal=None, clock=lambda: 1000.0, answer=ask,
+    )
+    return bridge, asked
+
+
+async def test_r11_a_message_judged_addressed_goes_to_cadences_ask_not_to_the_lab_agent():
+    for strategy in ("respond_when_addressed", "provide_summary", "remember", "always_reply"):
+        bridge, asked = _bridge_with_ask()
+        history = [SimpleNamespace(content="a che punto siamo con il questionario?", speaker_id=7)]
+        assert await bridge.offer(strategy, history=history, message_count=3, assistant_id=0) is Verdict.TAKEN
+        assert asked == [(7, "a che punto siamo con il questionario?")]
+        # Read once: the same line is nobody else's afterwards.
+        assert bridge.is_claimed("a che punto siamo con il questionario?")
+
+
+async def test_r11_the_lab_agent_stays_the_fallback_when_cadence_cannot_take_the_message():
+    history = [SimpleNamespace(content="riassumi?", speaker_id=7)]
+    busy, asked = _bridge_with_ask(taken=False)
+    assert await busy.offer("provide_summary", history=history, message_count=3, assistant_id=0) is Verdict.NOT_MINE
+    assert asked and not busy.is_claimed("riassumi?")
+
+    def broken(member_id, text):
+        raise RuntimeError("no store")
+
+    failing, _ = _bridge_with_ask()
+    failing.set_answer(broken)
+    assert await failing.offer("provide_summary", history=history, message_count=3, assistant_id=0) is Verdict.NOT_MINE
+
+
+async def test_r11_not_in_a_direct_message_not_for_a_spoken_turn_not_for_the_agents_own_line():
+    history = [SimpleNamespace(content="riassumi?", speaker_id=7)]
+    dm, asked_dm = _bridge_with_ask(is_private=True)
+    assert await dm.offer("respond_when_addressed", history=history, message_count=3, assistant_id=0) is Verdict.NOT_MINE
+    spoken, asked_spoken = _bridge_with_ask()
+    voice = [SimpleNamespace(content="riassumi?", speaker_id=7, modality="audio")]
+    assert await spoken.offer("respond_when_addressed", history=voice, message_count=3, assistant_id=0) is Verdict.NOT_MINE
+    own, asked_own = _bridge_with_ask()
+    assert await own.offer("respond_when_addressed", history=history, message_count=3, assistant_id=7) is Verdict.NOT_MINE
+    assert asked_dm == asked_spoken == asked_own == []
+
+
+async def test_r12_the_labs_unsolicited_strategies_stay_silent_in_a_group_text_chat():
+    # 21/11: in "wake" mode pleasant_conversation answered "blu o verde?" in English.
+    history = [SimpleNamespace(content="ok! e per le slide usiamo blu o verde?", speaker_id=7)]
+    for strategy in ("pleasant_conversation", "maintain_focus", "resolve_conflict", "participation_equality_text"):
+        bridge, asked = _bridge_with_ask()
+        assert await bridge.offer(strategy, history=history, message_count=3, assistant_id=0) is Verdict.VETOED
+        assert asked == []
+    # A private chat and a spoken turn keep the lab's behaviour.
+    dm, _ = _bridge_with_ask(is_private=True)
+    assert await dm.offer("pleasant_conversation", history=history, message_count=3, assistant_id=0) is Verdict.NOT_MINE
+    spoken, _ = _bridge_with_ask()
+    voice = [SimpleNamespace(content="blu o verde?", speaker_id=7, modality="audio")]
+    assert await spoken.offer("pleasant_conversation", history=voice, message_count=3, assistant_id=0) is Verdict.NOT_MINE
+
+
+async def test_r11_the_router_answers_in_the_chat_with_cadences_ask(tmp_path):
+    from muca_server.protocol import AssistantTextMessage
+
+    group = Group(tmp_path, answer("Il questionario non ha ancora un responsabile.", action=none_action()))
+    web, web_q = await open_web_space(group)
+    web.proactive = _bridge()
+    web.proactive.set_answer(lambda member_id, text: web._plan.answer_late(member_id, text, web._say_unlogged, maybe=False))
+    history = [SimpleNamespace(content="a che punto siamo con il questionario?", speaker_id=100_000_002)]
+    verdict = await web.proactive.offer("respond_when_addressed", history=history, message_count=3, assistant_id=0)
+    assert verdict is Verdict.TAKEN
+    await web.wait_for_background()
+    said = [m.text for m in await drain(web_q) if isinstance(m, AssistantTextMessage)]
+    assert said and said[-1].startswith("Il questionario non ha ancora un responsabile.")
+    # A sure call: the model was not told it may stay silent.
+    assert group.writer._client.calls[-1]["messages"]
+
+
 # ----------------------------------------------------------------------
 # Timer and settings
 # ----------------------------------------------------------------------

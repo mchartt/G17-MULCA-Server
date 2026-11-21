@@ -39,7 +39,23 @@ rules 4.3 and 11, spec NFR3, GL4, GL10):
         second time by the lab's solicited strategies (respond_when_addressed,
         remember, provide_summary). Before this, such a follow-up could get
         two replies, the second in English from an agent that cannot see the
-        plan ("I have no access beyond the chat", 20/11 screenshots)
+        plan ("I have no access beyond the chat", 20/11 screenshots). The same
+        holds for a card: a message Cadence's ask already has gets no
+        proactive card as well (21/11 live test: one line, "qualcuno dovrebbe
+        preparare le domande entro venerdì", got two cards and a chat reply)
+    R11 one voice: in a group text chat the lab's solicited strategies are
+        answered by Cadence's ask (plan_commands.answer_late, a sure call),
+        which reads the project, never by the lab's main agent. The lab's
+        intervention agent still decides WHEN; only who writes changes. Not
+        in a DM, not for a spoken turn, and the lab's path stays the fallback
+        when Cadence cannot take the message
+    R12 the lab's unsolicited strategies (pleasant_conversation,
+        maintain_focus, resolve_conflict, participation_equality) never speak
+        in a group text chat while the coordinator is on. They are left out
+        of the "ambient" catalog (run_server.py), but the web runs in "wake"
+        mode, whose catalog still offers them: on 21/11 pleasant_conversation
+        answered "blu o verde?" in English, from the agent that cannot see
+        the plan
 
 R3 and R4 count only cards actually posted: a draft that fails or is
 dropped does not silence the group. Their marker is saved in the group's
@@ -119,8 +135,11 @@ class ProactiveBridge:
         today: Callable[[], date] = date.today,
         clock: Callable[[], float] = time.time,
         listening: Callable[[], bool] | None = None,
+        answer: Callable[[int, str], bool] | None = None,
     ) -> None:
         self._conversation = conversation
+        # R11: hands a message to Cadence's ask (router); False = it could not take it.
+        self._answer = answer
         # R8: True while the plan opener waits for the group's answers.
         self._listening = listening or (lambda: False)
         self._writer = writer
@@ -158,13 +177,35 @@ class ProactiveBridge:
         history: list,
         message_count: int,
         assistant_id: int,
+        reason: str = "",
     ) -> Verdict:
-        """Decide at once (the turn is waiting); the draft runs in the background."""
+        """
+        Decide at once (the turn is waiting); the draft runs in the background.
+        `reason`: the intervention agent's words on why the strategy fired
+        (its prompt fragment), handed to the card writer.
+        """
         if strategy_id not in STRATEGY_KINDS:
-            if strategy_id in SOLICITED and history and self.is_claimed(history[-1].content):
+            if strategy_id not in SOLICITED:
+                if self._group_text_turn(history):
+                    logger.info(
+                        "%s coordinator vetoed %s: R12 the lab's unsolicited strategies stay silent",
+                        self._conversation.conversation_id, strategy_id,
+                    )
+                    return Verdict.VETOED
+                return Verdict.NOT_MINE
+            if not history:
+                return Verdict.NOT_MINE
+            last = history[-1]
+            if self.is_claimed(last.content):
                 logger.info("%s coordinator: R10 Cadence's ask already has this message", self._conversation.conversation_id)
                 return Verdict.VETOED
-            return Verdict.NOT_MINE
+            return self._hand_to_ask(strategy_id, last, assistant_id)
+        if history and self.is_claimed(history[-1].content):
+            logger.info(
+                "%s coordinator vetoed %s: R10 Cadence's ask already has this message",
+                self._conversation.conversation_id, strategy_id,
+            )
+            return Verdict.VETOED
         await self._load_mark()
         if self._preempt(strategy_id):
             logger.info("%s coordinator: %s replaces a draft still being written", self._conversation.conversation_id, strategy_id)
@@ -177,7 +218,43 @@ class ProactiveBridge:
             for u in history[-CHAT_WINDOW:]
             if u.speaker_id != assistant_id and u.content.strip()
         ]
-        self._task = asyncio.create_task(self._post(strategy_id, chat, message_count))
+        self._task = asyncio.create_task(self._post(strategy_id, chat, message_count, reason))
+        return Verdict.TAKEN
+
+    def set_answer(self, answer: Callable[[int, str], bool] | None) -> None:
+        """R11: the router gives the way to Cadence's ask once its commands exist."""
+        self._answer = answer
+
+    def _group_text_turn(self, history: list) -> bool:
+        """True for a typed message in a group conversation (R11, R12 apply only there)."""
+        if self._conversation.is_private or self._conversation.is_ephemeral:
+            return False
+        return not history or getattr(history[-1], "modality", "text") == "text"
+
+    def _hand_to_ask(self, strategy_id: str, last: Any, assistant_id: int) -> Verdict:
+        """R11: a solicited strategy in a group text chat is answered by Cadence's ask."""
+        conversation_id = self._conversation.conversation_id
+        text = (getattr(last, "content", "") or "").strip()
+        speaker = getattr(last, "speaker_id", None)
+        if (
+            self._answer is None
+            or self._conversation.is_private
+            or self._conversation.is_ephemeral
+            or getattr(last, "modality", "text") != "text"
+            or not text
+            or speaker is None
+            or speaker == assistant_id
+        ):
+            return Verdict.NOT_MINE
+        try:
+            taken = self._answer(speaker, text)
+        except Exception:  # the lab's path stays the fallback: the member still gets an answer
+            logger.exception("%s coordinator: could not hand %s to Cadence's ask", conversation_id, strategy_id)
+            return Verdict.NOT_MINE
+        if not taken:
+            return Verdict.NOT_MINE
+        self.claim(text)
+        logger.info("%s coordinator: R11 %s answered by Cadence's ask", conversation_id, strategy_id)
         return Verdict.TAKEN
 
     def claim(self, text: str) -> None:
@@ -278,7 +355,7 @@ class ProactiveBridge:
             return "R5 the agent spoke last"
         return ""
 
-    async def _post(self, strategy_id: str, chat: list[ChatLine], message_count: int) -> None:
+    async def _post(self, strategy_id: str, chat: list[ChatLine], message_count: int, noticed: str = "") -> None:
         """Draft, check R6 and R7, save the pending proposal, send the card."""
         conversation_id = self._conversation.conversation_id
         try:
@@ -297,6 +374,7 @@ class ProactiveBridge:
                 silenced_topics=silenced,
                 today=self._today(),
                 decisions=state.decisions,
+                noticed=noticed,
             )
             self._drafting = None  # from here on the draft is saved or dropped, never replaced
             if draft is None:
