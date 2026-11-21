@@ -74,7 +74,7 @@ from .models import (
     ProposalKind,
     ProposalStatus,
 )
-from .opener import PlanOpener
+from .opener import PlanOpener, is_question
 from .plan_commands import PlanCommands
 from .plan_writer import PlanWriter
 from .plan_writes import topic_key
@@ -349,10 +349,14 @@ class CoordinatorRouter:
                 if late:
                     # Already read as a late progress reply (its user_text came first): once is enough.
                     await self._notice(True, "", request_id)
-                elif maybe and self.opener.listening:
+                elif maybe and self.opener.listening and not is_question(str(message.args.get("question", ""))):
                     # R8 for the chat too: the members are answering "How do you
                     # want to plan the work?"; their lines go to the opener, not
                     # to an ask reply or a task card. Silence, no model call.
+                    # A question is not an answer to the opener (opener.is_question):
+                    # "ok good, whats the goal", written to Cadence right after its
+                    # reply, is answered as usual (Slack, 21/11: it got "I'm
+                    # listening for about a minute more" instead of the goal).
                     await self._notice(True, "", request_id)
                 else:
                     await self._plan.handle(message)

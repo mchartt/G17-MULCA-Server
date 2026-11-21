@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -80,30 +81,42 @@ QUESTIONS = {
 # slide?" and "oii che dobbiamo fare" both got "Ricevuto", and no card followed.
 ACKS = {
     "en": (
-        "I'm listening for about a minute more. Write how you want to organise the work "
-        "and I'll sum it up on a card for you to confirm."
+        "I'll wait about a minute so everyone can answer. Write how you want to organise "
+        "the work and I'll sum it up on a card for you to confirm."
     ),
     "it": (
-        "Ascolto ancora un minuto circa. Scrivete come volete organizzarvi e lo riassumo "
-        "su una card da confermare."
+        "Aspetto ancora un minuto circa, così può rispondere chi vuole. Scrivete come volete "
+        "organizzarvi e lo riassumo su una card da confermare."
     ),
 }
 # Said when the window closes with no card after the line above: the promise is closed.
+# No "listen" or "hear": the group writes, it does not speak (Slack, 21/11).
 NO_CARD = {
     "en": (
-        "I did not hear enough about how you want to plan the work, so there is no card. "
-        "Use “Plan together” whenever you want to try again."
+        "The messages did not say enough about how you want to plan the work, so I made no "
+        "card. Use “Plan together” whenever you want to try again."
     ),
     "it": (
-        "Non ho raccolto abbastanza su come volete organizzarvi, quindi niente card. "
+        "Nei messaggi non c'era abbastanza su come volete organizzarvi, quindi niente card. "
         "Potete riprovare quando volete con “Plan together”."
     ),
 }
 
+# A message that opens with a question word is a question even without "?"
+# ("ok good, whats the goal", Slack 21/11). Only at the start, after a few
+# filler words. "come" is left out: "e come sempre decidiamo in chat" is an answer.
+_ASKS = re.compile(
+    r"^(?:(?:ok|okay|good|great|bene|allora|scusa|scusate|ma|e|and|so|quindi)[\s,;:.!]+)*"
+    r"(?:what|whats|what's|who|whos|who's|when|where|why|how|which|"
+    r"che cosa|cosa|cos'è|quando|chi|dove|perch[eé]|quale|quali|quanto|quanti|qual)\b",
+    re.IGNORECASE,
+)
+
 
 def is_question(text: str) -> bool:
     """A member asking something is not answering "how do you want to plan the work?"."""
-    return "?" in text
+    return "?" in text or _ASKS.search(text.strip()) is not None
+
 
 
 def close_at(asked_at: float, last_answer_at: float | None) -> float:
