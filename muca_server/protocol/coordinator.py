@@ -101,6 +101,8 @@ class CoordinatorCommandMessage(CoordinatorIncomingMessage):
         "profile", "kickoff", "state", "planning", "checkin", "task", "why", "card",
         "link", "unlink", "catchup", "ask", "language", "charter", "milestone",
         "approach", "document", "reflection", "progress",
+        # "me": one person, one member across channels (router._on_me).
+        "me",
     ]
     member_id: int = Field(alias="memberId")
     args: dict[str, Any] = Field(default_factory=dict)

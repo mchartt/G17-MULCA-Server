@@ -62,7 +62,7 @@ from ...protocol.outgoing import AssistantTextMessage
 from .card_requests import CardRequests
 from .catchup import CatchUp, channel_of, summary_line
 from .checkin_timer import CheckinTimer
-from .links import GroupLinks, LinkError, LiveGroups
+from .links import WEB_PREFIX, GroupLinks, LinkError, LiveGroups
 from .models import (
     MAX_DOCUMENT_CHARS,
     MAX_DOCUMENTS,
@@ -143,6 +143,9 @@ class CoordinatorRouter:
         self._live = live
         self._catchup = catchup
         self._home_id: str | None = None
+        # One person, one member across channels: this channel's members that
+        # are web members (channel id -> (web id, web name)); None = not read yet.
+        self._identities: dict[int, tuple[int, str]] | None = None
         # CS6: messages already offered as late replies, per (task, due date).
         self._late_tries: dict[tuple[str, str], int] = {}
         # Lines this router already sent to ask as late replies (text -> time):
@@ -189,7 +192,9 @@ class CoordinatorRouter:
         if self.proactive is not None:
             # R11: what the lab's agent would answer in the group chat, Cadence answers.
             self.proactive.set_answer(
-                lambda member_id, text: self._plan.answer_late(member_id, text[:500], self._say_unlogged, maybe=False)
+                lambda member_id, text: self._plan.answer_late(
+                    self._as_web(member_id), text[:500], self._say_unlogged, maybe=False
+                )
             )
         # Helpful and "send me this card again": no model, no state change.
         self._cards = CardRequests(store=self._store_now, notice=self._notice)
@@ -254,6 +259,7 @@ class CoordinatorRouter:
         not answered yet, is also read by Cadence as a possible reply, however
         late it comes (before the Conversation, so R10 holds for it).
         """
+        await self._load_identities()
         if getattr(message, "offered_to_ask", False):
             # R10 without a race: the client says on the message itself that it
             # also sent it to Cadence's ask, so the claim is there before the
@@ -293,7 +299,12 @@ class CoordinatorRouter:
             at=time.time(),
         )
         for peer in peers:
-            await peer._outbound.put(copy)
+            # One way only (21/11): the web space shows what is written on
+            # Discord and Slack, so the project's whole talk can be read in one
+            # place. Discord and Slack get no copies: a channel filling up with
+            # lines written elsewhere was not wanted there.
+            if peer._conversation.conversation_id.startswith(WEB_PREFIX):
+                await peer._outbound.put(copy)
 
     # ------------------------------------------------------------------
     # Entry point, called by events/dispatcher.py
@@ -313,6 +324,17 @@ class CoordinatorRouter:
         if message.member_id not in self._conversation.participants():
             await self._notice(False, MEMBERS_ONLY, request_id)
             return
+        await self._load_identities()
+        if not isinstance(message, ProposalResponseMessage) and message.command == "me":
+            try:
+                await self._on_me(message)
+            except Exception:
+                logger.exception("%s could not handle the personal code", self._conversation.conversation_id)
+                await self._fail(message.event, request_id)
+            return
+        # From here on the member acts as their web self, if they said who they are.
+        if self._identities:
+            message = message.model_copy(update=self._in_web_ids(message))
         try:
             if isinstance(message, ProposalResponseMessage) and message.action == "helpful":
                 await self._cards.helpful(message)
@@ -641,6 +663,7 @@ class CoordinatorRouter:
         self._leave_live()
         self._home_id = None
         self._store = None
+        self._identities = None
         self._store_now()
 
     def _peers(self) -> list["CoordinatorRouter"]:
@@ -653,9 +676,53 @@ class CoordinatorRouter:
         """Everyone in the group's open sessions: this channel's members first."""
         roster: dict[int, str] = {}
         for peer in self._peers():
-            roster.update(peer._conversation.participants())
-        roster.update(self._conversation.participants())
+            roster.update(peer._own_members())
+        roster.update(self._own_members())
         return roster
+
+    def _own_members(self) -> dict[int, str]:
+        """This channel's members, each under their web identity when they claimed one (_on_me)."""
+        known = self._identities or {}
+        members: dict[int, str] = {}
+        for member_id, name in self._conversation.participants().items():
+            web = known.get(member_id)
+            members[web[0] if web else member_id] = web[1] if web else name
+        return members
+
+    def _as_web(self, member_id: int) -> int:
+        """The member's web id if they said who they are on the web, else their id here."""
+        web = (self._identities or {}).get(member_id)
+        return web[0] if web else member_id
+
+    def _in_web_ids(self, message: Any) -> dict[str, Any]:
+        """
+        The fields of a command or click that name a member of this channel,
+        rewritten to web ids: who sends it, and an owner written in its
+        arguments ("owner" of a task, "owner_id" of each planning item).
+        """
+        changes: dict[str, Any] = {"member_id": self._as_web(message.member_id)}
+        args = getattr(message, "args", None)
+        if isinstance(args, dict):
+            args = dict(args)
+            if isinstance(args.get("owner"), int):
+                args["owner"] = self._as_web(args["owner"])
+            if isinstance(args.get("items"), list):
+                args["items"] = [
+                    {**item, "owner_id": self._as_web(item["owner_id"])}
+                    if isinstance(item, dict) and isinstance(item.get("owner_id"), int) else item
+                    for item in args["items"]
+                ]
+            changes["args"] = args
+        return changes
+
+    async def _load_identities(self) -> None:
+        if self._identities is not None:
+            return
+        try:
+            self._identities = await self._store_now().identities(self._conversation.conversation_id)
+        except Exception:  # never a reason to drop a message: everyone stays who they are here
+            logger.exception("%s could not read the members' web identities", self._conversation.conversation_id)
+            self._identities = {}
 
     def _names(self) -> dict[str, str]:
         """
@@ -691,6 +758,59 @@ class CoordinatorRouter:
             message.request_id,
         )
         await self._send_state(message.request_id)
+
+    async def _on_me(self, message: CoordinatorCommandMessage) -> None:
+        """
+        One person, one member across channels. On the web, with no code: a
+        personal code (single use, 15 minutes) for the member who asks. In a
+        linked Discord or Slack channel, with that code: this channel's member
+        IS that web member from now on (tasks, profile, cards, questions).
+        Only the person logged in on the web can get a code, so nobody can
+        take a teammate's place without that teammate handing it over.
+        """
+        here = self._conversation.conversation_id
+        on_web = here.startswith(WEB_PREFIX)
+        code = "".join(str(message.args.get("code", "")).split()).upper()
+        request_id = message.request_id
+        if on_web:
+            if code:
+                await self._notice(False, "Write this code in Discord or Slack, not here: /coordinator me " + code, request_id)
+                return
+            name = self._conversation.participants().get(message.member_id, "member")
+            fresh = await self._store_now().new_identity_code(message.member_id, name, time.time())
+            await self._notice(
+                True,
+                f"Your personal code is {fresh}. In the Discord or Slack channel of this project write: "
+                f"/coordinator me {fresh}. It works once and for 15 minutes; never share it: whoever "
+                "uses it acts as you.",
+                request_id,
+            )
+            return
+        if self._home() == here:
+            await self._notice(False, "Link this channel to the web space first: /coordinator link <invite code>.", request_id)
+            return
+        if not code:
+            await self._notice(
+                False,
+                "Write your personal code: /coordinator me <code>. You get it in the web app, under "
+                "“Connect Slack or Discord”.",
+                request_id,
+            )
+            return
+        claimed = await self._store_now().claim_identity(code, here, message.member_id, time.time())
+        if claimed is None:
+            await self._notice(False, "This code is not valid any more. Get a new one in the web app.", request_id)
+            return
+        self._identities = None
+        await self._load_identities()
+        logger.info("%s member %s is web member %s", here, message.member_id, claimed[0])
+        await self._notice(
+            True,
+            f"Done: here you are {claimed[1]}, the same member as on the web. Your tasks, profile and "
+            "cards follow you on both.",
+            request_id,
+        )
+        await self._send_state(request_id)
 
     async def _on_unlink(self, message: CoordinatorCommandMessage) -> None:
         if self._links is None or self._links.unlink(self._conversation.conversation_id) is None:
@@ -775,6 +895,7 @@ class CoordinatorRouter:
         speaker = getattr(message, "speaker", None)
         if not text or speaker is None:
             return False
+        speaker = self._as_web(speaker)  # the plan knows them by their web id
         if self.proactive is not None and self.proactive.is_claimed(text):
             return False  # the web already offered it to ask as a follow-up: read once
         if time.time() - self._asked.get(claim_key(text), 0) < 120:
@@ -865,8 +986,27 @@ class CoordinatorRouter:
         return await self._catchup.recent_timed(self._conversation.conversation_id, window=3 * 24 * 3600, limit=60)
 
     async def _recent_chat(self) -> list[str]:
-        """This channel's last lines, so Cadence answers within the conversation."""
-        return await self._catchup.recent_lines(self._conversation.conversation_id)
+        """
+        The group's last lines, so Cadence answers within the conversation:
+        this channel's, and those of the channels linked to the same project,
+        in time order, the others marked with their channel ("[discord] Mati:
+        ..."). Before, Cadence read this channel only: on 21/11 a task was
+        added from Discord, and asked on the web "someone was on Discord, who
+        added a task?" Cadence could only say the chat showed no reply.
+        """
+        here = self._conversation.conversation_id
+        channels = self._links.group(self._home()) if self._links is not None else [here]
+        if here not in channels:
+            channels = [*channels, here]
+        if len(channels) == 1:
+            return await self._catchup.recent_lines(here)
+        timed: list[tuple[float, str]] = []
+        for conversation_id in channels:
+            mark = "" if conversation_id == here else f"[{channel_of(conversation_id)}] "
+            for at, line in await self._catchup.recent_timed(conversation_id):
+                timed.append((at, mark + line))
+        timed.sort(key=lambda item: item[0])
+        return [line for _, line in timed[-30:]]
 
     async def _remember(self, member_id: int, said: str, answer: str) -> None:
         name = self._roster().get(member_id, "member")

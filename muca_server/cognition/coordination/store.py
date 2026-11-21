@@ -18,6 +18,7 @@ members click at the same instant on two different channels.
 from __future__ import annotations
 
 import json
+import secrets
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -160,7 +161,30 @@ CREATE TABLE IF NOT EXISTS coord_feedback (
     at           REAL NOT NULL,
     PRIMARY KEY (proposal_id, member_id)
 );
+
+-- One person, one member across channels (21/11). A web member asks for a
+-- personal code (single use, short lived); written once in a Discord or
+-- Slack channel of the project, it records that this channel's member IS
+-- that web member. Only the person logged in on the web can get the code.
+CREATE TABLE IF NOT EXISTS coord_identity_code (
+    code         TEXT PRIMARY KEY,
+    member_id    INTEGER NOT NULL,
+    name         TEXT NOT NULL,
+    expires_at   REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS coord_identity (
+    channel        TEXT NOT NULL,     -- the linked channel's conversation id
+    member_id      INTEGER NOT NULL,  -- the member's id in that channel
+    web_member_id  INTEGER NOT NULL,
+    web_name       TEXT NOT NULL,
+    linked_at      REAL NOT NULL,
+    PRIMARY KEY (channel, member_id)
+);
 """
+
+IDENTITY_CODE_SECONDS = 15 * 60
+# No look-alikes (0/O, 1/I/L): the code is typed by hand in another app.
+_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
 
 # When a task was made and when it was finished, kept by SQLite itself so every
@@ -596,6 +620,64 @@ class CoordinationStore:
             )
         finally:
             await db.close()
+
+    # ------------------------------------------------------------------
+    # One person, one member across channels
+    # ------------------------------------------------------------------
+
+    async def new_identity_code(self, member_id: int, name: str, now: float) -> str:
+        """A fresh personal code for this web member; their earlier codes stop working."""
+        code = "".join(secrets.choice(_CODE_ALPHABET) for _ in range(6))
+        db = await self._connect()
+        try:
+            await db.execute("DELETE FROM coord_identity_code WHERE member_id = ? OR expires_at < ?", (member_id, now))
+            await db.execute(
+                "INSERT INTO coord_identity_code (code, member_id, name, expires_at) VALUES (?, ?, ?, ?)",
+                (code, member_id, name, now + IDENTITY_CODE_SECONDS),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+        return code
+
+    async def claim_identity(self, code: str, channel: str, member_id: int, now: float) -> tuple[int, str] | None:
+        """
+        Use a personal code in a linked channel: (web member id, web name), or
+        None if the code is unknown, used or expired. The code is spent, and
+        the open tasks this channel member owned move to the web member.
+        """
+        db = await self._connect()
+        try:
+            cursor = await db.execute(
+                "SELECT member_id, name FROM coord_identity_code WHERE code = ? AND expires_at >= ?", (code, now)
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                return None
+            web_member_id, web_name = int(row[0]), str(row[1])
+            await db.execute("DELETE FROM coord_identity_code WHERE code = ?", (code,))
+            await db.execute(
+                "INSERT OR REPLACE INTO coord_identity (channel, member_id, web_member_id, web_name, linked_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (channel, member_id, web_member_id, web_name, now),
+            )
+            await db.execute("UPDATE coord_task SET owner_id = ? WHERE owner_id = ?", (web_member_id, member_id))
+            await db.commit()
+        finally:
+            await db.close()
+        return web_member_id, web_name
+
+    async def identities(self, channel: str) -> dict[int, tuple[int, str]]:
+        """This channel's members that are web members: channel member id -> (web member id, web name)."""
+        db = await self._connect()
+        try:
+            cursor = await db.execute(
+                "SELECT member_id, web_member_id, web_name FROM coord_identity WHERE channel = ?", (channel,)
+            )
+            rows = await cursor.fetchall()
+        finally:
+            await db.close()
+        return {int(r[0]): (int(r[1]), str(r[2])) for r in rows}
 
     async def progress_checkins(self) -> list[dict]:
         """Every check-in row (task_id, due_date, member_id, asked_at, answer, answered_at)."""

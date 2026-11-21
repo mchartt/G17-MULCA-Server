@@ -406,3 +406,139 @@ async def test_nothing_is_mirrored_without_a_link_or_from_a_dm(tmp_path):
     discord._conversation.is_private = True
     await discord.route_user_text(text(9001, "Chiara", "secret"))
     assert not await drain(web_q)
+
+
+def test_the_invite_code_is_read_from_a_code_or_from_the_invite_link():
+    from muca_server.cognition.coordination.links import invite_code
+
+    for typed in ("AB12CD34EF", " ab12cd34ef ", "AB12C D34EF", "https://cadence.example/join/AB12CD34EF",
+                  "cadence.example/join/ab12cd34ef/", "<https://cadence.example/join/AB12CD34EF?x=1>"):
+        assert invite_code(typed) == "AB12CD34EF", typed
+    assert invite_code("") == "" and invite_code("   ") == ""
+
+
+async def test_cadence_reads_the_chat_of_every_linked_channel_when_it_answers(tmp_path):
+    # 21/11: asked on the web about what had just happened on Discord, Cadence saw the web chat only.
+    group = Group(tmp_path)
+    web, web_q = await open_web_space(group)
+    discord, discord_q = group.router(DISCORD, DISCORD_ROSTER)
+    await discord.route_coordinator(command("link", 9001, code="AB12CD"))
+    assert web._catchup is not None
+    await web._catchup.remember(WEB, "Ada", "ciao dal web", "")
+    await web._catchup.remember(DISCORD, "Chiara", "add me a task to research the responses", "A card is ready.")
+    lines = await web._recent_chat()
+    assert "Ada: ciao dal web" in lines
+    assert "[discord] Chiara: add me a task to research the responses" in lines
+    assert "[discord] Cadence: A card is ready." in lines
+    # From Discord, the web lines are the marked ones.
+    assert "[web] Ada: ciao dal web" in await discord._recent_chat()
+
+
+# ----------------------------------------------------------------------
+# One person, one member across channels (21/11)
+# ----------------------------------------------------------------------
+
+
+async def _notices(queue):
+    return [m for m in await drain(queue) if isinstance(m, CoordinatorNoticeMessage)]
+
+
+async def _linked(tmp_path):
+    group = Group(tmp_path)
+    web, web_q = await open_web_space(group)
+    discord, discord_q = group.router(DISCORD, DISCORD_ROSTER)
+    await discord.route_coordinator(command("link", 9001, code="AB12CD"))
+    await drain(discord_q)
+    await drain(web_q)
+    return group, web, web_q, discord, discord_q
+
+
+async def _personal_code(web, web_q, member=100_000_001):
+    await web.route_coordinator(command("me", member))
+    (notice,) = await _notices(web_q)
+    assert notice.ok and "/coordinator me " in notice.text
+    return notice.text.split("Your personal code is ")[1].split(".")[0]
+
+
+async def test_a_web_member_gets_a_personal_code_and_becomes_one_member_on_discord(tmp_path):
+    group, web, web_q, discord, discord_q = await _linked(tmp_path)
+    code = await _personal_code(web, web_q)
+    assert len(code) == 6
+
+    await discord.route_coordinator(command("me", 9001, code=code.lower()))
+    notice = (await _notices(discord_q))[0]
+    assert notice.ok and "here you are Ada" in notice.text
+    # Chiara on Discord is Ada now: one member, under the web id, on both channels.
+    assert discord._roster() == {100_000_001: "Ada", 9002: "Dario", 100_000_002: "Bruno"}
+    assert web._roster() == {100_000_001: "Ada", 100_000_002: "Bruno", 9002: "Dario"}  # no second Ada on the web
+
+    # What she does on Discord is done as Ada: a task she adds for herself is Ada's on the web.
+    await discord.route_coordinator(command("task", 9001, add="Slides", owner=9001))
+    await discord.wait_for_background()
+    state = await group.store_for(WEB).load_state()
+    assert [(t.title, t.owner_id) for t in state.tasks] == [("Slides", 100_000_001)]
+
+
+async def test_a_personal_code_works_once_and_only_while_it_is_fresh(tmp_path):
+    group, web, web_q, discord, discord_q = await _linked(tmp_path)
+    code = await _personal_code(web, web_q)
+    await discord.route_coordinator(command("me", 9001, code=code))
+    assert (await _notices(discord_q))[0].ok
+    # Dario cannot use Ada's spent code to act as her.
+    await discord.route_coordinator(command("me", 9002, code=code))
+    refused = (await _notices(discord_q))[0]
+    assert not refused.ok and "not valid any more" in refused.text
+    assert discord._as_web(9002) == 9002
+    # An expired code is refused too.
+    stale = await group.store_for(WEB).new_identity_code(100_000_002, "Bruno", 0.0)
+    await discord.route_coordinator(command("me", 9002, code=stale))
+    assert not (await _notices(discord_q))[0].ok
+    # A new code for the same member cancels the earlier one.
+    first = await _personal_code(web, web_q, 100_000_002)
+    second = await _personal_code(web, web_q, 100_000_002)
+    await discord.route_coordinator(command("me", 9002, code=first))
+    assert not (await _notices(discord_q))[0].ok
+    await discord.route_coordinator(command("me", 9002, code=second))
+    assert (await _notices(discord_q))[0].ok
+
+
+async def test_the_code_is_asked_on_the_web_and_used_in_a_linked_channel(tmp_path):
+    group, web, web_q, discord, discord_q = await _linked(tmp_path)
+    # Using a code on the web itself, or asking for one on Discord, says where to go.
+    await web.route_coordinator(command("me", 100_000_001, code="ABC234"))
+    assert not (await _notices(web_q))[0].ok
+    await discord.route_coordinator(command("me", 9001))
+    said = (await _notices(discord_q))[0]
+    assert not said.ok and "/coordinator me <code>" in said.text
+    # A channel that is not linked to a web space has nobody to be.
+    alone, alone_q = group.router("channel:77", {5: "Eva"})
+    await alone.route_coordinator(command("me", 5, code="ABC234"))
+    assert "Link this channel" in (await _notices(alone_q))[0].text
+
+
+async def test_tasks_owned_before_the_claim_move_to_the_web_member(tmp_path):
+    group, web, web_q, discord, discord_q = await _linked(tmp_path)
+    await discord.route_coordinator(command("task", 9001, add="Survey", owner=9001))
+    await discord.wait_for_background()
+    assert (await group.store_for(WEB).load_state()).tasks[0].owner_id == 9001
+    code = await _personal_code(web, web_q)
+    await discord.route_coordinator(command("me", 9001, code=code))
+    assert (await group.store_for(WEB).load_state()).tasks[0].owner_id == 100_000_001
+
+
+async def test_chat_is_copied_one_way_only_into_the_web_space(tmp_path):
+    # 21/11: the Discord channel should not fill with what is written on the web.
+    group, web, web_q, discord, discord_q = await _linked(tmp_path)
+    await web.route_user_text(text(100_000_001, "Ada", "ciao dal web"))
+    assert [m for m in await drain(discord_q) if isinstance(m, CoordinatorMirrorMessage)] == []
+    await discord.route_user_text(text(9001, "Chiara", "ciao da Discord"))
+    (copy,) = [m for m in await drain(web_q) if isinstance(m, CoordinatorMirrorMessage)]
+    assert (copy.channel, copy.text) == ("discord", "ciao da Discord")
+    # Two chat channels do not copy to each other either: only the web collects.
+    slack, slack_q = group.router("slack:C1", {7001: "Eva"})
+    await slack.route_coordinator(command("link", 7001, code="AB12CD"))
+    await drain(slack_q)
+    await drain(web_q)
+    await discord.route_user_text(text(9001, "Chiara", "second line"))
+    assert [m for m in await drain(slack_q) if isinstance(m, CoordinatorMirrorMessage)] == []
+    assert len([m for m in await drain(web_q) if isinstance(m, CoordinatorMirrorMessage)]) == 1
