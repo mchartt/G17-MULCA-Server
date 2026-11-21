@@ -506,11 +506,11 @@ class PlanCommands:
         if isinstance(draft, str):
             return None, draft
         kind, payload = draft
-        # The card's reason is what Cadence just told the member, in their language.
-        try:
-            rationale = check_rationale(said)
-        except ValueError:
-            rationale = f"{asker}: {question}"[:300]
+        # The card's reason says who asked: Cadence's own answer is already the
+        # chat message right below, and the same sentence twice read as an echo
+        # (live test 20/11).
+        it = italian(state.language, f"{question} {said}")
+        rationale = f"Richiesta di {asker} in chat." if it else f"Asked by {asker} in the chat."
         card = await self._service().create(kind, payload, rationale=rationale, origin_channel=message.channel)
         return card, ""
 
@@ -743,6 +743,7 @@ def _date(value):
 def why_text(answer: WhyAnswer, members: dict[int, str]) -> str:
     """The answer, then its source: each decision with who decided, when, and from which card."""
     return "\n".join([answer.answer, *(_decision_source(d, members) for d in answer.decisions)])
+
 
 
 def ask_text(answer: AskAnswer, members: dict[int, str], *, it: bool = False) -> str:

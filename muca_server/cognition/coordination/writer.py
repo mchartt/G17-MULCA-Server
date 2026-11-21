@@ -190,7 +190,8 @@ def check_rationale(value: object) -> str:
     language is the group's, so the wording ("Stepping in because") is asked
     for in the prompt but not enforced.
     """
-    text = str(value or "").strip()
+    # A card shows plain text: markdown bold came out as "al **50%**" (20/11).
+    text = str(value or "").replace("**", "").strip()
     if not text:
         raise ValueError("empty rationale")
     if len(text.split()) > MAX_RATIONALE_WORDS or len(text) > MAX_RATIONALE_CHARS:
