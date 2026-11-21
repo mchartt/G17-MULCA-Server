@@ -300,6 +300,7 @@ class PlanOpener:
         # The "I'm listening" line: said once per question, and in which language.
         self._acked = False
         self._ack_language = "en"
+        self._ack_task: asyncio.Task | None = None
         self._tasks: set[asyncio.Task] = set()
         self._window: asyncio.Task | None = None
 
@@ -388,7 +389,7 @@ class PlanOpener:
             # A question ("has the prof uploaded the slides?") stays in the
             # window for the summary to judge, but gets no "I'm listening".
             self._acked = True
-            self._spawn(self._acknowledge(text))
+            self._ack_task = self._spawn(self._acknowledge(text))
         if self._window is None or self._window.done():
             self._window = self._spawn(self._close_then_draft())
 
@@ -417,6 +418,12 @@ class PlanOpener:
             logger.info("%s plan opener: no card (nothing to sum up, or no valid draft)", self._conversation.conversation_id)
             if self._acked:
                 # Cadence said a card would come: say that none does, and how to ask again.
+                # After that line, and in its language: it is written in the
+                # background (it reads the group's language first), and on a
+                # fast window this one could come out before it, in English
+                # (seen in CI on 21/11).
+                if self._ack_task is not None:
+                    await asyncio.gather(self._ack_task, return_exceptions=True)
                 await self._outbound.put(
                     AssistantTextMessage(text=NO_CARD[self._ack_language], is_final=True, modality="text")
                 )
