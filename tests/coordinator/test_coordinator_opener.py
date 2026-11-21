@@ -13,6 +13,7 @@ from datetime import date
 
 
 from muca_server.cognition.coordination.opener import (
+    ACKS,
     MARK,
     MAX_OPEN_SECONDS,
     MIN_OPEN_SECONDS,
@@ -396,3 +397,55 @@ async def test_proactive_cards_are_vetoed_while_the_opener_listens(store):
     clock.now += MAX_OPEN_SECONDS + 1  # the window is over: no rule says no any more (no R4 from the opener)
     assert not router.opener.listening
     assert router.proactive._veto(history, 500, 0) == ""  # noqa: SLF001
+
+
+# ----------------------------------------------------------------------
+# Live test 21/11: language of the question, and no silent minute
+# ----------------------------------------------------------------------
+
+ITALIAN_CHARTER = {
+    **GOOD_CHARTER,
+    "goal": "Progettare e prototipare un'app per coordinare i gruppi di studenti.",
+    "deliverables": ["RASD", "Prototipo interattivo", "Demo finale"],
+    "rationale": "Intervengo perché le scadenze sono vicine.",
+}
+
+
+async def test_an_italian_charter_gets_the_question_in_italian(store):
+    router, queue, _ = make_router(store, ITALIAN_CHARTER)
+    await confirm_charter(router, queue)
+    (question,) = of_type(await drain(queue), AssistantTextMessage)
+    assert question.text.startswith("Il charter è confermato.")
+
+
+async def test_a_chosen_language_wins_over_the_charter(store):
+    router, queue, _ = make_router(store, ITALIAN_CHARTER)
+    await store.save_setting("language", "en")
+    await confirm_charter(router, queue)
+    (question,) = of_type(await drain(queue), AssistantTextMessage)
+    assert "How do you want to plan the work?" in question.text
+
+
+async def test_the_first_answer_is_acknowledged_once_in_the_groups_language(store):
+    router, queue, _ = make_router(store, ITALIAN_CHARTER, AGREED)
+    await confirm_charter(router, queue)
+    sent = await answer(
+        router, queue,
+        (1, "Ada", "Dividiamo i compiti il lunedì."),
+        (2, "Bruno", "E decidiamo in chat."),
+    )
+    texts = [m.text for m in of_type(sent, AssistantTextMessage)]
+    assert texts == [ACKS["it"]]
+    # The ack comes before the card.
+    first_card = next(i for i, m in enumerate(sent) if isinstance(m, CoordinatorProposalMessage))
+    assert sent.index(of_type(sent, AssistantTextMessage)[0]) < first_card
+
+
+async def test_no_ack_when_nobody_answers(store):
+    router, queue, clock = make_router(store, GOOD_CHARTER)
+    await confirm_charter(router, queue)
+    await drain(queue)
+    clock.now += MAX_OPEN_SECONDS + 1
+    await router.route_user_text(said(1, "Ada", "Late answer"))
+    await router.opener.wait()
+    assert of_type(await drain(queue), AssistantTextMessage) == []

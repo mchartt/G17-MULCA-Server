@@ -104,7 +104,7 @@ def _update_draft(action: AskAction, tasks: dict, members: dict[int, str], evide
     )
     # The card lists what was said (a check-in card's "findings"), so the group sees why.
     said = [f"{e.speaker}: {e.text}"[:300] for e in evidence[-1:]] or [option.label]
-    return ProposalKind.CHECKIN, CheckinPayload(findings=said, options=[option])
+    return ProposalKind.CHECKIN, CheckinPayload(findings=said, options=[option], requested=True)
 
 
 def update_label(title: str, changes: dict, members: dict[int, str], it: bool) -> str:

@@ -326,6 +326,10 @@ class CheckinPayload(_Model):
 
     findings: list[str] = Field(min_length=1, max_length=10)
     options: list[CheckinOption] = Field(min_length=1, max_length=3)
+    # True when a member asked for this change in words ("Cadence, segna X al
+    # 50%", ask_cards.py): the card is an update they requested, not a check-in
+    # of what is late, and the browser titles it so (live test 20/11).
+    requested: bool = False
 
 
 class BlockerCertainty(StrEnum):

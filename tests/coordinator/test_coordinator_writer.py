@@ -62,3 +62,10 @@ async def test_a_rationale_that_is_empty_or_over_60_words_costs_a_retry():
     client = FakeChatClient(dict(GOOD_CHARTER, rationale=""), too_long)
     assert await ProposalWriter(client).draft_charter("text", today=TODAY) is None
     assert len(client.calls) == 2
+
+
+def test_a_rationale_loses_markdown_bold():
+    """Live test 20/11: the card read "al **50%**", asterisks included."""
+    from muca_server.cognition.coordination.writer import check_rationale
+
+    assert check_rationale("L'aggiornamento al **50%** è pronto.") == "L'aggiornamento al 50% è pronto."

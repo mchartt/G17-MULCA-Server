@@ -43,6 +43,10 @@ async def test_asked_to_mark_progress_cadence_drafts_a_card_and_the_click_saves_
     assert option["label"] == f"«{PROTOTYPE}»: avanzamento 50%"
     assert "ho fatto metà del prototipo" in card["payload"]["findings"][0]
     assert (await by_id(store, proto)).progress == 0  # nothing changed before the click
+    # Live test 20/11: a requested update is titled as such, and its reason
+    # is not the chat answer repeated (that came out twice, card and message).
+    assert card["payload"]["requested"] is True
+    assert card["rationale"].startswith("Richiesta di ") and card["rationale"] != notice.text
 
     await router.route_coordinator(choose(card["proposal_id"]))
     sent = await drain(queue)
@@ -57,6 +61,7 @@ async def test_a_new_owner_date_and_status_go_on_one_option(store):
         {"kind": "update_task", "task_id": proto, "owner_id": BRUNO, "due_date": "2026-11-28", "status": "doing"},
     ))
     _, (card,) = await ask(router, queue, "Cadence, Bruno takes over the prototype from now, due the 28th")
+    assert card["rationale"].startswith("Asked by ")
     (option,) = card["payload"]["options"]
     assert option["label"] == f"“{PROTOTYPE}”: status: doing, owner Bruno, due 28 Nov"
     await router.route_coordinator(choose(card["proposal_id"]))
