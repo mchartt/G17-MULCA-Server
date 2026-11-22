@@ -504,12 +504,9 @@ async def test_a_personal_code_works_once_and_only_while_it_is_fresh(tmp_path):
 
 async def test_the_code_is_asked_on_the_web_and_used_in_a_linked_channel(tmp_path):
     group, web, web_q, discord, discord_q = await _linked(tmp_path)
-    # Using a code on the web itself, or asking for one on Discord, says where to go.
+    # Using a code on the web itself says where to go.
     await web.route_coordinator(command("me", 100_000_001, code="ABC234"))
     assert not (await _notices(web_q))[0].ok
-    await discord.route_coordinator(command("me", 9001))
-    said = (await _notices(discord_q))[0]
-    assert not said.ok and "/coordinator me <code>" in said.text
     # A channel that is not linked to a web space has nobody to be.
     alone, alone_q = group.router("channel:77", {5: "Eva"})
     await alone.route_coordinator(command("me", 5, code="ABC234"))
@@ -542,3 +539,66 @@ async def test_chat_is_copied_one_way_only_into_the_web_space(tmp_path):
     await discord.route_user_text(text(9001, "Chiara", "second line"))
     assert [m for m in await drain(slack_q) if isinstance(m, CoordinatorMirrorMessage)] == []
     assert len([m for m in await drain(web_q) if isinstance(m, CoordinatorMirrorMessage)]) == 1
+
+
+async def test_a_code_from_one_channel_makes_the_same_person_one_member_in_the_other(tmp_path):
+    """
+    22/11 demo run: Mati on Discord and Mati on Slack were two members ("assigned
+    to Mati, not you") unless they also had a web account. A code asked in one
+    channel and used in the other joins them, and the tasks follow.
+    """
+    group, web, web_q, discord, discord_q = await _linked(tmp_path)
+    slack, slack_q = group.router("slack:C1", {7001: "Mati Chialva"})
+    await slack.route_coordinator(command("link", 7001, code="AB12CD"))
+    await drain(slack_q)
+    await slack.route_coordinator(command("task", 7001, add="Report", owner=7001))
+    await slack.wait_for_background()
+
+    await drain(discord_q)
+    await discord.route_coordinator(command("me", 9001))  # no code: one is given here
+    given = (await _notices(discord_q))[-1]
+    assert given.ok and "other channel" in given.text
+    code = given.text.split("Your personal code is ")[1].split(".")[0]
+    # Their own code where they got it joins nothing.
+    await discord.route_coordinator(command("me", 9001, code=code))
+    assert not (await _notices(discord_q))[0].ok
+
+    await discord.route_coordinator(command("me", 9001))
+    code = (await _notices(discord_q))[0].text.split("Your personal code is ")[1].split(".")[0]
+    await drain(slack_q)
+    await slack.route_coordinator(command("me", 7001, code=code))
+    done = (await _notices(slack_q))[0]
+    assert done.ok and "here you are Chiara" in done.text
+    assert (await group.store_for(WEB).load_state()).tasks[0].owner_id == 9001  # the Slack task is theirs on Discord
+
+
+async def test_what_cadence_says_in_a_channel_is_shown_on_the_web_too(tmp_path):
+    """22/11: the web showed the question asked on Discord and not Cadence's answer."""
+    group, web, web_q, discord, discord_q = await _linked(tmp_path)
+    await discord._say("Chiara, how is the survey going?")
+    copies = [m for m in await drain(web_q) if isinstance(m, CoordinatorMirrorMessage)]
+    assert [(c.speaker_name, c.channel, c.text) for c in copies] == [("Cadence", "discord", "Chiara, how is the survey going?")]
+    # Not the other way: what Cadence says on the web stays on the web.
+    await web._say("Ada, how is the API going?")
+    assert [m for m in await drain(discord_q) if isinstance(m, CoordinatorMirrorMessage)] == []
+
+
+async def test_a_channel_newcomer_with_no_profile_is_asked_for_it_once(tmp_path):
+    """22/11: joining from Discord or Slack asked nothing; the web app asks what you study, your skills, your hours."""
+    from muca_server.protocol import AssistantTextMessage
+
+    group, web, web_q, discord, discord_q = await _linked(tmp_path)
+
+    async def welcomes():
+        await discord.wait_for_background()
+        return [m.text for m in await drain(discord_q) if isinstance(m, AssistantTextMessage) and "welcome to the project" in m.text]
+
+    await discord.route_user_text(text(9001, "Chiara", "hi all, I just joined"))
+    (asked,) = await welcomes()
+    assert asked.startswith("Chiara, welcome to the project") and "how many hours a week" in asked
+    await discord.route_user_text(text(9001, "Chiara", "anyone here?"))
+    assert await welcomes() == []  # once per member
+    # A member of the web space is never asked: the web app asked them at the door.
+    await web.route_user_text(text(100_000_001, "Ada", "hello"))
+    await web.wait_for_background()
+    assert not [m for m in await drain(web_q) if isinstance(m, AssistantTextMessage) and "welcome" in m.text]

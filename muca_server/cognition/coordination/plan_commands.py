@@ -36,6 +36,7 @@ messages one by one and must never wait for the model.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import logging
 import re
 import time
@@ -47,6 +48,7 @@ from typing import Any
 from .checkin import findings, in_italian, owners_report
 
 from .models import (
+    MemberProfile,
     MAX_TEXT,
     MAX_TITLE,
     BlockerCertainty,
@@ -99,6 +101,7 @@ class PlanCommands:
         today: Callable[[], date] = date.today,
         recent_chat: Callable[[], Awaitable[list[str]]] | None = None,
         remember: Callable[[int, str, str], Awaitable[None]] | None = None,
+        answered: Callable[[str], Awaitable[None]] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._participants = participants
@@ -114,8 +117,10 @@ class PlanCommands:
         # question and its answer are written so the next turn sees them.
         self._recent_chat = recent_chat
         self._remember = remember
+        self._answered = answered
         self._task: asyncio.Task | None = None
         self._dependencies: asyncio.Task | None = None
+        self._owners: asyncio.Task | None = None
         # Messages to Cadence ("ask") wait their turn instead of being refused:
         # on 20/11 a second message while the first was being answered got
         # "already working" and, for a follow-up, nothing at all. One at a
@@ -176,6 +181,23 @@ class PlanCommands:
             await asyncio.gather(self._task, return_exceptions=True)
         if self._dependencies is not None:
             await asyncio.gather(self._dependencies, return_exceptions=True)
+
+    def suggest_owners(self, new_ids: list[str], channel: str) -> None:
+        """
+        A confirmed dependency card can add tasks nobody owns (the task that
+        waits, the work it waits on). They stay unassigned, and Cadence asks
+        who takes them with the same card as "Find owners" (decided 22/11:
+        better a card to assign well than an owner guessed from the chat).
+        """
+        if not new_ids or (self._owners is not None and not self._owners.done()):
+            return
+        self._owners = asyncio.create_task(self._owner_cards(set(new_ids), channel))
+
+    async def _owner_cards(self, new_ids: set[str], channel: str) -> None:
+        try:
+            await self._find_owners(SimpleNamespace(channel=channel, request_id="", event="coordinator_command"), only=new_ids)
+        except Exception:
+            logger.exception("Could not suggest owners for the tasks a dependency card added")
 
     def suggest_dependencies(self, new_ids: list[str], channel: str) -> None:
         """
@@ -304,7 +326,7 @@ class PlanCommands:
         await self._send_proposal(proposal)
         await self._notice(True, "Plan card posted: any member can confirm or reject it.", message.request_id)
 
-    async def _find_owners(self, message) -> None:
+    async def _find_owners(self, message, *, only: set[str] | None = None) -> None:
         """
         "Find owners" (Matteo, 20/11): every open task with no owner, and the
         member Cadence suggests for each from the profiles, in one plan card.
@@ -313,14 +335,20 @@ class PlanCommands:
         """
         members = self._participants()
         state = await self._store().load_state()
-        ownerless = [t for t in state.tasks if t.owner_id is None and t.status != TaskStatus.DONE][:15]
+        quiet = only is not None  # nobody asked: no notices, only the card
+        ownerless = [
+            t for t in state.tasks
+            if t.owner_id is None and t.status != TaskStatus.DONE and (only is None or t.task_id in only)
+        ][:15]
         if not ownerless:
-            await self._notice(True, "Every open task already has an owner.", message.request_id)
+            if not quiet:
+                await self._notice(True, "Every open task already has an owner.", message.request_id)
             return
         text = "\n".join(t.title for t in ownerless)
         draft = await self._writer.draft_plan(text, members=members, state=state, today=self._today())
         if draft is None or len(draft.payload.items) != len(ownerless):
-            await self._unavailable(message.event, message.request_id)
+            if not quiet:
+                await self._unavailable(message.event, message.request_id)
             return
         items = [
             PlanItem(title=task.title, owner_id=item.owner_id, reason=item.reason, due_date=task.due_date, task_id=task.task_id)
@@ -330,7 +358,8 @@ class PlanCommands:
             ProposalKind.PLAN, PlanPayload(items=items), rationale=draft.rationale, origin_channel=message.channel
         )
         await self._send_proposal(proposal)
-        await self._notice(True, "Cadence suggested owners in a card: any member can confirm it.", message.request_id)
+        if not quiet:
+            await self._notice(True, "Cadence suggested owners in a card: any member can confirm it.", message.request_id)
 
     async def _checkin(self, message) -> None:
         asker = self._participants().get(message.member_id, "")
@@ -488,6 +517,9 @@ class PlanCommands:
             # A short "grazie" or "ok" to a progress reply needs no sources line.
             text = answer.answer
         card = None
+        if answer.action is not None and answer.action.kind == "profile":
+            await self._save_profile(message.member_id, answer.action, members)
+            answer = replace(answer, action=None)  # saved: it is not a card
         if answer.action is not None:
             # The member asked for a change: it becomes a card a member confirms,
             # never a change made here. The server's own checks have the last word.
@@ -502,12 +534,37 @@ class PlanCommands:
             await self._remember(message.member_id, said, text.split("\n")[0] if card is None and answer.action else answer.answer)
         if card is not None:
             await self._send_proposal(card)
+        if post is None and self._answered is not None:
+            # The channel posts this answer itself (it comes back as a notice):
+            # the router is told, so the web space can show it too.
+            await self._answered(text)
         if post is not None:
             await post(text)
             return
         # Last, so this request is over when the member reads the answer: a
         # follow-up typed at once is never refused as "already working" (20/11 e2e).
         await self._notice(True, text, message.request_id)
+
+    async def _save_profile(self, member_id: int, action: AskAction, members: dict[int, str]) -> None:
+        """
+        What a member said about themselves, kept as their profile (22/11: a
+        member who joins from Discord or Slack is asked what the web app asks
+        at the door). Their own words about themselves, so no card; what they
+        did not say keeps its earlier value.
+        """
+        store = self._store()
+        old = next((m for m in (await store.load_state()).members if m.member_id == member_id), None)
+        await store.upsert_member(
+            MemberProfile(
+                member_id=member_id,
+                display_name=(old.display_name if old else "") or members.get(member_id, "member"),
+                discipline=action.discipline or (old.discipline if old else ""),
+                skills=list(action.skills) or (old.skills if old else []),
+                weekly_hours=action.weekly_hours if action.weekly_hours is not None else (old.weekly_hours if old else None),
+                background=old.background if old else "",
+            )
+        )
+        await self._send_state("")
 
     async def _action_card(self, action: AskAction, message, question: str, chat: list[str], state, said: str):
         """

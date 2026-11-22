@@ -125,6 +125,7 @@ def kickoff_on_web() -> str:
     )
 
 
+WELCOME_DELAY_SECONDS = 12.0  # after the member's first message: Cadence's answer to it comes first
 KICKOFF_RUNNING = "A kickoff is already running for this group: its card will appear here."
 
 
@@ -174,6 +175,9 @@ class CoordinatorRouter:
         self._late_read: dict[str, float] = {}
         # Lines the client sent to ask as "maybe" (text -> time), for the same check the other way.
         self._asked: dict[str, float] = {}
+        # Members already looked at for the welcome question, and the questions being asked.
+        self._welcomed: set[int] = set()
+        self._welcomes: set[asyncio.Task] = set()
         # The kickoff running in the background, if any (one per group).
         self._kickoff: asyncio.Task | None = None
         # The reflection being built (it may ask the model for the week's topics).
@@ -209,6 +213,7 @@ class CoordinatorRouter:
             today=today,
             recent_chat=self._recent_chat if catchup is not None else None,
             remember=self._remember if catchup is not None else None,
+            answered=self._mirror_cadence,
         )
         if self.proactive is not None:
             # R11: what the lab's agent would answer in the group chat, Cadence answers.
@@ -269,6 +274,8 @@ class CoordinatorRouter:
         """Session worker: stop the timer and the opener, then close the Conversation as before."""
         await self.checkin_timer.close()
         await self.opener.close()
+        for task in list(self._welcomes):
+            task.cancel()
         self._leave_live()
         await self._conversation.close()
 
@@ -301,6 +308,10 @@ class CoordinatorRouter:
         except Exception:  # showing a copy elsewhere must never break the chat
             logger.exception("%s could not mirror a message", self._conversation.conversation_id)
         try:
+            self._welcome(message)
+        except Exception:  # a welcome must never break the chat
+            logger.exception("%s could not welcome a member", self._conversation.conversation_id)
+        try:
             self.opener.heard(message)
         except Exception:  # an answer to the opener must never break the chat
             logger.exception("%s plan opener could not read a message", self._conversation.conversation_id)
@@ -326,6 +337,68 @@ class CoordinatorRouter:
             # lines written elsewhere was not wanted there.
             if peer._conversation.conversation_id.startswith(WEB_PREFIX):
                 await peer._outbound.put(copy)
+
+    def _welcome(self, message: Any) -> None:
+        """
+        A member who writes in a linked Discord or Slack channel and has no
+        profile yet is asked once what the web app asks at the door: what they
+        study, their skills, their hours (decided 22/11). Their answer in the
+        chat is read by `ask` and saved as their profile (action "profile").
+        In the background, a little later, so Cadence's answer to what they
+        wrote comes first.
+        """
+        here = self._conversation.conversation_id
+        speaker = getattr(message, "speaker", None)
+        if speaker is None or not here.startswith(LINKABLE) or self._home() == here:
+            return
+        if self._conversation.is_private or self._conversation.is_ephemeral or speaker in self._welcomed:
+            return
+        self._welcomed.add(speaker)
+        name = getattr(message, "speaker_name", "") or self._conversation.participants().get(speaker, "")
+        task = asyncio.create_task(self._ask_profile(self._as_web(speaker), name))
+        self._welcomes.add(task)
+        task.add_done_callback(self._welcomes.discard)
+
+    async def _ask_profile(self, member_id: int, name: str) -> None:
+        try:
+            store = self._store_now()
+            mark = f"profile_asked:{member_id}"
+            if await store.mark(mark) is not None:
+                return  # asked before (in this channel or another one of the project)
+            known = next((m for m in (await store.load_state()).members if m.member_id == member_id), None)
+            if known is not None and (known.discipline or known.skills or known.weekly_hours is not None):
+                return  # they have a profile, from the web or from /coordinator profile
+            await store.save_mark(mark, 0, time.time())
+            await asyncio.sleep(WELCOME_DELAY_SECONDS)
+            it = italian(await store.setting("language"), "")
+            who = f"{name}, " if name else ""
+            await self._say(
+                f"{who}benvenuto nel progetto. Per proporti attività adatte a te, scrivimi in una riga cosa studi, "
+                "cosa sai fare e quante ore a settimana hai (per esempio: «psicologia, interviste e questionari, 6 ore»)."
+                if it else
+                f"{who}welcome to the project. So I can suggest tasks that fit you, tell me in one line what you study, "
+                "what you are good at and how many hours a week you have (for example: “psychology, interviews and surveys, 6 hours”)."
+            )
+        except Exception:
+            logger.exception("%s could not ask a member for their profile", self._conversation.conversation_id)
+
+    async def _mirror_cadence(self, text: str) -> None:
+        """
+        What Cadence says in a Discord or Slack channel is shown in the web
+        space too (decided 22/11): the web showed the member's question and
+        not the answer, so it looked unanswered there. One way, like `_mirror`.
+        """
+        here = self._conversation.conversation_id
+        text = (text or "").strip()
+        if not text or here.startswith(WEB_PREFIX) or self._conversation.is_private or self._conversation.is_ephemeral:
+            return
+        copy = CoordinatorMirrorMessage(channel=channel_of(here), speaker=0, speaker_name="Cadence", text=text, at=time.time())
+        try:
+            for peer in self._peers():
+                if peer._conversation.conversation_id.startswith(WEB_PREFIX):
+                    await peer._outbound.put(copy)
+        except Exception:  # a copy elsewhere must never stop the answer
+            logger.exception("%s could not copy Cadence's answer to the web", here)
 
     # ------------------------------------------------------------------
     # Entry point, called by events/dispatcher.py
@@ -438,6 +511,8 @@ class CoordinatorRouter:
             await asyncio.gather(self._reflecting, return_exceptions=True)
         if self._recapping is not None:
             await asyncio.gather(self._recapping, return_exceptions=True)
+        if self._welcomes:
+            await asyncio.gather(*self._welcomes, return_exceptions=True)
         if self.proactive is not None:
             await self.proactive.wait()
         await self._plan.wait()
@@ -651,6 +726,10 @@ class CoordinatorRouter:
                 # A confirmed plan adds tasks: look for likely dependencies among them, in the background.
                 added = [t.task_id for t in (await self._store_now().load_state()).tasks if t.task_id not in before]
                 self._plan.suggest_dependencies(added, message.channel)
+            if proposal is not None and proposal.kind is ProposalKind.BLOCKER and proposal.status is ProposalStatus.APPLIED:
+                # A confirmed dependency can add tasks nobody owns: ask who takes them, with a card.
+                added = [t.task_id for t in (await self._store_now().load_state()).tasks if t.task_id not in before]
+                self._plan.suggest_owners(added, message.channel)
 
     async def _on_approach(self, message: CoordinatorCommandMessage) -> None:
         """"Plan together": ask how the group plans the work, now (a member's action)."""
@@ -819,14 +898,24 @@ class CoordinatorRouter:
             await self._notice(False, "Link this channel to the web space first: /coordinator link <invite code>.", request_id)
             return
         if not code:
+            # No code: this member gets one here, to use in the project's OTHER
+            # channel (22/11: the same person on Discord and on Slack was two
+            # members unless they also had a web account). Whoever uses the
+            # code there becomes this member; if this member is already a web
+            # member here, the code is for that web member.
+            name = self._roster().get(self._as_web(message.member_id)) or self._conversation.participants().get(message.member_id, "member")
+            fresh = await self._store_now().new_identity_code(self._as_web(message.member_id), name, time.time())
             await self._notice(
-                False,
-                "Write your personal code: /coordinator me <code>. You get it in the web app, under "
-                "“Connect Slack or Discord”.",
+                True,
+                f"Your personal code is {fresh}. In the other channel of this project (Slack or Discord) write: "
+                f"/coordinator me {fresh}, and you are the same member in both. It works once and for 15 minutes; "
+                "never share it: whoever uses it acts as you. If you use the web app, get the code there instead.",
                 request_id,
             )
             return
         claimed = await self._store_now().claim_identity(code, here, message.member_id, time.time())
+        if claimed is not None and claimed[0] == message.member_id:
+            claimed = None  # their own code, used where they got it: nothing to join
         if claimed is None:
             await self._notice(False, "This code is not valid any more. Get a new one in the web app.", request_id)
             return
@@ -835,7 +924,7 @@ class CoordinatorRouter:
         logger.info("%s member %s is web member %s", here, message.member_id, claimed[0])
         await self._notice(
             True,
-            f"Done: here you are {claimed[1]}, the same member as on the web. Your tasks, profile and "
+            f"Done: here you are {claimed[1]}, the same member as in the channel where you got the code. Your tasks, profile and "
             "cards follow you on both.",
             request_id,
         )
@@ -1011,6 +1100,7 @@ class CoordinatorRouter:
             if wait_until_idle is not None:
                 await wait_until_idle()
         await self._outbound.put(AssistantTextMessage(text=text, is_final=True, modality="text"))
+        await self._mirror_cadence(text)
         tell_observers = getattr(self._conversation, "tell_observers", None)
         if tell_observers is not None:
             await tell_observers(f"Cadence: {text}")

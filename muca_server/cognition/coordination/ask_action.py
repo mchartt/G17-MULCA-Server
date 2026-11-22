@@ -30,7 +30,7 @@ _OPT_TEXT = {"type": ["string", "null"]}
 ACTION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "kind": {"type": "string", "enum": ["none", "new_task", "plan", "dependency", "update_task"]},
+        "kind": {"type": "string", "enum": ["none", "new_task", "plan", "dependency", "update_task", "profile"]},
         "task_id": _OPT_TEXT,
         "title": {"type": "string"},
         "owner_id": _OPT_ID,
@@ -51,9 +51,12 @@ ACTION_SCHEMA: dict[str, Any] = {
         "depends_on_owner_id": _OPT_ID,
         "replaces_task_id": _OPT_TEXT,
         "drop": {"type": ["boolean", "null"]},
+        "discipline": _OPT_TEXT,
+        "skills": {"type": "array", "items": {"type": "string"}},
+        "weekly_hours": _OPT_ID,
     },
     "required": ["kind", "task_id", "title", "owner_id", "due_date", "status", "progress", "items",
-                 "depends_on_task_id", "depends_on_title", "depends_on_owner_id", "replaces_task_id", "drop"],
+                 "depends_on_task_id", "depends_on_title", "depends_on_owner_id", "replaces_task_id", "drop", "discipline", "skills", "weekly_hours"],
     "additionalProperties": False,
 }
 
@@ -78,6 +81,11 @@ class AskAction:
     replaces_task_id: str | None = None
     # update_task only: the task leaves the plan ("drop the 10 interviews, we split it").
     drop: bool = False
+    # profile only: what the member said about themselves (what they study,
+    # their skills, their hours a week). Saved as their profile, no card.
+    discipline: str = ""
+    skills: tuple[str, ...] = ()
+    weekly_hours: int | None = None
 
 
 def _title(value: Any) -> str:
@@ -108,6 +116,15 @@ def ask_action(data: dict, tasks: dict[str, Task], members: dict[int, str], toda
     for key in ("task_id", "depends_on_task_id", "replaces_task_id"):
         if data.get(key) is not None and data[key] not in tasks:
             raise ValueError(f"{key} is not a plan task")
+    if kind == "profile":
+        discipline = " ".join(str(data.get("discipline") or "").split())[:100]
+        skills = tuple(" ".join(str(x).split())[:40] for x in (data.get("skills") or []) if str(x).strip())[:20]
+        hours = data.get("weekly_hours")
+        if hours is not None and not (isinstance(hours, int) and 0 <= hours <= 80):
+            raise ValueError("weekly hours are 0-80")
+        if not discipline and not skills and hours is None:
+            raise ValueError("a profile says something about the member")
+        return AskAction("profile", None, "", discipline=discipline, skills=skills, weekly_hours=hours)
     if kind == "new_task":
         if not title:
             raise ValueError("a new task needs a title")

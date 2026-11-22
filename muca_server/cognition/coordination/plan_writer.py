@@ -270,9 +270,17 @@ kind "none" and ask one precise question instead):
   or, if not in the plan, depends_on_title (its name) with depends_on_owner_id
   = the member who must deliver it, if named. Direction: if A needs B first,
   task_id = A, depends_on = B. Never the same task on both sides.
+- "profile": the member tells you about THEMSELVES (what they study, what
+  they are good at, how many hours a week they have), usually answering your
+  welcome question: discipline (short), skills (a list of short words),
+  weekly_hours (a number, else null). It is saved at once as their own
+  profile, with no card: say in `answer` that you noted it and, in one
+  sentence, which open task of the plan could fit them. Never for what they
+  say about someone else.
 - "none": every other field null, "" or [].
 - items is [] and replaces_task_id null unless kind is "plan"; status,
-  progress and drop are null unless kind is "update_task".
+  progress and drop are null unless kind is "update_task"; discipline and
+  weekly_hours are null and skills [] unless kind is "profile".
 - Use the members' names, never their ids. Dates as people say them.
 task_ids, milestone_ids, decision_ids: only the ids of the saved items your
 answer actually names or states facts from (not everything you looked at).

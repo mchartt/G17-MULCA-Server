@@ -67,6 +67,14 @@ class FakeConversation:
         self.texts = [*getattr(self, "texts", []), message.text]
 
 
+@pytest.fixture(autouse=True)
+def _no_welcome_delay(monkeypatch):
+    """The welcome question to a channel newcomer waits a few seconds in real use; not in tests."""
+    from muca_server.cognition.coordination import router
+
+    monkeypatch.setattr(router, "WELCOME_DELAY_SECONDS", 0.0)
+
+
 @pytest.fixture
 def store(tmp_path) -> CoordinationStore:
     return CoordinationStore(tmp_path / "group.db")
