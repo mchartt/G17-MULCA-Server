@@ -17,6 +17,7 @@ What counts as a finding (one line each, in the members' terms):
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 
@@ -88,3 +89,44 @@ def _owner(task: Task, members: dict[int, str]) -> str:
 
 def _day(value: date) -> str:
     return f"{value.day} {value:%b}"
+
+
+# The findings are written in English (the model and the tests read them);
+# an Italian group reads them in Italian on the card (22/11 live: "Due soon:
+# … is due 24 Nov." inside an Italian card).
+_MONTHS_IT = dict(zip(
+    "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(),
+    "gen feb mar apr mag giu lug ago set ott nov dic".split(),
+))
+_DAY = r"(\d{1,2}) ([A-Z][a-z]{2})"
+
+
+def _day_it(day: str, month: str) -> str:
+    return f"{day} {_MONTHS_IT.get(month, month)}"
+
+
+def _who_it(who: str) -> str:
+    return "senza responsabile" if who == "no owner" else who
+
+
+_ITALIAN = [
+    (re.compile(rf"^Late: “(.*)” \((.*)\) was due {_DAY}\.$"),
+     lambda m: f"In ritardo: «{m[1]}» ({_who_it(m[2])}) era per il {_day_it(m[3], m[4])}."),
+    (re.compile(rf"^Due soon: “(.*)” \((.*)\) is due {_DAY}\.$"),
+     lambda m: f"In scadenza: «{m[1]}» ({_who_it(m[2])}) è per il {_day_it(m[3], m[4])}."),
+    (re.compile(r"^Blocked: “(.*)” \((.*)\)\.$"), lambda m: f"Bloccata: «{m[1]}» ({_who_it(m[2])})."),
+    (re.compile(r"^No owner: “(.*)”\.$"), lambda m: f"Senza responsabile: «{m[1]}»."),
+    (re.compile(rf"^Dependency: “(.*)” waits on “(.*)”, due after it \({_DAY}\)\.$"),
+     lambda m: f"Dipendenza: «{m[1]}» aspetta «{m[2]}», che scade dopo ({_day_it(m[3], m[4])})."),
+    (re.compile(rf"^Milestone “(.*)” on {_DAY} with (\d+) open task\(s\)\.$"),
+     lambda m: f"Milestone «{m[1]}» il {_day_it(m[2], m[3])} con {m[4]} attività aperte."),
+]
+
+
+def in_italian(text: str) -> str:
+    """One finding in Italian; a sentence this does not know stays as it is."""
+    for pattern, write in _ITALIAN:
+        match = pattern.match(text)
+        if match:
+            return write(match)
+    return text

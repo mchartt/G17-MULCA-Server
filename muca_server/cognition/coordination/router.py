@@ -76,7 +76,7 @@ from .models import (
 )
 from .opener import PlanOpener, is_question
 from .plan_commands import PlanCommands
-from .plan_writer import PlanWriter
+from .plan_writer import PlanWriter, plan_lines
 from .plan_writes import topic_key
 from .progress import ProgressMonitor, timezone_from
 from .proactive import ProactiveBridge, claim_key
@@ -865,7 +865,13 @@ class CoordinatorRouter:
             if recap:
                 places = [result.get("here") or {"messages": []}, *result["elsewhere"]]
                 lines = [f"{m['speaker']}: {m['text']}" for place in places for m in place["messages"]]
-                recap = await PlanWriter(self._writer).draft_recap(lines) if len(lines) >= RECAP_MIN_MESSAGES else None
+                state = await self._store_now().load_state()
+                plan = plan_lines(state, self._roster()) if state.tasks else ""
+                recap = (
+                    await PlanWriter(self._writer).draft_recap(lines, plan=plan)
+                    if len(lines) >= RECAP_MIN_MESSAGES
+                    else None
+                )
                 result["recap"] = recap or {"overview": "", "topics": [], "open": []}
                 result["topics"] = result["recap"]["topics"]  # older clients read the topics only
             # The group's language, or the language its messages are in.
