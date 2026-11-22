@@ -292,6 +292,10 @@ class PlanPayload(_Model):
     """/planning: the whole list is confirmed (or rejected) with one click."""
 
     items: list[PlanItem] = Field(min_length=1, max_length=15)
+    # A split asked in words (22/11): the plan task these tasks replace. It
+    # leaves the plan when the card is confirmed; the title is for the card.
+    replaces_task_id: str | None = Field(default=None, max_length=40)
+    replaces_title: str = Field(default="", max_length=MAX_TITLE)
 
 
 class CheckinOption(_Model):

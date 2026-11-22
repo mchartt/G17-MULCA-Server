@@ -49,9 +49,10 @@ ACTION_SCHEMA: dict[str, Any] = {
         "depends_on_task_id": _OPT_TEXT,
         "depends_on_title": {"type": "string"},
         "depends_on_owner_id": _OPT_ID,
+        "replaces_task_id": _OPT_TEXT,
     },
     "required": ["kind", "task_id", "title", "owner_id", "due_date", "status", "progress", "items",
-                 "depends_on_task_id", "depends_on_title", "depends_on_owner_id"],
+                 "depends_on_task_id", "depends_on_title", "depends_on_owner_id", "replaces_task_id"],
     "additionalProperties": False,
 }
 
@@ -71,6 +72,9 @@ class AskAction:
     status: TaskStatus | None = None  # update_task only
     progress: int | None = None  # update_task only, 0-100
     items: tuple[PlanItem, ...] = ()  # plan only
+    # plan only: the plan task these new tasks take the place of (a split:
+    # "5 interviews for me, 5 for Omar" replaces "Run the 10 interviews").
+    replaces_task_id: str | None = None
 
 
 def _title(value: Any) -> str:
@@ -98,7 +102,7 @@ def ask_action(data: dict, tasks: dict[str, Task], members: dict[int, str], toda
     title = _title(data.get("title"))
     owner = _owner(data.get("owner_id"), members)
     _owner(data.get("depends_on_owner_id"), members)
-    for key in ("task_id", "depends_on_task_id"):
+    for key in ("task_id", "depends_on_task_id", "replaces_task_id"):
         if data.get(key) is not None and data[key] not in tasks:
             raise ValueError(f"{key} is not a plan task")
     if kind == "new_task":
@@ -106,7 +110,7 @@ def ask_action(data: dict, tasks: dict[str, Task], members: dict[int, str], toda
             raise ValueError("a new task needs a title")
         return AskAction("new_task", None, title, owner_id=owner, due_date=_due(data.get("due_date"), today))
     if kind == "plan":
-        return _plan(data.get("items") or [], members, today)
+        return _plan(data.get("items") or [], members, today, data.get("replaces_task_id"))
     if kind == "update_task":
         return _update(data, tasks, owner, today)
     if kind == "dependency":
@@ -114,7 +118,7 @@ def ask_action(data: dict, tasks: dict[str, Task], members: dict[int, str], toda
     raise ValueError("unknown action")
 
 
-def _plan(raw: list, members: dict[int, str], today: date | None) -> AskAction:
+def _plan(raw: list, members: dict[int, str], today: date | None, replaces: str | None = None) -> AskAction:
     """Several new tasks the member listed, each with its owner and date if said."""
     items = tuple(
         PlanItem(title=_title(i.get("title")), owner_id=_owner(i.get("owner_id"), members), due_date=_due(i.get("due_date"), today))
@@ -123,7 +127,7 @@ def _plan(raw: list, members: dict[int, str], today: date | None) -> AskAction:
     )
     if not items:
         raise ValueError("a plan needs at least one task")
-    return AskAction("plan", None, items[0].title, items=items)
+    return AskAction("plan", None, items[0].title, items=items, replaces_task_id=replaces)
 
 
 def _update(data: dict, tasks: dict[str, Task], owner: int | None, today: date | None) -> AskAction:
