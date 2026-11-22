@@ -128,3 +128,25 @@ async def test_the_sources_line_follows_the_answers_language(store):
     router, queue, _ = make(store, answer("Il prototipo è di Ada.", task_ids=[proto]))
     notice, _ = await ask(router, queue, "Cadence, prototipo?")
     assert notice.text.endswith(f"Fonti: attività “{PROTOTYPE}”.")
+
+
+async def test_a_split_replaces_the_task_it_splits(store):
+    """
+    22/11 live: "split the interviews in two, 5 for me and 5 for Omar" added
+    two tasks and left "Run the 10 interviews" in the plan: three tasks.
+    """
+    whole = await task(store, "Run the 10 interviews", owner=ADA)
+    items = [
+        {"title": "Run 5 interviews (Ada)", "owner_id": ADA, "due_date": "2026-11-26"},
+        {"title": "Run 5 interviews (Bruno)", "owner_id": BRUNO, "due_date": "2026-11-26"},
+    ]
+    router, queue, _ = make(
+        store, answer("The split is ready on a card.", {"kind": "plan", "items": items, "replaces_task_id": whole})
+    )
+    notice, (card,) = await ask(router, queue, "Cadence, split the interviews in two: 5 for me and 5 for Bruno")
+    assert card["payload"]["replaces_task_id"] == whole and card["payload"]["replaces_title"] == "Run the 10 interviews"
+    assert len((await store.load_state()).tasks) == 1  # nothing changes before the click
+
+    await router.route_coordinator(click(card["proposal_id"], "confirm"))
+    await drain(queue)
+    assert sorted(t.title for t in (await store.load_state()).tasks) == ["Run 5 interviews (Ada)", "Run 5 interviews (Bruno)"]

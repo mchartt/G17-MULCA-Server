@@ -76,7 +76,7 @@ from .models import (
     ProposalStatus,
 )
 from .opener import PlanOpener, is_question
-from .plan_commands import PlanCommands
+from .plan_commands import PlanCommands, asked_rationale
 from .plan_writer import PlanWriter, plan_lines
 from .plan_writes import topic_key
 from .progress import ProgressMonitor, timezone_from
@@ -610,10 +610,13 @@ class CoordinatorRouter:
         if draft is None:
             await self._notice(False, UNAVAILABLE, message.request_id)
             return
+        # A member started the kickoff: the card says who asked, not "Stepping in because".
+        asker = self._roster().get(message.member_id, "")
+        it = italian(await self._store_now().setting("language"), draft.rationale)
         proposal = await self._service().create(
             ProposalKind.CHARTER,
             draft.payload,
-            rationale=draft.rationale,
+            rationale=asked_rationale(draft.rationale, asker, it),
             origin_channel=message.channel,
         )
         await self._send_proposal(proposal)
@@ -778,7 +781,9 @@ class CoordinatorRouter:
         await self._notice(
             True,
             "Linked to the web space: plan, tasks, decisions and cards are now shared. "
-            "Each channel keeps its own chat.",
+            "Each channel keeps its own chat. Next: ask Cadence what the project is about, "
+            "and if you use the web app too, write `/coordinator me` with your personal code "
+            "so you are the same member here.",
             message.request_id,
         )
         await self._send_state(message.request_id)

@@ -453,13 +453,13 @@ def test_findings_read_in_italian_on_an_italian_card():
 
 
 def test_a_checkin_a_member_asked_for_says_who_asked():
-    from muca_server.cognition.coordination.plan_commands import _asked_rationale
+    from muca_server.cognition.coordination.plan_commands import asked_rationale
 
-    asked = _asked_rationale("Intervengo perché la prenotazione scade il 24.", "Giulia", True)
+    asked = asked_rationale("Intervengo perché la prenotazione scade il 24.", "Giulia", True)
     assert asked == "Chiesto da Giulia: La prenotazione scade il 24."
-    assert _asked_rationale("Stepping in because the UI is late.", "Ada", False) == "Asked by Ada: The UI is late."
+    assert asked_rationale("Stepping in because the UI is late.", "Ada", False) == "Asked by Ada: The UI is late."
     # The timed check-in has no asker: Cadence did step in.
-    assert _asked_rationale("Stepping in because the UI is late.", "", False) == "Stepping in because the UI is late."
+    assert asked_rationale("Stepping in because the UI is late.", "", False) == "Stepping in because the UI is late."
 
 
 def test_the_first_catchup_is_the_last_days_not_a_last_visit():

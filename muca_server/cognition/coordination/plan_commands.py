@@ -64,7 +64,7 @@ from .ask_action import AskAction
 from .ask_cards import DEPENDENCY_STRATEGY, action_draft, card_line
 from .plan_writer import AskAnswer, PlanWriter, WhyAnswer
 from .proposals import ProposalService, new_id
-from .writer import check_rationale
+from .writer import MAX_RATIONALE_CHARS, check_rationale
 from .wording import italian, localize, sources_label
 from .store import CoordinationStore, DependencyError
 
@@ -228,8 +228,17 @@ class PlanCommands:
                     question=f"Does “{task.title}” wait on “{other.title}”? {link.reason}"[:300],
                     certainty=BlockerCertainty.POSSIBLE,
                 )
+                # One reason per card: the model gives one sentence for all the
+                # links ("these three tasks…"), which fits none of them (22/11).
+                reason = rationale
+                if len(links) > 1:
+                    reason = (
+                        f"Intervengo perché «{task.title}» è appena entrata nel piano e potrebbe aver bisogno prima di «{other.title}»."
+                        if italian(state.language, rationale)
+                        else f"Stepping in because “{task.title}” was just added and may need “{other.title}” first."
+                    )[:MAX_RATIONALE_CHARS]
                 proposal = await self._service().create(
-                    ProposalKind.BLOCKER, payload, rationale=rationale, origin_channel=channel
+                    ProposalKind.BLOCKER, payload, rationale=reason, origin_channel=channel
                 )
                 await self._send_proposal(proposal)
                 waiting.add(topic_key(task.title))
@@ -356,7 +365,7 @@ class PlanCommands:
         proposal = await self._service().create(
             ProposalKind.CHECKIN,
             payload,
-            rationale=_asked_rationale(draft.rationale, asked_by, it),
+            rationale=asked_rationale(draft.rationale, asked_by, it),
             origin_channel=channel,
         )
         await self._send_proposal(proposal)
@@ -690,7 +699,7 @@ class PlanCommands:
 _STEPPING_IN = re.compile(r"^(stepping in because|intervengo perch[éèe])\s+", re.IGNORECASE)
 
 
-def _asked_rationale(rationale: str, asked_by: str, it: bool) -> str:
+def asked_rationale(rationale: str, asked_by: str, it: bool) -> str:
     """A check-in a member asked for: "Asked by Giulia: the booking is due…", not "Stepping in because…"."""
     rest = _STEPPING_IN.sub("", rationale)
     if not asked_by or rest == rationale or not rest:

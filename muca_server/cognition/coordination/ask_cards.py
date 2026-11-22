@@ -73,7 +73,12 @@ def action_draft(
         keys = {topic_key(i.title) for i in items}
         if pending(ProposalKind.PLAN, lambda p: keys & {topic_key(str(i.get("title", ""))) for i in p.get("items", [])}):
             return above
-        return ProposalKind.PLAN, PlanPayload(items=items)
+        replaced = tasks.get(action.replaces_task_id) if action.replaces_task_id else None
+        return ProposalKind.PLAN, PlanPayload(
+            items=items,
+            replaces_task_id=replaced.task_id if replaced else None,
+            replaces_title=replaced.title if replaced else "",
+        )
 
     if action.kind == "update_task":
         return _update_draft(action, tasks, members, evidence, it, above, pending)

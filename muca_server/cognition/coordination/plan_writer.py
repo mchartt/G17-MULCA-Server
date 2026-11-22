@@ -257,6 +257,9 @@ kind "none" and ask one precise question instead):
   task_id null.
 - "plan": TWO OR MORE new tasks asked at once: items, one per task, each with
   title, owner_id and due_date as for new_task (at most 8). title = "".
+  When they SPLIT or REPLACE a task of the plan ("split the interviews in
+  two, 5 for me and 5 for Omar"), replaces_task_id = that task's id: it
+  leaves the plan when the card is confirmed. Otherwise replaces_task_id null.
 - "update_task": an existing task changes: task_id (from <project>) and only
   what changes: owner_id (new owner), due_date (new date), status ("todo",
   "doing", "done", "blocked") and/or progress (0-100, "a metà" = 50); the
@@ -267,8 +270,8 @@ kind "none" and ask one precise question instead):
   = the member who must deliver it, if named. Direction: if A needs B first,
   task_id = A, depends_on = B. Never the same task on both sides.
 - "none": every other field null, "" or [].
-- items is [] unless kind is "plan"; status and progress are null unless kind
-  is "update_task".
+- items is [] and replaces_task_id null unless kind is "plan"; status and
+  progress are null unless kind is "update_task".
 - Use the members' names, never their ids. Dates as people say them.
 task_ids, milestone_ids, decision_ids: only the ids of the saved items your
 answer actually names or states facts from (not everything you looked at).

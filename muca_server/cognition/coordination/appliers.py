@@ -204,6 +204,9 @@ def plan_applier(payload: PlanPayload, *, new_id) -> Applier:
             exists, owner = await task_owner(db, item.task_id)
             if exists and owner is None and item.owner_id is not None:
                 await update_task(db, task_id=item.task_id, owner_id=item.owner_id)
+        # A split: the task the new ones replace leaves the plan (if still there).
+        if payload.replaces_task_id and (await task_owner(db, payload.replaces_task_id))[0]:
+            await delete_task(db, payload.replaces_task_id)
 
     return apply
 
