@@ -361,3 +361,22 @@ async def test_take_choose_and_not_now_go_through_the_router(store):
     state = await store.load_state()
     assert state.decisions[0].choice == "SUS questionnaire"
     assert state.tasks == [] or all(isinstance(t, Task) for t in state.tasks)
+
+
+async def test_what_the_group_stated_itself_does_not_wait_for_the_long_gap(store):
+    """
+    22/11 demo run: "I'll write the guide by Tuesday", an agreed split and an
+    app-or-kiosk argument got no card because another card had been posted a
+    minute before. A stated need waits one minute and two messages, not five
+    minutes and ten; a card Cadence thinks of by itself still waits the long gap.
+    """
+    from muca_server.cognition.coordination.proactive import STATED_MESSAGES_BETWEEN, STATED_SECONDS_BETWEEN
+
+    bridge, sent, clock = make_bridge(store, FakeWriter(deleg_draft("a"), deleg_draft("b")))
+    assert await offer(bridge, count=20) is Verdict.TAKEN
+    clock.now += STATED_SECONDS_BETWEEN - 1
+    assert await offer(bridge, CS5, count=20 + STATED_MESSAGES_BETWEEN) is Verdict.VETOED  # still inside the minute
+    clock.now += 2
+    assert await offer(bridge, CS5, count=20 + STATED_MESSAGES_BETWEEN - 1) is Verdict.VETOED  # the very next message
+    assert await offer(bridge, CS2, count=20 + STATED_MESSAGES_BETWEEN) is Verdict.VETOED  # Cadence's own idea: the long gap
+    assert await offer(bridge, CS5, count=20 + STATED_MESSAGES_BETWEEN) is not Verdict.VETOED
