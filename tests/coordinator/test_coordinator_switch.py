@@ -104,7 +104,7 @@ def test_on_kickoff_and_confirm_work_over_the_websocket(tmp_path):
         )
     )
     with TestClient(app).websocket_connect("/") as ws:
-        ws.send_json({"event": "connect", "conversationId": "channel:42", "isDm": False})
+        ws.send_json({"event": "connect", "conversationId": "web:G42", "isDm": False})
         ws.send_json({"event": "participants", "participants": [{"id": 1, "name": "Ada"}]})
         ws.send_json({"event": "coordinator_command", "command": "kickoff",
                       "memberId": 1, "args": {"text": "Assignment"}})

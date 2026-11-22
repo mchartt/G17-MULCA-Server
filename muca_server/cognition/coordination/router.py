@@ -40,6 +40,7 @@ background; every chat message then passes through `opener.heard`.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import logging
 import time
@@ -62,7 +63,7 @@ from ...protocol.outgoing import AssistantTextMessage
 from .card_requests import CardRequests
 from .catchup import CatchUp, channel_of, summary_line
 from .checkin_timer import CheckinTimer
-from .links import WEB_PREFIX, GroupLinks, LinkError, LiveGroups
+from .links import LINKABLE, WEB_PREFIX, GroupLinks, LinkError, LiveGroups
 from .models import (
     MAX_DOCUMENT_CHARS,
     MAX_DOCUMENTS,
@@ -104,6 +105,26 @@ TO_THE_GROUP = re.compile(
     r"^\s*(qualcuno|ragazzi|raga|secondo voi|chi di voi|chi ha|chi può|chi mi|avete|anyone|guys|does anyone|has anyone|who has|who can)\b",
     re.IGNORECASE,
 )
+
+
+def kickoff_on_web() -> str:
+    """
+    What a Discord or Slack channel with no project answers to a kickoff
+    (22/11): a project is created on the web, with its name, description and
+    documents, and the channels work on an existing one. Before this a
+    kickoff in an unlinked channel made a project that no web space showed,
+    and that the channel itself left behind when it was linked later.
+    """
+    # The web app's address: ours if set, else the one Render gives its service.
+    url = (os.environ.get("CADENCE_WEB_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").rstrip("/")
+    where = f"in the web app ({url})" if url else "in the web app"
+    return (
+        f"A project starts {where}: create it there, then write `/coordinator link` with its invite code here. "
+        "If your group already has one, link it the same way. "
+        "To be the same member here as on the web, write `/coordinator me` with your personal code."
+    )
+
+
 KICKOFF_RUNNING = "A kickoff is already running for this group: its card will appear here."
 
 
@@ -557,6 +578,9 @@ class CoordinatorRouter:
         here for the model would freeze the group's chat and voice. One
         kickoff at a time per group, so a retry cannot make two cards.
         """
+        if self._conversation.conversation_id.startswith(LINKABLE) and self._home() == self._conversation.conversation_id:
+            await self._notice(False, kickoff_on_web(), message.request_id)
+            return
         text = str(message.args.get("text", "")).strip()
         if not text:
             await self._notice(False, "Paste the text of the assignment to start.", message.request_id)

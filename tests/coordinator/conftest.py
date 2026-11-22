@@ -53,7 +53,7 @@ class FakeChatClient:
 
 @dataclass
 class FakeConversation:
-    conversation_id: str = "channel:42"
+    conversation_id: str = "web:G42"  # a web space: the only place a project is created (22/11)
     is_private: bool = False
     is_ephemeral: bool = False
     roster: dict[int, str] = field(default_factory=lambda: {1: "Ada", 2: "Bruno", 3: "Chiara"})
