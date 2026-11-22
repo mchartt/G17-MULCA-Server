@@ -72,7 +72,7 @@ async def test_the_language_is_the_groups_not_the_servers(store, tmp_path):
     routers = [
         CoordinatorRouter(FakeConversation(conversation_id=cid), asyncio.Queue(), store_for=lambda _, s=s: s,
                           writer=shared, proposal_ttl_seconds=3600, today=lambda: date(2026, 11, 15))
-        for cid, s in (("channel:1", store), ("channel:2", other_store))
+        for cid, s in (("web:G1", store), ("web:G2", other_store))
     ]
     await routers[0].route_coordinator(command("language", language="en"))
     for router in routers:

@@ -205,3 +205,31 @@ async def test_a_non_member_cannot_run_any_command(store, name):
     await router.wait_for_background()
     (notice,) = await drain(queue)
     assert not notice.ok and "Only members" in notice.text
+
+
+async def test_a_kickoff_in_a_channel_with_no_project_sends_the_group_to_the_web(store):
+    """
+    22/11: a project is created on the web (name, description, documents).
+    A kickoff in a Discord or Slack channel that is not linked made a project
+    no web space showed; now it says where a project starts and how to link.
+    """
+    from muca_server.cognition.coordination.router import kickoff_on_web
+
+    for cid in ("channel:7", "slack:C7"):
+        client = FakeChatClient(GOOD_CHARTER)
+        out: asyncio.Queue = asyncio.Queue()
+        router = CoordinatorRouter(FakeConversation(conversation_id=cid), out, store_for=lambda _: store,
+                                   writer=ProposalWriter(client), proposal_ttl_seconds=3600)
+        await router.route_coordinator(command("kickoff", text="Deliver by 2 Dec."))
+        await router.wait_for_background()
+        notice = out.get_nowait()
+        assert not notice.ok and notice.text == kickoff_on_web()
+        assert "/coordinator link" in notice.text and "/coordinator me" in notice.text
+        assert client.calls == [] and (await store.load_state()).charter is None  # no model call, nothing saved
+
+
+def test_the_kickoff_notice_names_the_web_app_when_the_server_knows_its_address(monkeypatch):
+    from muca_server.cognition.coordination.router import kickoff_on_web
+
+    monkeypatch.setenv("RENDER_EXTERNAL_URL", "https://cadence.example/")
+    assert "in the web app (https://cadence.example)" in kickoff_on_web()
