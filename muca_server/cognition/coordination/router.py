@@ -214,6 +214,7 @@ class CoordinatorRouter:
             recent_chat=self._recent_chat if catchup is not None else None,
             remember=self._remember if catchup is not None else None,
             answered=self._mirror_cadence,
+            silent=self._ask_stayed_silent,
         )
         if self.proactive is not None:
             # R11: what the lab's agent would answer in the group chat, Cadence answers.
@@ -381,6 +382,15 @@ class CoordinatorRouter:
             )
         except Exception:
             logger.exception("%s could not ask a member for their profile", self._conversation.conversation_id)
+
+    async def _ask_stayed_silent(self, text: str) -> None:
+        """A "maybe" Cadence did not answer: the judge's card for that message, if any, is offered now."""
+        if self.proactive is None:
+            return
+        try:
+            await self.proactive.release(text)
+        except Exception:
+            logger.exception("%s could not offer a card after a silent ask", self._conversation.conversation_id)
 
     async def _mirror_cadence(self, text: str) -> None:
         """

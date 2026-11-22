@@ -380,3 +380,35 @@ async def test_what_the_group_stated_itself_does_not_wait_for_the_long_gap(store
     assert await offer(bridge, CS5, count=20 + STATED_MESSAGES_BETWEEN - 1) is Verdict.VETOED  # the very next message
     assert await offer(bridge, CS2, count=20 + STATED_MESSAGES_BETWEEN) is Verdict.VETOED  # Cadence's own idea: the long gap
     assert await offer(bridge, CS5, count=20 + STATED_MESSAGES_BETWEEN) is not Verdict.VETOED
+
+
+async def test_a_message_ask_stays_silent_on_still_gets_its_card(store):
+    """
+    22/11 demo run: "I'm stuck on the screen texts" and "I'll have them by
+    tomorrow" got no card. Each was written right after its author had talked
+    to Cadence, so it went to ask as a possible follow-up (R10 holds the card);
+    ask stayed silent, and nobody looked at the message again.
+    """
+    bridge, sent, clock = make_bridge(store, FakeWriter(deleg_draft("a")))
+    bridge.claim(HISTORY[-1].content)
+    assert await offer(bridge, count=20) is Verdict.VETOED  # R10: ask has it
+    assert sent == []
+    assert await bridge.release(HISTORY[-1].content) is Verdict.TAKEN  # ask stayed silent
+    await bridge.wait()
+    assert len(sent) == 1
+    # The judge can also come after ask has finished: the claim is gone by then.
+    bridge2, sent2, clock2 = make_bridge(store, FakeWriter(deleg_draft("b")))
+    clock2.now += MIN_SECONDS_BETWEEN + 1  # the same group: past the gap after the card above
+    bridge2.claim(HISTORY[-1].content)
+    assert await bridge2.release(HISTORY[-1].content) is None
+    assert await offer(bridge2, count=20 + MIN_MESSAGES_BETWEEN) is Verdict.TAKEN
+    assert bridge2.is_claimed(HISTORY[-1].content)  # still claimed: the lab's agent must not answer it
+
+
+async def test_the_judges_reason_reaches_the_writer(store):
+    """The veto check reused the name `reason`, so the writer always got an empty "Noticed just now"."""
+    writer = FakeWriter(deleg_draft("a"))
+    bridge, sent, clock = make_bridge(store, writer)
+    await bridge.offer(CS2, history=HISTORY, message_count=20, assistant_id=0, reason="Nobody took the fonts.")
+    await bridge.wait()
+    assert writer.calls[0]["noticed"] == "Nobody took the fonts."
