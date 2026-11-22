@@ -163,8 +163,9 @@ The check-in found the problems between <findings> tags (computed by the
 server, they are true). Propose 1 to 3 different options to fix the most
 important one(s). Each option changes ONE task of the plan (task_id from the
 plan): a new due date (YYYY-MM-DD, not in the past), a new owner (a member id),
-or drop it (only if it is not essential). Say the consequence in the label
-(max 15 words). rationale: one sentence starting with "Stepping in because" (or
+or drop it (only if it is not essential). The label is the text of a button:
+the action alone, at most 6 words, no reason and no consequence ("Move it to
+23 Nov", "Give it to Omar", "Drop the handout"). rationale: one sentence starting with "Stepping in because" (or
 the same in the group's language, e.g. "Intervengo perché"). Write the labels
 and the rationale in the language of the group."""
 
@@ -315,7 +316,12 @@ discussed, so they can catch up in a minute:
   Friday").
 - open: 0 to 3 questions or requests still without an answer in these
   messages, one short line each.
-Only what the messages say: no guesses, no advice. Never judge or rank anyone,
+The plan saved now is between <plan> tags (true, kept by the server; cards the
+group confirmed changed it without a chat line). Where the plan settles what a
+message left open (the task has an owner, a date, is done), say how it stands
+now and do not list it in open: never write that nobody took a task the plan
+gives to someone.
+Only what the messages and the plan say: no guesses, no advice. Never judge or rank anyone,
 never name who talked most. Greetings and small talk are not topics. Nothing
 substantial: overview "", topics [], open []."""
 
@@ -620,9 +626,16 @@ class PlanWriter:
 
         return await self._run("dependencies", DEPENDENCY_SYSTEM, user, DEPENDENCY_SCHEMA, check)
 
-    async def draft_recap(self, lines: list[str]) -> dict[str, Any] | None:
-        """The catch-up's "In brief": an overview, the topics and what is still open, from these messages only."""
+    async def draft_recap(self, lines: list[str], *, plan: str = "") -> dict[str, Any] | None:
+        """
+        The catch-up's "In brief": an overview, the topics and what is still
+        open, from these messages. `plan` (the saved tasks with owner, date and
+        status) stops it calling open what a confirmed card already settled
+        (22/11 live: "who books the room?" under a plan that said Giulia).
+        """
         user = "<chat>\n" + "\n".join(lines[-RECAP_LINES:]) + "\n</chat>"
+        if plan:
+            user += f"\n<plan>\n{plan}\n</plan>"
 
         def check(data: dict) -> dict[str, Any]:
             topics = []
@@ -855,6 +868,11 @@ def _decision_log(decisions: list[Decision]) -> str:
 
 def _plan_only(state: ProjectState, members: dict[int, str]) -> str:
     return _plan(state, members).split("\nMilestones:", 1)[0]
+
+
+def plan_lines(state: ProjectState, members: dict[int, str]) -> str:
+    """The saved tasks, one per line, for a prompt that must not contradict them."""
+    return _plan(state, members)
 
 
 def _plan(state: ProjectState, members: dict[int, str]) -> str:

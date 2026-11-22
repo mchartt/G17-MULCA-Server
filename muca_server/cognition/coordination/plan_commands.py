@@ -37,13 +37,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime
 from types import SimpleNamespace
 from typing import Any
 
-from .checkin import findings, owners_report
+from .checkin import findings, in_italian, owners_report
 
 from .models import (
     MAX_TEXT,
@@ -323,13 +324,16 @@ class PlanCommands:
         await self._notice(True, "Cadence suggested owners in a card: any member can confirm it.", message.request_id)
 
     async def _checkin(self, message) -> None:
-        await self.run_checkin(message.channel, message.request_id, quiet=False)
+        asker = self._participants().get(message.member_id, "")
+        await self.run_checkin(message.channel, message.request_id, quiet=False, asked_by=asker)
 
-    async def run_checkin(self, channel: str, request_id: str, *, quiet: bool) -> bool:
+    async def run_checkin(self, channel: str, request_id: str, *, quiet: bool, asked_by: str = "") -> bool:
         """
         The check-in, on command or on time. True when a card was posted.
         `quiet` (the timed one): no notice when on track or when the model
         fails, because nobody asked and the chat must not fill with notices.
+        `asked_by`: the member who asked for it; the card then says so instead
+        of "Stepping in because" (Cadence did not step in: it was asked).
         """
         members = self._participants()
         state = await self._store().load_state()
@@ -345,8 +349,15 @@ class PlanCommands:
             if not quiet:
                 await self._unavailable("coordinator_command", request_id)
             return False
+        it = italian(state.language, draft.rationale)
+        payload = draft.payload
+        if it:
+            payload = payload.model_copy(update={"findings": [in_italian(f) for f in payload.findings]})
         proposal = await self._service().create(
-            ProposalKind.CHECKIN, draft.payload, rationale=draft.rationale, origin_channel=channel
+            ProposalKind.CHECKIN,
+            payload,
+            rationale=_asked_rationale(draft.rationale, asked_by, it),
+            origin_channel=channel,
         )
         await self._send_proposal(proposal)
         if not quiet:
@@ -674,6 +685,18 @@ class PlanCommands:
             await self._notice(False, "Say what to change: the name or the date.", message.request_id)
             return
         await self._send_state("")
+
+
+_STEPPING_IN = re.compile(r"^(stepping in because|intervengo perch[éèe])\s+", re.IGNORECASE)
+
+
+def _asked_rationale(rationale: str, asked_by: str, it: bool) -> str:
+    """A check-in a member asked for: "Asked by Giulia: the booking is due…", not "Stepping in because…"."""
+    rest = _STEPPING_IN.sub("", rationale)
+    if not asked_by or rest == rationale or not rest:
+        return rationale
+    lead = f"Chiesto da {asked_by}: " if it else f"Asked by {asked_by}: "
+    return lead + rest[0].upper() + rest[1:]
 
 
 def _checkin_lines(ledger: list[dict], state, members: dict[int, str], now: float) -> list[str]:

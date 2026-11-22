@@ -294,7 +294,7 @@ async def test_catch_up_on_the_web_shows_the_web_chat_and_what_discord_said_and_
     (notice,) = await drain(web_q)
     assert notice.ok and notice.request_id == "r1"
     # Matteo, 20/11: the group chat of this channel is part of the catch-up too.
-    assert notice.text == "Since your last catch-up: 1 decision, 1 message here, 2 messages on Discord."
+    assert notice.text == "In the last 7 days: 1 decision, 1 message here, 2 messages on Discord."  # the first catch-up
     result = notice.catchup
     assert [d["choice"] for d in result["decisions"]] == ["Tuesday 17:00"]
     assert result["here"]["channel"] == "web"

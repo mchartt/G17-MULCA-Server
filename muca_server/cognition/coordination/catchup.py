@@ -73,8 +73,10 @@ class CatchUp:
     ) -> dict[str, Any]:
         now = self._clock()
         mark_name = f"catchup:{conversation_id}:{member_id}"
+        first = False  # no earlier catch-up: the window is the last days, not "your last visit"
         if since is None:
             mark = await store.mark(mark_name)
+            first = mark is None
             since = mark[1] if mark else now - DEFAULT_WINDOW
         since = max(0.0, min(float(since), now))
 
@@ -101,6 +103,7 @@ class CatchUp:
         return {
             "since": since,
             "until": now,
+            "first": first,
             "linked": len(group) > 1,
             "decisions": decisions,
             "here": here,
@@ -187,6 +190,8 @@ def summary_line(catchup: dict[str, Any], *, it: bool = False) -> str:
             where = place["channel"].capitalize()
             parts.append(f"{n(m, 'messaggio', 'messaggi')} su {where}" if it else f"{n(m, 'message', 'messages')} on {where}")
     if parts:
+        if catchup.get("first"):
+            return ("Negli ultimi 7 giorni: " if it else "In the last 7 days: ") + ", ".join(parts) + "."
         return ("Dalla tua ultima visita: " if it else "Since your last catch-up: ") + ", ".join(parts) + "."
     if not catchup["linked"]:
         # How to link is told by each channel in its own words (it knows the code).

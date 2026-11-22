@@ -440,3 +440,31 @@ async def test_find_owners_with_every_task_owned_asks_no_model(store):
     router, queue = make_router(store)
     await run(router, command("planning", owners=True))
     assert (await drain(queue))[-1].text == "Every open task already has an owner."
+
+
+def test_findings_read_in_italian_on_an_italian_card():
+    """22/11 live: "Due soon: … is due 24 Nov." stood inside an Italian card."""
+    from muca_server.cognition.coordination.checkin import in_italian
+
+    assert in_italian("Due soon: “UI” (Bruno) is due 26 Nov.") == "In scadenza: «UI» (Bruno) è per il 26 nov."
+    assert in_italian("Late: “API” (no owner) was due 3 May.") == "In ritardo: «API» (senza responsabile) era per il 3 mag."
+    assert in_italian("No owner: “Slides”.") == "Senza responsabile: «Slides»."
+    assert in_italian("Something else.") == "Something else."
+
+
+def test_a_checkin_a_member_asked_for_says_who_asked():
+    from muca_server.cognition.coordination.plan_commands import _asked_rationale
+
+    asked = _asked_rationale("Intervengo perché la prenotazione scade il 24.", "Giulia", True)
+    assert asked == "Chiesto da Giulia: La prenotazione scade il 24."
+    assert _asked_rationale("Stepping in because the UI is late.", "Ada", False) == "Asked by Ada: The UI is late."
+    # The timed check-in has no asker: Cadence did step in.
+    assert _asked_rationale("Stepping in because the UI is late.", "", False) == "Stepping in because the UI is late."
+
+
+def test_the_first_catchup_is_the_last_days_not_a_last_visit():
+    from muca_server.cognition.coordination.catchup import summary_line
+
+    catchup = {"decisions": [{}], "elsewhere": [], "linked": False, "first": True}
+    assert summary_line(catchup, it=True) == "Negli ultimi 7 giorni: 1 decisione."
+    assert summary_line({**catchup, "first": False}, it=True) == "Dalla tua ultima visita: 1 decisione."
