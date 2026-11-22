@@ -102,6 +102,7 @@ class PlanCommands:
         recent_chat: Callable[[], Awaitable[list[str]]] | None = None,
         remember: Callable[[int, str, str], Awaitable[None]] | None = None,
         answered: Callable[[str], Awaitable[None]] | None = None,
+        silent: Callable[[str], Awaitable[None]] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._participants = participants
@@ -118,6 +119,7 @@ class PlanCommands:
         self._recent_chat = recent_chat
         self._remember = remember
         self._answered = answered
+        self._silent = silent
         self._task: asyncio.Task | None = None
         self._dependencies: asyncio.Task | None = None
         self._owners: asyncio.Task | None = None
@@ -505,6 +507,9 @@ class PlanCommands:
                 await self._remember(message.member_id, question, "")
             if post is None:
                 await self._notice(True, "", message.request_id)
+            if self._silent is not None:
+                # Not for Cadence after all: the message may still deserve a card.
+                await self._silent(question)
             return
         if answer.progress is not None:
             # CS6: what the member said about the task's progress, kept so the

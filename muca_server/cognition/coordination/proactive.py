@@ -171,6 +171,10 @@ class ProactiveBridge:
         self._mark_loaded = False
         # R10: texts the client sent to Cadence's ask, and when.
         self._claimed: dict[str, float] = {}
+        # Card offers vetoed by R10, by message: (at, strategy, history, count, assistant id, reason).
+        self._held: dict[str, tuple] = {}
+        # Messages ask read as a possible follow-up and did not answer: a card may still come.
+        self._silent: dict[str, float] = {}
         # K1: the project memory last told to the observer, and when.
         self._memory_sent: str | None = None
         self._memory_sent_at_count = 0
@@ -209,18 +213,27 @@ class ProactiveBridge:
                 logger.info("%s coordinator: R10 Cadence's ask already has this message", self._conversation.conversation_id)
                 return Verdict.VETOED
             return self._hand_to_ask(strategy_id, last, assistant_id)
-        if history and self.is_claimed(history[-1].content):
+        if history and self.is_claimed(history[-1].content) and claim_key(history[-1].content) not in self._silent:
             logger.info(
                 "%s coordinator vetoed %s: R10 Cadence's ask already has this message",
                 self._conversation.conversation_id, strategy_id,
+            )
+            # Kept for a moment: if ask stays silent on this message (it was
+            # not for Cadence after all), the card it deserved is offered
+            # again (`release`). 22/11: "I'm stuck on the screen texts" and
+            # "I'll have them by tomorrow" got nothing, because each was
+            # written right after its author had talked to Cadence.
+            self._held[claim_key(history[-1].content)] = (
+                self._clock(), strategy_id, list(history), message_count, assistant_id, reason
             )
             return Verdict.VETOED
         await self._load_mark()
         if self._preempt(strategy_id):
             logger.info("%s coordinator: %s replaces a draft still being written", self._conversation.conversation_id, strategy_id)
-        reason = self._veto(history, message_count, assistant_id, strategy_id)
-        if reason:
-            logger.info("%s coordinator vetoed %s: %s", self._conversation.conversation_id, strategy_id, reason)
+        # Not `reason`: that is the judge's own words, passed on to the writer below.
+        vetoed = self._veto(history, message_count, assistant_id, strategy_id)
+        if vetoed:
+            logger.info("%s coordinator vetoed %s: %s", self._conversation.conversation_id, strategy_id, vetoed)
             return Verdict.VETOED
         chat = [
             ChatLine(speaker=u.speaker_name or str(u.speaker_id), text=u.content, at_ms=u.timestamp_ms)
@@ -271,6 +284,27 @@ class ProactiveBridge:
         now = self._clock()
         self._claimed = {k: at for k, at in self._claimed.items() if now - at < CLAIM_SECONDS}
         self._claimed[claim_key(text)] = now
+
+    async def release(self, text: str) -> Verdict | None:
+        """
+        Cadence's ask read this message as a possible follow-up and stayed
+        silent: the message is nobody's any more. If the judge had a card for
+        it (held by R10), that card is offered now; if the judge comes later,
+        it is let through. Returns the new verdict, or None if nothing was held.
+        """
+        key = claim_key(text)
+        now = self._clock()
+        # The claim stays (the lab's agent must still not answer this message);
+        # only a card is let through from now on.
+        self._silent = {k: at for k, at in self._silent.items() if now - at < CLAIM_SECONDS}
+        self._silent[key] = now
+        self._held = {k: v for k, v in self._held.items() if now - v[0] < CLAIM_SECONDS}
+        held = self._held.pop(key, None)
+        if held is None:
+            return None
+        _, strategy_id, history, message_count, assistant_id, reason = held
+        logger.info("%s coordinator: ask stayed silent, %s is offered again", self._conversation.conversation_id, strategy_id)
+        return await self.offer(strategy_id, history=history, message_count=message_count, assistant_id=assistant_id, reason=reason)
 
     def is_claimed(self, text: str) -> bool:
         at = self._claimed.get(claim_key(text))
