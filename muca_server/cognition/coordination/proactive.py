@@ -94,6 +94,15 @@ logger = logging.getLogger(__name__)
 
 MIN_MESSAGES_BETWEEN = 10  # NFR3: one unsolicited intervention every 10 messages at most
 MIN_SECONDS_BETWEEN = 5 * 60  # NFR3: ... and every 5 minutes at most
+# What the group itself just said it needs is not held back that long (22/11
+# demo run): "I'll write the guide by Tuesday", an agreed change, "app or
+# kiosk, we keep going back and forth" and "I'm stuck until…" got no card
+# because another card had been posted a minute before, in another channel
+# too. These three record the group's own words; the long gap stays for the
+# cards Cadence thinks of by itself (delegation, a decision reopened).
+STATED_NEEDS = frozenset({"cs5_owner_and_date", "cs3_close_decision", "cs7_blockers_dependencies"})
+STATED_MESSAGES_BETWEEN = 2
+STATED_SECONDS_BETWEEN = 60
 CHAT_WINDOW = 20  # recent messages the writer sees
 # R2: which draft wins when two strategies fire close together. A stated
 # blocker with a date at risk matters more than an open decision, which
@@ -209,7 +218,7 @@ class ProactiveBridge:
         await self._load_mark()
         if self._preempt(strategy_id):
             logger.info("%s coordinator: %s replaces a draft still being written", self._conversation.conversation_id, strategy_id)
-        reason = self._veto(history, message_count, assistant_id)
+        reason = self._veto(history, message_count, assistant_id, strategy_id)
         if reason:
             logger.info("%s coordinator vetoed %s: %s", self._conversation.conversation_id, strategy_id, reason)
             return Verdict.VETOED
@@ -337,7 +346,7 @@ class ProactiveBridge:
         self._drafting = None
         return True
 
-    def _veto(self, history: list, message_count: int, assistant_id: int) -> str:
+    def _veto(self, history: list, message_count: int, assistant_id: int, strategy_id: str = "") -> str:
         """The first rule (R1-R5, R8) that says no, or "" if none does."""
         if self._conversation.is_private or self._conversation.is_ephemeral:
             return "R1 not a group conversation"
@@ -345,9 +354,12 @@ class ProactiveBridge:
             return "R2 a draft is already running"
         if self._listening():
             return "R8 the plan opener is listening for the group's answers"
-        if self._last_count is not None and message_count - self._last_count < MIN_MESSAGES_BETWEEN:
+        stated = strategy_id in STATED_NEEDS
+        messages = STATED_MESSAGES_BETWEEN if stated else MIN_MESSAGES_BETWEEN
+        seconds = STATED_SECONDS_BETWEEN if stated else MIN_SECONDS_BETWEEN
+        if self._last_count is not None and message_count - self._last_count < messages:
             return "R3 too few messages since the last card"
-        if self._last_at is not None and self._clock() - self._last_at < MIN_SECONDS_BETWEEN:
+        if self._last_at is not None and self._clock() - self._last_at < seconds:
             return "R4 too little time since the last card"
         if len(history) >= 2 and history[-2].speaker_id == assistant_id:
             # history[-1] is the message being judged; the one before it is

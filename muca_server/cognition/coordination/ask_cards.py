@@ -89,6 +89,14 @@ def action_draft(
 def _update_draft(action: AskAction, tasks: dict, members: dict[int, str], evidence, it: bool, above: str, pending):
     """One task's new owner, date, status or progress, as a check-in card with one option."""
     task = tasks[action.task_id]
+    if action.drop:
+        if pending(ProposalKind.CHECKIN, lambda p: any(o.get("task_id") == task.task_id for o in p.get("options", []))):
+            return above
+        label = f"Togli «{task.title[:120]}» dal piano" if it else f"Remove “{task.title[:120]}” from the plan"
+        said = [f"{e.speaker}: {e.text}"[:300] for e in evidence[-1:]] or [label]
+        return ProposalKind.CHECKIN, CheckinPayload(
+            findings=said, options=[CheckinOption(label=label, task_id=task.task_id, drop=True)], requested=True
+        )
     changes = {
         "owner": action.owner_id if action.owner_id not in (None, task.owner_id) else None,
         "due": action.due_date if action.due_date not in (None, task.due_date) else None,

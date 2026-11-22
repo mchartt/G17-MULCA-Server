@@ -50,9 +50,10 @@ ACTION_SCHEMA: dict[str, Any] = {
         "depends_on_title": {"type": "string"},
         "depends_on_owner_id": _OPT_ID,
         "replaces_task_id": _OPT_TEXT,
+        "drop": {"type": ["boolean", "null"]},
     },
     "required": ["kind", "task_id", "title", "owner_id", "due_date", "status", "progress", "items",
-                 "depends_on_task_id", "depends_on_title", "depends_on_owner_id", "replaces_task_id"],
+                 "depends_on_task_id", "depends_on_title", "depends_on_owner_id", "replaces_task_id", "drop"],
     "additionalProperties": False,
 }
 
@@ -75,6 +76,8 @@ class AskAction:
     # plan only: the plan task these new tasks take the place of (a split:
     # "5 interviews for me, 5 for Omar" replaces "Run the 10 interviews").
     replaces_task_id: str | None = None
+    # update_task only: the task leaves the plan ("drop the 10 interviews, we split it").
+    drop: bool = False
 
 
 def _title(value: Any) -> str:
@@ -140,6 +143,8 @@ def _update(data: dict, tasks: dict[str, Task], owner: int | None, today: date |
         raise ValueError("progress is 0-100")
     status = TaskStatus(data["status"]) if data.get("status") else None
     due = _due(data.get("due_date"), today)
+    if data.get("drop") is True:
+        return AskAction("update_task", task_id, tasks[task_id].title, drop=True)
     if owner is None and due is None and status is None and progress is None:
         raise ValueError("an update changes nothing")
     return AskAction("update_task", task_id, tasks[task_id].title, owner_id=owner, due_date=due, status=status, progress=progress)
