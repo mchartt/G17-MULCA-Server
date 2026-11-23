@@ -468,3 +468,43 @@ def test_the_first_catchup_is_the_last_days_not_a_last_visit():
     catchup = {"decisions": [{}], "elsewhere": [], "linked": False, "first": True}
     assert summary_line(catchup, it=True) == "Negli ultimi 7 giorni: 1 decisione."
     assert summary_line({**catchup, "first": False}, it=True) == "Dalla tua ultima visita: 1 decisione."
+
+
+# ----------------------------------------------------------------------
+# Group test 23/11: an owner the group already decided wins over profiles
+# ----------------------------------------------------------------------
+
+SPLIT = Decision(
+    decision_id="d1",
+    question="Come pianificate il lavoro",
+    choice="Divisione per consegna: Matteo il RASD, Marco il prototipo, Gabriele la demo madness.",
+    decided_by=2,
+    decided_at=0.0,
+)
+GROUP = {1: "Gabriele", 2: "Matteo", 3: "Marco"}
+
+
+def test_decided_owner_reads_who_does_what_from_the_decision_log():
+    from muca_server.cognition.coordination.plan_writer import decided_owner
+
+    assert decided_owner("Completamento del RASD", [SPLIT], GROUP)[0] == 2
+    assert decided_owner("Prototipo interattivo", [SPLIT], GROUP)[0] == 3
+    assert decided_owner("Wireframe di Marco", [SPLIT], GROUP) is None  # not in the decision
+    assert decided_owner("Completamento", [SPLIT], GROUP) is None  # no distinctive word
+    both = SPLIT.model_copy(update={"choice": "Matteo e Marco il RASD"})
+    assert decided_owner("RASD", [both], GROUP) is None  # two members: no single owner
+
+
+async def test_find_owners_keeps_the_owner_the_group_decided(store):
+    """The card suggested Gabriele ("esperienza RASD") right after the group decided "Matteo il RASD"."""
+    writer = PlanWriter(ProposalWriter(FakeChatClient({
+        "items": [{"title": "Completamento del RASD", "owner_id": 1, "reason": "Esperienza RASD", "due_date": None}],
+        "rationale": "Intervengo perché il RASD non ha un responsabile.",
+    })))
+    state = ProjectState(decisions=[SPLIT])
+    draft = await writer.draft_plan("Completamento del RASD", members=GROUP, state=state, today=TODAY)
+    (item,) = draft.payload.items
+    assert item.owner_id == 2
+    assert item.reason.startswith("Deciso dal gruppo: ")
+    user = writer._writer._client.calls[0]["messages"][-1]["content"]
+    assert "Matteo il RASD" in user  # the model sees the decision log too

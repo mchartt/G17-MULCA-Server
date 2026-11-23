@@ -29,14 +29,17 @@ from .checkin import Finding
 from .models import (
     CheckinPayload,
     Decision,
+    MAX_QUOTE,
     MemberProfile,
     Milestone,
+    PlanItem,
     PlanPayload,
     ProjectState,
     Task,
     TaskStatus,
 )
 from .ask_action import ACTION_SCHEMA, AskAction, ask_action as _ask_action
+from .wording import italian
 from .writer import ATTEMPTS, ProposalWriter, check_rationale
 
 logger = logging.getLogger(__name__)
@@ -148,8 +151,10 @@ PLAN_SYSTEM = COMMON + """
 
 The members wrote the tasks of their project between <tasks> tags, one per line.
 Keep their tasks (you may shorten a title, never add tasks). For each task:
-- owner_id: suggest the member whose discipline, skills, background and free
-  weekly hours fit best,
+- owner_id: if a decision in the log already says who does this task, or the
+  deliverable it is part of ("Matteo il RASD"), that member: the group chose,
+  profiles never override it. Else suggest the member whose discipline,
+  skills, background and free weekly hours fit best,
   spreading the work; null if the profiles give no basis for a choice.
 - reason: one short sentence on why that member (skills, hours), or "" if null.
 - due_date: YYYY-MM-DD if the line says a date, else the first milestone date
@@ -394,9 +399,10 @@ class PlanWriter:
     async def draft_plan(
         self, tasks_text: str, *, members: dict[int, str], state: ProjectState, today: date
     ) -> Drafted | None:
+        decisions = [d for d in state.decisions if d.reopened_at is None]
         user = (
             f"Today is {today.isoformat()}.\n{_members(members, state.members)}\n{_milestones(state.milestones)}\n"
-            f"<tasks>\n{tasks_text}\n</tasks>"
+            f"{_decision_log(decisions)}\n<tasks>\n{tasks_text}\n</tasks>"
         )
 
         def check(data: dict) -> Drafted:
@@ -407,7 +413,8 @@ class PlanWriter:
                     raise ValueError("owner is not a member")
                 if item.due_date is not None and item.due_date < today:
                     raise ValueError("due date in the past")
-            return Drafted(payload, rationale)
+            items = [_keep_decided_owner(item, decisions, members) for item in payload.items]
+            return Drafted(payload.model_copy(update={"items": items}), rationale)
 
         return await self._run("plan", PLAN_SYSTEM, user, PLAN_SCHEMA, check)
 
@@ -871,6 +878,56 @@ def _milestones(milestones: list[Milestone]) -> str:
 def _milestones_with_ids(milestones: list[Milestone]) -> str:
     lines = [f"- milestone_id {m.milestone_id}: {m.title}: {m.due_date or 'no date'}" for m in milestones] or ["- (none)"]
     return "Milestones:\n" + "\n".join(lines)
+
+
+# Words of a task title too common to tie it to a decision clause.
+_TITLE_STOP = {
+    "completamento", "completare", "completion", "complete", "finish", "finire", "scrivere", "write",
+    "preparare", "prepare", "fare", "make", "della", "delle", "dello", "degli", "the", "and", "per",
+    "con", "for", "with", "prima", "first", "versione", "version", "bozza", "draft", "task", "attività",
+}
+
+
+def decided_owner(title: str, decisions: list[Decision], members: dict[int, str]) -> tuple[int, Decision] | None:
+    """
+    The member a recorded decision names for this task, if exactly one: a
+    clause of the decision ("Matteo il RASD", "Marco segue il prototipo")
+    that names one member and a distinctive word of the title. Group test
+    23/11: right after the group decided "Matteo il RASD", the owner card for
+    "Completamento del RASD" suggested Gabriele from his profile.
+    """
+    firsts = {
+        member_id: name.strip().split(" ")[0].lower()
+        for member_id, name in members.items()
+        if name.strip() and len(name.strip().split(" ")[0]) >= 2
+    }
+    # A member's name in the title ("Wireframe di Marco") is not what ties it to a clause.
+    words = {
+        w for w in re.findall(r"[\w']+", title.lower())
+        if len(w) >= 4 and w not in _TITLE_STOP and w not in firsts.values()
+    }
+    if not words:
+        return None
+    found: dict[int, Decision] = {}
+    for decision in decisions:
+        for clause in re.split(r"[,;.\n]", f"{decision.question}. {decision.choice}"):
+            low = clause.lower()
+            named = [m for m, first in firsts.items() if re.search(rf"\b{re.escape(first)}\b", low)]
+            if len(named) == 1 and any(re.search(rf"\b{re.escape(w)}\b", low) for w in words):
+                found.setdefault(named[0], decision)
+    if len(found) != 1:
+        return None
+    return next(iter(found.items()))
+
+
+def _keep_decided_owner(item: PlanItem, decisions: list[Decision], members: dict[int, str]) -> PlanItem:
+    """An owner the group already decided wins over the model's suggestion."""
+    decided = decided_owner(item.title, decisions, members)
+    if decided is None or decided[0] == item.owner_id:
+        return item
+    member_id, decision = decided
+    lead = "Deciso dal gruppo" if italian("", f"{decision.question} {decision.choice}") else "Decided by the group"
+    return item.model_copy(update={"owner_id": member_id, "reason": f"{lead}: {decision.choice}"[:MAX_QUOTE]})
 
 
 def _decision_log(decisions: list[Decision]) -> str:
