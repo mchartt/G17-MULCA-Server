@@ -539,6 +539,14 @@ class PlanCommands:
             await self._remember(message.member_id, said, text.split("\n")[0] if card is None and answer.action else answer.answer)
         if card is not None:
             await self._send_proposal(card)
+        elif message.args.get("maybe") and self._silent is not None:
+            # Answered in words, with no card of its own: the judge's card for
+            # this message (held by R10) is offered too. Group test 23/11:
+            # "per il RASD mi servono prima i wireframe di Marco", written right
+            # after its author talked to Cadence, got the answer "the link is
+            # not recorded yet" and no card to record it. The card's own checks
+            # (R3, R4, R9...) still apply.
+            await self._silent(question)
         if post is None and self._answered is not None:
             # The channel posts this answer itself (it comes back as a notice):
             # the router is told, so the web space can show it too.
