@@ -420,6 +420,38 @@ async def test_r10_the_ask_command_with_maybe_claims_its_text(tmp_path):
     assert web.proactive.is_claimed("E tu che ne pensi?")
 
 
+async def test_a_maybe_answered_in_words_still_lets_its_held_card_out(tmp_path):
+    """Group test 23/11: a dependency said right after talking to Cadence got an answer and no card."""
+    group = Group(tmp_path, answer("Il RASD dipende dai wireframe: il legame non è ancora registrato.", action=none_action()))
+    web, _ = await open_web_space(group)
+    web.proactive = _bridge()
+    released = []
+
+    async def release(text):
+        released.append(text)
+
+    web.proactive.release = release
+    line = "per il RASD però mi servono prima i wireframe di Marco"
+    await web.route_coordinator(command("ask", 100_000_002, question=line, maybe=True))
+    await web.wait_for_background()
+    assert released == [line]
+
+
+async def test_a_sure_call_answered_in_words_lets_no_card_out(tmp_path):
+    group = Group(tmp_path, answer("Il RASD è di Matteo.", action=none_action()))
+    web, _ = await open_web_space(group)
+    web.proactive = _bridge()
+    released = []
+
+    async def release(text):
+        released.append(text)
+
+    web.proactive.release = release
+    await web.route_coordinator(command("ask", 100_000_002, question="chi fa il RASD?"))
+    await web.wait_for_background()
+    assert released == []
+
+
 async def test_r10_a_message_cadences_ask_already_has_gets_no_proactive_card_either():
     # 21/11 live test: one line got a card from the ask and a second one from CS5.
     bridge = _bridge()
