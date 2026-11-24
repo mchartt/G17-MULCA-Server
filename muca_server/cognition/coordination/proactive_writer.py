@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -193,7 +194,9 @@ does not close it.
 - question: the open question, short.
 - options: 2 or 3 options actually proposed in the chat; for each, `label`
   (a few words) and `argument` (one sentence: what was said for it, in the
-  members' terms, with its main drawback if one was said).""",
+  members' terms, with its main drawback if one was said). Only what a member
+  actually said for or against that option: if nobody gave a reason for it,
+  `argument` is "" (never "proposed without pros or cons" or similar).""",
     ProposalKind.BLOCKER: """\
 Situation: a piece of project work cannot go on, or may not be able to go on,
 because it needs other work that is not ready, and a date is at risk. Either a
@@ -336,6 +339,37 @@ def _context(chat, members, profiles, tasks, silenced_topics, today: date, decis
     )
 
 
+_OPTION_STOP = {"usare", "usiamo", "fare", "facciamo", "with", "the", "use", "della", "delle", "degli", "dello", "solo", "only"}
+
+
+def _ripe_decision(strategy_id: str, payload: DecisionPayload, chat: list[ChatLine], members: dict[int, str]) -> None:
+    """
+    A "close the decision" card only for a discussion that is ripe: at least
+    two members talked about the options, and at least two options have a
+    reason a member actually gave. Else NothingToDraft (no card, no retry; a
+    veto starts no cooldown, so the next message can bring it). Live test
+    23/11: the card came at "usiamo Figma o Framer?", the question alone,
+    with "proposed without pros or cons" as the argument of both options.
+    """
+    names = {name.strip().lower() for name in members.values() if name.strip()}
+    words = {
+        w for option in payload.options
+        for w in re.findall(r"\w+", option.label.lower())
+        if len(w) >= 3 and w not in _OPTION_STOP
+    }
+    talked = {
+        line.speaker.strip().lower() for line in chat
+        if line.speaker.strip().lower() in names
+        and any(re.search(rf"\b{re.escape(w)}\b", line.text.lower()) for w in words)
+    }
+    if not talked:  # the labels are paraphrased: fall back to the lines the model cited
+        talked = {e.speaker.strip().lower() for e in payload.context.evidence if e.speaker.strip().lower() in names}
+    argued = [o for o in payload.options if o.argument.strip()]
+    if len(talked) < 2 or len(argued) < 2:
+        logger.info("%s: discussion not ripe (%d members, %d options argued)", strategy_id, len(talked), len(argued))
+        raise NothingToDraft(strategy_id)
+
+
 def _validate(kind, strategy_id, data, chat, members, tasks, today, decisions=()) -> ProactiveDraft:
     """Turn the model's JSON into a payload, or raise (= one retry)."""
     if kind in (ProposalKind.TASK_OWNER, ProposalKind.DELEGATION) and not str(data.get("title", "")).strip():
@@ -353,7 +387,9 @@ def _validate(kind, strategy_id, data, chat, members, tasks, today, decisions=()
     rationale = check_rationale(data.pop("rationale"))
 
     if kind is ProposalKind.DECISION:
-        return ProactiveDraft(kind, DecisionPayload(context=context, **data), rationale)
+        payload = DecisionPayload(context=context, **data)
+        _ripe_decision(strategy_id, payload, chat, members)
+        return ProactiveDraft(kind, payload, rationale)
     if kind is ProposalKind.REVISIT:
         decision = next((d for d in decisions if d.decision_id == data["decision_id"]), None)
         if decision is None:

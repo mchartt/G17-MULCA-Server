@@ -108,7 +108,7 @@ async def test_cs3_needs_two_or_three_options():
         "question": "Which test?",
         "options": [{"label": "Think-aloud", "argument": "why"}, {"label": "SUS", "argument": "fast"}],
         "topic": "Test method",
-        "evidence": [1],
+        "evidence": [1, 2],  # two members: a discussion, not one question (live test 23/11)
         "rationale": "Stepping in because the choice is open.",
     }
     w, _ = writer(two)
@@ -137,3 +137,45 @@ async def test_unknown_strategy_or_empty_chat_costs_nothing():
 async def test_a_provider_error_is_retried_and_never_raised():
     w, client = writer(RuntimeError("down"), RuntimeError("down"))
     assert await draft(w) is None and len(client.calls) == 2
+
+
+# Live test 23/11: "usiamo Figma o Framer?" alone got a "close the decision" card
+# whose options both read "proposed without pros or cons".
+FIGMA_CHAT = [
+    ChatLine("Ada", "per il prototipo usiamo Figma o Framer?", 1000),
+    ChatLine("Bruno", "Figma, lo conosciamo già tutti e abbiamo già i componenti", 2000),
+    ChatLine("Ada", "Framer però fa le animazioni più realistiche per il video", 3000),
+]
+
+
+def figma_card(evidence, framer_argument):
+    return {
+        "question": "Figma o Framer per il prototipo?",
+        "options": [
+            {"label": "Figma", "argument": "Lo conoscete già tutti e ci sono i componenti."},
+            {"label": "Framer", "argument": framer_argument},
+        ],
+        "topic": "Strumento del prototipo",
+        "evidence": evidence,
+        "rationale": "Intervengo perché la scelta è aperta.",
+    }
+
+
+async def test_cs3_waits_for_a_discussion_not_a_question():
+    w, client = writer(figma_card([1], ""))
+    assert await draft(w, "cs3_close_decision", chat=FIGMA_CHAT[:1]) is None
+    assert len(client.calls) == 1  # no retry: not ripe is not an error
+
+
+async def test_cs3_waits_until_two_options_have_a_reason_someone_gave():
+    w, _ = writer(figma_card([1, 2], ""))
+    assert await draft(w, "cs3_close_decision", chat=FIGMA_CHAT[:2]) is None
+
+
+async def test_cs3_comes_once_two_members_argued_two_options():
+    w, _ = writer(figma_card([1, 2, 3], "Animazioni più realistiche per il video."))
+    card = await draft(w, "cs3_close_decision", chat=FIGMA_CHAT)
+    assert card.kind is ProposalKind.DECISION
+    assert [o.label for o in card.payload.options] == ["Figma", "Framer"]
+    system = w._writer._client.calls[0]["messages"][0]["content"]
+    assert '`argument` is ""' in system
