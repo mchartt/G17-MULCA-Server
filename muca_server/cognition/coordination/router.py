@@ -335,7 +335,8 @@ class CoordinatorRouter:
             return
         copy = CoordinatorMirrorMessage(
             channel=channel_of(self._conversation.conversation_id),
-            speaker=message.speaker,
+            # Their web id once they said who they are there (/coordinator me): the web shows them as themselves.
+            speaker=self._as_web(message.speaker),
             # The group's name for this member: "Ada (Discord)" when a web "Ada" is someone else (names.py).
             speaker_name=self._roster().get(self._as_web(message.speaker))
             or message.speaker_name
@@ -344,12 +345,11 @@ class CoordinatorRouter:
             at=time.time(),
         )
         for peer in peers:
-            # One way only (21/11): the web space shows what is written on
-            # Discord and Slack, so the project's whole talk can be read in one
-            # place. Discord and Slack get no copies: a channel filling up with
-            # lines written elsewhere was not wanted there.
-            if peer._conversation.conversation_id.startswith(WEB_PREFIX):
-                await peer._outbound.put(copy)
+            # Every channel of the group shows every other one's chat (27/11:
+            # "all in sync"; it replaces the one-way copy of 21/11). The web
+            # space keeps it all; Discord and Slack show each line with its
+            # channel's name. No loop: the clients never send the bot's own posts.
+            await peer._outbound.put(copy)
 
     def _welcome(self, message: Any) -> None:
         """
@@ -425,7 +425,7 @@ class CoordinatorRouter:
             await self._catchup.remember(self._conversation.conversation_id, f"{who}{VOICE_MARK}", text, "")
         here = self._conversation.conversation_id
         copy = CoordinatorMirrorMessage(
-            channel=f"{channel_of(here)}_voice", speaker=speaker, speaker_name=who, text=text, at=time.time()
+            channel=f"{channel_of(here)}_voice", speaker=self._as_web(speaker), speaker_name=who, text=text, at=time.time()
         )
         for peer in self._peers():
             if peer._conversation.conversation_id.startswith(WEB_PREFIX):
@@ -462,10 +462,9 @@ class CoordinatorRouter:
         copy = CoordinatorMirrorMessage(channel=channel_of(here), speaker=0, speaker_name="Cadence", text=text, at=time.time())
         try:
             for peer in self._peers():
-                if peer._conversation.conversation_id.startswith(WEB_PREFIX):
-                    await peer._outbound.put(copy)
+                await peer._outbound.put(copy)
         except Exception:  # a copy elsewhere must never stop the answer
-            logger.exception("%s could not copy Cadence's answer to the web", here)
+            logger.exception("%s could not copy Cadence's answer to the group's other channels", here)
 
     # ------------------------------------------------------------------
     # Entry point, called by events/dispatcher.py

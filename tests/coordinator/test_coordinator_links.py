@@ -523,22 +523,26 @@ async def test_tasks_owned_before_the_claim_move_to_the_web_member(tmp_path):
     assert (await group.store_for(WEB).load_state()).tasks[0].owner_id == 100_000_001
 
 
-async def test_chat_is_copied_one_way_only_into_the_web_space(tmp_path):
-    # 21/11: the Discord channel should not fill with what is written on the web.
+async def test_chat_is_copied_to_every_channel_of_the_group(tmp_path):
+    # 27/11: everyone in sync. The web shows Discord and Slack; Discord and Slack
+    # show the web and each other (each line with its channel's name).
     group, web, web_q, discord, discord_q = await _linked(tmp_path)
     await web.route_user_text(text(100_000_001, "Ada", "ciao dal web"))
-    assert [m for m in await drain(discord_q) if isinstance(m, CoordinatorMirrorMessage)] == []
+    (to_discord,) = [m for m in await drain(discord_q) if isinstance(m, CoordinatorMirrorMessage)]
+    assert (to_discord.channel, to_discord.speaker_name, to_discord.text) == ("web", "Ada", "ciao dal web")
     await discord.route_user_text(text(9001, "Chiara", "ciao da Discord"))
     (copy,) = [m for m in await drain(web_q) if isinstance(m, CoordinatorMirrorMessage)]
     assert (copy.channel, copy.text) == ("discord", "ciao da Discord")
-    # Two chat channels do not copy to each other either: only the web collects.
     slack, slack_q = group.router("slack:C1", {7001: "Eva"})
     await slack.route_coordinator(command("link", 7001, code="AB12CD"))
     await drain(slack_q)
     await drain(web_q)
     await discord.route_user_text(text(9001, "Chiara", "second line"))
-    assert [m for m in await drain(slack_q) if isinstance(m, CoordinatorMirrorMessage)] == []
+    (on_slack,) = [m for m in await drain(slack_q) if isinstance(m, CoordinatorMirrorMessage)]
+    assert (on_slack.channel, on_slack.text) == ("discord", "second line")
     assert len([m for m in await drain(web_q) if isinstance(m, CoordinatorMirrorMessage)]) == 1
+    # Never back to where it was written.
+    assert [m for m in await drain(discord_q) if isinstance(m, CoordinatorMirrorMessage)] == []
 
 
 async def test_a_code_from_one_channel_makes_the_same_person_one_member_in_the_other(tmp_path):
