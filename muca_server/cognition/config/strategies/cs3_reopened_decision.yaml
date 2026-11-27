@@ -1,4 +1,7 @@
 id: cs3_reopened_decision
+# Typed and spoken (a Discord voice call, transcribed): a decision or a task
+# said aloud becomes a card to confirm in the text channel (router._on_voice).
+modalities: [text, audio]
 # Group Coordinator K3 (scenario C, tutor question 18/11: "how does Cadence
 # detect that this decision was already made?"). Answered with a card that
 # recalls the decision and its reason: Keep, Reopen it, Not now. The

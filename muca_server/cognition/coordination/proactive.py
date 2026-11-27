@@ -51,7 +51,7 @@ rules 4.3 and 11, spec NFR3, GL4, GL10):
         when Cadence cannot take the message
     R12 the lab's unsolicited strategies (pleasant_conversation,
         maintain_focus, resolve_conflict, participation_equality) never speak
-        in a group text chat while the coordinator is on. They are left out
+        in a group chat or a group voice call while the coordinator is on. They are left out
         of the "ambient" catalog (run_server.py), but the web runs in "wake"
         mode, whose catalog still offers them: on 21/11 pleasant_conversation
         answered "blu o verde?" in English, from the agent that cannot see
@@ -199,7 +199,7 @@ class ProactiveBridge:
         """
         if strategy_id not in STRATEGY_KINDS:
             if strategy_id not in SOLICITED:
-                if self._group_text_turn(history):
+                if self._group_turn():
                     logger.info(
                         "%s coordinator vetoed %s: R12 the lab's unsolicited strategies stay silent",
                         self._conversation.conversation_id, strategy_id,
@@ -247,11 +247,15 @@ class ProactiveBridge:
         """R11: the router gives the way to Cadence's ask once its commands exist."""
         self._answer = answer
 
-    def _group_text_turn(self, history: list) -> bool:
-        """True for a typed message in a group conversation (R11, R12 apply only there)."""
-        if self._conversation.is_private or self._conversation.is_ephemeral:
-            return False
-        return not history or getattr(history[-1], "modality", "text") == "text"
+    def _group_turn(self) -> bool:
+        """
+        True in a group conversation, typed or spoken (R12). Spoken too since
+        27/11: a Discord voice call listened to in "ambient" mode, so that
+        Cadence can turn what is said into cards, must not hear the lab's
+        unsolicited strategies speak up either; Cadence answers aloud only
+        when addressed (the solicited strategies, NOT_MINE for a spoken turn).
+        """
+        return not (self._conversation.is_private or self._conversation.is_ephemeral)
 
     def _hand_to_ask(self, strategy_id: str, last: Any, assistant_id: int) -> Verdict:
         """R11: a solicited strategy in a group text chat is answered by Cadence's ask."""

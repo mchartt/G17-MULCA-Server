@@ -63,6 +63,8 @@ from ...protocol.outgoing import AssistantTextMessage
 from .card_requests import CardRequests
 from .catchup import CatchUp, channel_of, summary_line
 from .checkin_timer import CheckinTimer
+from .names import distinct_names
+
 from .links import LINKABLE, WEB_PREFIX, GroupLinks, LinkError, LiveGroups
 from .models import (
     MAX_DOCUMENT_CHARS,
@@ -87,6 +89,9 @@ from .proposals import ProposalService, new_id
 from .reflection import build_reflection, week_of
 from .store import CoordinationStore
 from .writer import LANGUAGES, MAX_RATIONALE_CHARS, ProposalWriter
+
+# How a spoken line is marked in a channel's log: "Ada (voice): ..." (see _on_voice).
+VOICE_MARK = " (voice)"
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +275,10 @@ class CoordinatorRouter:
         await self._conversation.start()
         self._join_live()
         self.checkin_timer.start()
+        # Voice: every spoken turn, once transcribed, is kept and shared (_on_voice).
+        listeners = getattr(self._conversation, "transcript_listeners", None)
+        if isinstance(listeners, list):
+            listeners.append(self._on_voice)
 
     async def close(self) -> None:
         """Session worker: stop the timer and the opener, then close the Conversation as before."""
@@ -326,18 +335,21 @@ class CoordinatorRouter:
             return
         copy = CoordinatorMirrorMessage(
             channel=channel_of(self._conversation.conversation_id),
-            speaker=message.speaker,
-            speaker_name=message.speaker_name or self._conversation.participants().get(message.speaker, "member"),
+            # Their web id once they said who they are there (/coordinator me): the web shows them as themselves.
+            speaker=self._as_web(message.speaker),
+            # The group's name for this member: "Ada (Discord)" when a web "Ada" is someone else (names.py).
+            speaker_name=self._roster().get(self._as_web(message.speaker))
+            or message.speaker_name
+            or self._conversation.participants().get(message.speaker, "member"),
             text=text,
             at=time.time(),
         )
         for peer in peers:
-            # One way only (21/11): the web space shows what is written on
-            # Discord and Slack, so the project's whole talk can be read in one
-            # place. Discord and Slack get no copies: a channel filling up with
-            # lines written elsewhere was not wanted there.
-            if peer._conversation.conversation_id.startswith(WEB_PREFIX):
-                await peer._outbound.put(copy)
+            # Every channel of the group shows every other one's chat (27/11:
+            # "all in sync"; it replaces the one-way copy of 21/11). The web
+            # space keeps it all; Discord and Slack show each line with its
+            # channel's name. No loop: the clients never send the bot's own posts.
+            await peer._outbound.put(copy)
 
     def _welcome(self, message: Any) -> None:
         """
@@ -392,6 +404,51 @@ class CoordinatorRouter:
         except Exception:
             logger.exception("%s could not offer a card after a silent ask", self._conversation.conversation_id)
 
+    async def _on_voice(self, speaker: int, name: str, text: str, ended_at_ms: int) -> None:
+        """
+        A spoken turn of the group's voice call, transcribed (gpt-4o-transcribe,
+        agents/conversation.py). It becomes part of the project like a typed line:
+          - kept in this channel's log as "<name> (voice)", so Cadence's ask,
+            the catch-up and /coordinator transcript read it;
+          - shown in the web space, tagged "<channel> voice", so the web keeps
+            the whole talk of the project in one place.
+        The proactive cards (CS2, CS3, CS5, CS7) read spoken turns too: their
+        strategies list the "audio" modality, so a decision or a task said in
+        the call becomes a card to confirm, posted in the text channel.
+        """
+        text = (text or "").strip()
+        if not text or self._conversation.is_private or self._conversation.is_ephemeral:
+            return
+        await self._load_identities()
+        who = self._roster().get(self._as_web(speaker)) or name or "member"
+        if self._catchup is not None:
+            await self._catchup.remember(self._conversation.conversation_id, f"{who}{VOICE_MARK}", text, "")
+        here = self._conversation.conversation_id
+        copy = CoordinatorMirrorMessage(
+            channel=f"{channel_of(here)}_voice", speaker=self._as_web(speaker), speaker_name=who, text=text, at=time.time()
+        )
+        for peer in self._peers():
+            if peer._conversation.conversation_id.startswith(WEB_PREFIX):
+                await peer._outbound.put(copy)
+
+    async def _on_transcript(self, message: CoordinatorCommandMessage) -> None:
+        """/coordinator transcript: the last spoken lines of this channel's voice call, no model call."""
+        if self._catchup is None:
+            await self._notice(False, "The transcript is not available on this server.", message.request_id)
+            return
+        minutes = message.args.get("minutes", 60)
+        minutes = minutes if isinstance(minutes, int) and 1 <= minutes <= 24 * 60 else 60
+        timed = await self._catchup.recent_timed(self._conversation.conversation_id, window=minutes * 60, limit=200)
+        lines = [
+            f"{time.strftime('%H:%M', time.localtime(at))} {line.replace(VOICE_MARK + ':', ':', 1)}"
+            for at, line in timed
+            if VOICE_MARK + ":" in line
+        ][-40:]
+        if not lines:
+            await self._notice(True, f"Nothing was said in the voice call in the last {minutes} minutes.", message.request_id)
+            return
+        await self._notice(True, f"Voice call, last {minutes} minutes:\n" + "\n".join(lines), message.request_id)
+
     async def _mirror_cadence(self, text: str) -> None:
         """
         What Cadence says in a Discord or Slack channel is shown in the web
@@ -405,10 +462,9 @@ class CoordinatorRouter:
         copy = CoordinatorMirrorMessage(channel=channel_of(here), speaker=0, speaker_name="Cadence", text=text, at=time.time())
         try:
             for peer in self._peers():
-                if peer._conversation.conversation_id.startswith(WEB_PREFIX):
-                    await peer._outbound.put(copy)
+                await peer._outbound.put(copy)
         except Exception:  # a copy elsewhere must never stop the answer
-            logger.exception("%s could not copy Cadence's answer to the web", here)
+            logger.exception("%s could not copy Cadence's answer to the group's other channels", here)
 
     # ------------------------------------------------------------------
     # Entry point, called by events/dispatcher.py
@@ -496,6 +552,8 @@ class CoordinatorRouter:
                 await self._on_unlink(message)
             elif message.command == "catchup":
                 await self._on_catchup(message)
+            elif message.command == "transcript":
+                await self._on_transcript(message)
             elif message.command == "approach":
                 await self._on_approach(message)
             elif message.command == "document":
@@ -789,12 +847,26 @@ class CoordinatorRouter:
         return [r for r in self._live.of(self._home()) if r is not self]
 
     def _roster(self) -> dict[int, str]:
-        """Everyone in the group's open sessions: this channel's members first."""
-        roster: dict[int, str] = {}
+        """
+        Everyone in the group's open sessions, this channel's members first,
+        each under a name no other member has (names.py: "Ada (Discord)" and
+        "Ada (Web)" are two people; the same person is one id after
+        /coordinator me). Cards, the plan, ask and the model all read it.
+        """
+        entries = [(m, n, c) for m, (n, c) in self._own_members_with_channel().items()]
         for peer in self._peers():
-            roster.update(peer._own_members())
-        roster.update(self._own_members())
-        return roster
+            entries += [(m, n, c) for m, (n, c) in peer._own_members_with_channel().items()]
+        return distinct_names(entries)
+
+    def _own_members_with_channel(self) -> dict[int, tuple[str, str]]:
+        """This channel's members as (name, channel); one who claimed a web identity is a web member."""
+        here = channel_of(self._conversation.conversation_id)
+        known = self._identities or {}
+        members: dict[int, tuple[str, str]] = {}
+        for member_id, name in self._conversation.participants().items():
+            web = known.get(member_id)
+            members[web[0] if web else member_id] = (web[1], "web") if web else (name, here)
+        return members
 
     def _own_members(self) -> dict[int, str]:
         """This channel's members, each under their web identity when they claimed one (_on_me)."""

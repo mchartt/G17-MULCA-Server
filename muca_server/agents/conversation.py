@@ -440,6 +440,11 @@ class Conversation:
         self._item_speakers: dict[str, int] = {}
         self._transcripts: dict[str, str] = {}
         self._transcript_arrived = asyncio.Event()
+        # Who else reads each spoken turn once transcribed (speaker id, name,
+        # text, end ms): the Group Coordinator keeps the call's transcript and
+        # shows it in the web space. A listener that fails is logged, never
+        # raised: the voice turn goes on exactly as before.
+        self.transcript_listeners: list[Callable[[int, str, str, int], Awaitable[None]]] = []
 
         # Whole turns, handled strictly one after the other.
         self._turn_queue: asyncio.Queue[TurnJob] = asyncio.Queue()
@@ -1509,6 +1514,14 @@ class Conversation:
             if self._listening_mode not in NON_AMBIENT_LISTENING_MODES:
                 self._ask_observers_to_consider(speaker)
             return
+
+        # Not MULCA's own voice heard back (an echo): only what people said.
+        listeners = [] if _is_echo(transcript, self._recent_replies, _now_ms()) else list(self.transcript_listeners)
+        for listener in listeners:
+            try:
+                await listener(speaker, self._username(speaker), transcript, ended_at)
+            except Exception:
+                logger.exception("A transcript listener failed")
 
         # "wake_v2": wake, dismissal and hold, whichever is said last.
         command = _voice_command_v2(transcript) if self._v2 else None

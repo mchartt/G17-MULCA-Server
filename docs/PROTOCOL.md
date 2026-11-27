@@ -132,3 +132,24 @@ strategy, the topic and the messages behind it.
 
 These events are only for group conversations: in a DM or a session without
 `conversationId` every command is answered with a refusing notice.
+
+### Voice call (27/11)
+
+A Discord voice call linked to a group (the client's `/coordinator voice`,
+listening mode `ambient`) is part of the project:
+
+- Every spoken turn, once transcribed (`gpt-4o-transcribe`, the Realtime
+  session's own transcription), is kept in the channel's log as
+  `"<name> (voice)"`. Cadence's `ask`, the catch-up and the card writers read it.
+- In a linked group the web space gets it as `coordinator_mirror` with
+  `channel` = `"discord_voice"` (shown as "Discord voice").
+- The proactive strategies (CS2, CS3, CS5, CS7) list the `audio` modality: a
+  task or a decision said aloud becomes a card, posted in the text channel and
+  in every linked channel. The lab's unsolicited strategies stay silent in the
+  call (R12); Cadence speaks aloud only when addressed.
+- `coordinator_command` `transcript`: `args.minutes` (1–1440, default 60) → a
+  notice with the spoken lines of that window, `HH:MM Name: text`, no model call.
+
+Members across channels have one name each in a linked group (`names` on
+cards and state): `"Ada (Discord)"` and `"Ada (Web)"` are two people, `"Luca 2"`
+the second Luca of one channel. `/coordinator me` makes one person one member.

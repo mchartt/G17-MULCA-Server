@@ -103,6 +103,8 @@ class CoordinatorCommandMessage(CoordinatorIncomingMessage):
         "approach", "document", "reflection", "progress",
         # "me": one person, one member across channels (router._on_me).
         "me",
+        # "transcript": what was said in the group's voice call lately (router._on_transcript).
+        "transcript",
     ]
     member_id: int = Field(alias="memberId")
     args: dict[str, Any] = Field(default_factory=dict)

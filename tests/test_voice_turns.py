@@ -195,6 +195,33 @@ async def test_a_transcribed_spoken_turn_reaches_the_policy_attributed():
     ]
 
 
+async def test_transcript_listeners_get_each_spoken_turn_and_a_failing_one_changes_nothing():
+    # The Group Coordinator keeps the call's transcript (router._on_voice).
+    conversation, factory, policy, _ = make_conversation()
+    heard = []
+
+    async def listener(speaker, name, text, ended_at):
+        heard.append((speaker, name, text))
+
+    async def broken(*_):
+        raise RuntimeError("boom")
+
+    conversation.transcript_listeners += [broken, listener]
+    await conversation.start()
+    await conversation.route_participants(
+        parse_incoming_message(
+            {"event": "participants", "participants": [{"id": 5, "name": "Ada"}]},
+        )
+    )
+
+    await speak_one_turn(conversation, factory, speaker=5, item_id="in-1")
+    await conversation._handle_transcript("in-1", "  I'll print the survey  ")
+    await conversation.wait_until_idle()
+
+    assert heard == [(5, "Ada", "I'll print the survey")]
+    assert [u.content for u in policy.utterances] == ["I'll print the survey"]
+
+
 async def test_the_main_agent_also_gets_the_speaker_tagged_transcript():
     # Found live: unlike a text turn (which sends the main agent the exact
     # "speaker: text" line), a voice turn never did -- the main agent only

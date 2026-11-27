@@ -782,7 +782,7 @@ class CoordinationStore:
                     done_at=row["done_at"],
                     touched_at=row["touched_at"],
                 )
-                for row in await _all(db, "SELECT * FROM coord_task ORDER BY task_id")
+                for row in await _all(db, "SELECT * FROM coord_task ORDER BY COALESCE(created_at, 0), rowid")
             ]
             decisions = [
                 Decision(**dict(row))
