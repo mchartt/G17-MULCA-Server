@@ -2,6 +2,31 @@
 
 Newest first. Each entry: date, decision, alternatives, reason, status.
 
+## 2026-11-27 · CS7-W1 the blocker writer may say "no dependency" (approved by Matteo)
+
+- **Problem:** a CS7 card had one filter only, the Realtime judge that fires
+  the strategy. The card writer, which sees the whole plan (done tasks too),
+  had no way to decline: `COMMON_RULES` excluded blockers from the `title ""`
+  exit, and a "possible" card on nothing is invalid, so declining cost two
+  invalid answers (two calls). Live 27/11, writer level, baseline `7dc7548`:
+  false cards 2/13 on dev negatives in both runs (+1 that only R7 dropped),
+  21 invalid answers out of 35 calls.
+- **Decision:** `certainty` may be `"none"` (`proactive_writer.NO_DEPENDENCY`):
+  the server turns it into `NothingToDraft`, no card, no retry. The BLOCKER
+  rules first ask whether there is a dependency at all (the planned work
+  leaves out the part that needs it, the other work is done or ready in time,
+  only an order of work, already recorded with dates that fit, solved later
+  in the chat). `BlockerCertainty` unchanged: a card never carries "none".
+- **Alternatives:** a deterministic veto on words (rejected: rules built on a
+  scenario's words); changing the judge's trigger (kept for later: the judge
+  cannot be measured from the cloud sessions, WebSocket is not proxied);
+  showing done tasks to the judge (later iteration, one change at a time).
+- **Not changed:** judge, Realtime/voice, the lab's strategies, R1–R12, the
+  click as the only way to change state.
+- **Status:** IMPLEMENTED/TESTED OFFLINE (3 tests) + REAL-MODEL TESTED at the
+  writer level (`CONVERSATION_EVAL.md`, "CS7 implicit dependencies"). Judge
+  level and end to end: NOT VERIFIED.
+
 ## 2026-11-20 · Conversational optimization (taken by Claude, to confirm by Matteo)
 
 Evidence and runs: `CONVERSATION_EVAL.md`.

@@ -1,0 +1,155 @@
+CS7 corpus, writer level, split dev, today 2026-11-27 (lunedì = test day, mercoledì = fix day)
+
+[PASS] dev/minimal_pair D1+ full booking path vs Confirm fix #1
+  > Lea: lunedì facciamo provare ai partecipanti il percorso completo di prenotazione
+  > Omar: Il bottone Conferma va ancora in errore. Riesco a sistemarlo mercoledì
+  CARD Intervengo perché il test del percorso completo è lunedì, mentre il fix del bottone Conferma è previsto mercoledì.
+  {"task_id": "t1", "title": "Test percorso prenotazione", "depends_on_task_id": "t2", "depends_on_title": "Fix bottone Conferma", "depends_on_owner_id": null, "helper_id": 2, "question": "Per il test di lunedì serve il bottone Conferma funzionante, o si può provare il percorso senza la conferma finale?", "certainty": "possible", "ways_forward": ["Provare il percorso senza la conferma finale, se sufficiente per il test."]}
+  evidence: ['Lea', 'Omar']
+
+[PASS] dev/minimal_pair D1+ full booking path vs Confirm fix #2
+  > Lea: lunedì facciamo provare ai partecipanti il percorso completo di prenotazione
+  > Omar: Il bottone Conferma va ancora in errore. Riesco a sistemarlo mercoledì
+  CARD Intervengo perché il test del percorso completo è previsto lunedì, mentre il fix del bottone Conferma è previsto mercoledì.
+  {"task_id": "t1", "title": "Test percorso prenotazione", "depends_on_task_id": "t2", "depends_on_title": "Fix bottone Conferma", "depends_on_owner_id": null, "helper_id": 2, "question": "Per il test di lunedì serve il bottone Conferma funzionante, oppure si può simulare la conferma?", "certainty": "possible", "ways_forward": ["Simulare la conferma durante il test di lunedì."]}
+  evidence: ['Lea', 'Omar']
+
+[PASS] dev/minimal_pair D1+ full booking path vs Confirm fix #3
+  > Lea: lunedì facciamo provare ai partecipanti il percorso completo di prenotazione
+  > Omar: Il bottone Conferma va ancora in errore. Riesco a sistemarlo mercoledì
+  CARD Intervengo perché il test del percorso completo è previsto lunedì, mentre il fix del bottone Conferma è previsto mercoledì.
+  {"task_id": "t1", "title": "Test percorso prenotazione", "depends_on_task_id": "t2", "depends_on_title": "Fix bottone Conferma", "depends_on_owner_id": null, "helper_id": 2, "question": "Il test di lunedì richiede il bottone Conferma funzionante, o si può provare il percorso fermandosi prima della conferma?", "certainty": "possible", "ways_forward": ["Provare il percorso fino al passaggio precedente alla conferma."]}
+  evidence: ['Lea', 'Omar']
+
+[PASS] dev/minimal_pair D1- test stops before pressing Confirm #1
+  > Lea: lunedì testiamo solo se gli utenti trovano il bottone Conferma. Chiudiamo la prova prima di premerlo
+  > Omar: Il bottone Conferma va ancora in errore. Riesco a sistemarlo mercoledì
+  (no card)
+
+[PASS] dev/minimal_pair D1- test stops before pressing Confirm #2
+  > Lea: lunedì testiamo solo se gli utenti trovano il bottone Conferma. Chiudiamo la prova prima di premerlo
+  > Omar: Il bottone Conferma va ancora in errore. Riesco a sistemarlo mercoledì
+  (no card)
+
+[PASS] dev/minimal_pair D1- test stops before pressing Confirm #3
+  > Lea: lunedì testiamo solo se gli utenti trovano il bottone Conferma. Chiudiamo la prova prima di premerlo
+  > Omar: Il bottone Conferma va ancora in errore. Riesco a sistemarlo mercoledì
+  (no card)
+
+[PASS] dev/reference D2+ 'that version' not ready yet #1
+  > Giulia: la build nuova con il login sistemato la carico mercoledì
+  > Lea: per il test di lunedì uso quella versione
+  CARD Intervengo perché Lea prevede di usare lunedì una build che Giulia caricherà mercoledì, mettendo a rischio il test.
+  {"task_id": "t1", "title": "Test percorso prenotazione", "depends_on_task_id": null, "depends_on_title": "Build nuova con il login sistemato", "depends_on_owner_id": 3, "helper_id": 3, "question": "Per il test di lunedì serve la build prevista mercoledì, o basterebbe una versione minima anticipata con il login sistemato?", "certainty": "possible", "ways_forward": ["Anticipare una versione minima con il login sistemato."]}
+  evidence: ['Giulia', 'Lea']
+
+[PASS] dev/reference D2- 'that version' already uploaded #1
+  > Giulia: la build nuova con il login sistemato è caricata, il link è nel canale
+  > Lea: per il test di lunedì uso quella versione
+  (no card)
+
+[PASS] dev/chat_x_plan D3+ chat x plan: fix still open #1
+  > Lea: lunedì alle 10 ho cinque tester per il percorso completo di prenotazione
+  CARD Intervengo perché il test del percorso completo è lunedì, mentre il fix del bottone Conferma è previsto per il 2 dicembre e potrebbe essere necessario.
+  {"task_id": "t1", "title": "Test percorso prenotazione", "depends_on_task_id": "t2", "depends_on_title": "Fix bottone Conferma", "depends_on_owner_id": null, "helper_id": 2, "question": "Per il test di lunedì serve il fix completo del bottone Conferma, o basta una correzione minima?", "certainty": "possible", "ways_forward": ["Preparare prima una correzione minima del bottone necessaria al test."]}
+  evidence: ['Lea']
+
+[PASS] dev/chat_x_plan D3- chat x plan: fix already done #1
+  > Lea: lunedì alle 10 ho cinque tester per il percorso completo di prenotazione
+  (no card)
+
+[PASS] dev/reschedule D4+ reschedule creates the risk #1
+  > Lea: il test completo di prenotazione resta lunedì
+  > Omar: sposto il fix del Conferma a mercoledì, prima ho l'esame
+  CARD Intervengo perché il fix del Conferma è previsto mercoledì, dopo il test completo di lunedì.
+  {"task_id": "t1", "title": "Test percorso prenotazione", "depends_on_task_id": "t2", "depends_on_title": "Fix bottone Conferma", "depends_on_owner_id": null, "helper_id": 2, "question": "Il fix del Conferma serve per il test completo di lunedì, o si può testare prima il resto del percorso?", "certainty": "possible", "ways_forward": ["Testare prima le parti del percorso che non richiedono il Conferma."]}
+  evidence: ['Lea', 'Omar']
+
+[FAIL] dev/reschedule D4- reschedule removes the risk #1
+  > Lea: spostiamo il test completo di prenotazione a venerdì
+  > Omar: ok, il fix del Conferma è per mercoledì
+  CARD Intervengo perché il test completo proposto per venerdì potrebbe dipendere dal fix del Conferma previsto per mercoledì.
+  {"task_id": "t1", "title": "Test percorso prenotazione", "depends_on_task_id": "t2", "depends_on_title": "Fix bottone Conferma", "depends_on_owner_id": null, "helper_id": 2, "question": "Il test completo di venerdì richiede il fix del Conferma, o si può intanto testare il percorso fino al bottone?", "certainty": "possible", "ways_forward": ["Testare prima il percorso fino al bottone Conferma."]}
+  evidence: ['Lea', 'Omar']
+  !! false card
+
+[FAIL] dev/order_not_need D5- chronological order only #1
+  > Giulia: finite le icone passo alle slide per la demo
+  CARD Intervengo perché l'avvio delle slide sembra dipendere dal completamento delle icone.
+  {"task_id": null, "title": "Slide per la demo", "depends_on_task_id": "t3", "depends_on_title": "Icone", "depends_on_owner_id": null, "helper_id": 3, "question": "Per iniziare le slide servono le icone finite, o puoi prepararle intanto senza icone?", "certainty": "possible", "ways_forward": ["Preparare le slide senza icone e aggiungerle quando saranno finite."]}
+  evidence: ['Giulia']
+  !! false card
+
+[PASS] dev/independent D6- similar but independent #1
+  > Lea: oggi scrivo lo script del test
+  > Omar: io rifaccio i modelli delle API
+  (no card)
+
+  (writer drafted a card, server dropped it: R7 the plan already records this dependency)
+
+[PASS] dev/recorded D7- dependency already recorded, dates fit #1
+  > Lea: il test completo resta lunedì pomeriggio
+  > Omar: il fix del Conferma arriva domenica
+  (no card)
+
+[PASS] dev/stated D8+ stated blocker #1
+  > Lea: non posso preparare i task del test finché il bottone Conferma non funziona, sono ferma
+  CARD Intervengo perché Lea è ferma nella preparazione del test del 30 novembre e il fix necessario è previsto per il 2 dicembre.
+  {"task_id": "t1", "title": "Test percorso prenotazione", "depends_on_task_id": "t2", "depends_on_title": "Fix bottone Conferma", "depends_on_owner_id": null, "helper_id": 2, "question": "Che cosa manca esattamente nel bottone Conferma per sbloccare la preparazione dei task del test?", "certainty": "blocked", "ways_forward": []}
+  evidence: ['Lea']
+
+[PASS] dev/solved D9- solved in the chat #1
+  > Lea: non posso testare finché il Conferma va in errore
+  > Omar: ho messo un mock del Conferma, usa /mock/conferma
+  > Lea: perfetto, funziona
+  (no card)
+
+[PASS] dev/minimal_pair_en D10+ EN full booking path #1
+  > Lea: On Monday the participants try the full booking flow
+  > Omar: Confirm still throws an error, I can fix it on Wednesday
+  CARD Stepping in because Monday’s full booking test may need the Confirm fix scheduled for Wednesday.
+  {"task_id": "t1", "title": "Booking flow test", "depends_on_task_id": "t2", "depends_on_title": "Fix bottone Conferma", "depends_on_owner_id": null, "helper_id": 2, "question": "Does Monday’s test need the Confirm fix, or could participants test up to that step?", "certainty": "possible", "ways_forward": ["Test the booking flow up to Confirm first."]}
+  evidence: ['Lea', 'Omar']
+
+[PASS] dev/minimal_pair_en D10+ EN full booking path #2
+  > Lea: On Monday the participants try the full booking flow
+  > Omar: Confirm still throws an error, I can fix it on Wednesday
+  CARD Stepping in because Monday’s full-flow test may need the Confirm fix, which is planned for Wednesday.
+  {"task_id": "t1", "title": "Booking flow test", "depends_on_task_id": "t2", "depends_on_title": "Fix bottone Conferma", "depends_on_owner_id": null, "helper_id": 2, "question": "Does Monday’s test need the Confirm fix, or could participants test the rest of the flow first?", "certainty": "possible", "ways_forward": ["Test the rest of the booking flow first."]}
+  evidence: ['Lea', 'Omar']
+
+[PASS] dev/minimal_pair_en D10+ EN full booking path #3
+  > Lea: On Monday the participants try the full booking flow
+  > Omar: Confirm still throws an error, I can fix it on Wednesday
+  CARD Stepping in because Monday’s full booking test may need the Confirm fix, which is planned for Wednesday.
+  {"task_id": "t1", "title": "Booking flow test", "depends_on_task_id": "t2", "depends_on_title": "Fix bottone Conferma", "depends_on_owner_id": null, "helper_id": 2, "question": "Does Monday’s test need the Confirm fix, or could participants test up to confirmation first?", "certainty": "possible", "ways_forward": ["Test the flow up to confirmation first."]}
+  evidence: ['Lea', 'Omar']
+
+[PASS] dev/minimal_pair_en D10- EN test stops before Confirm #1
+  > Lea: On Monday we only check whether people find the Confirm button, we stop before pressing it
+  > Omar: Confirm still throws an error, I can fix it on Wednesday
+  (no card)
+
+[PASS] dev/minimal_pair_en D10- EN test stops before Confirm #2
+  > Lea: On Monday we only check whether people find the Confirm button, we stop before pressing it
+  > Omar: Confirm still throws an error, I can fix it on Wednesday
+  (no card)
+
+[PASS] dev/minimal_pair_en D10- EN test stops before Confirm #3
+  > Lea: On Monday we only check whether people find the Confirm button, we stop before pressing it
+  > Omar: Confirm still throws an error, I can fix it on Wednesday
+  (no card)
+
+[PASS] dev/competition D11 owner-and-date wording, CS7 expected #1
+  > Lea: il test completo di prenotazione è lunedì
+  > Giulia: le icone sono quasi pronte
+  > Omar: il Conferma va in errore, lo sistemo io mercoledì
+  CARD Intervengo perché il test completo è previsto lunedì, mentre il fix del bottone Conferma è previsto mercoledì.
+  {"task_id": "t1", "title": "Test percorso prenotazione", "depends_on_task_id": "t2", "depends_on_title": "Fix bottone Conferma", "depends_on_owner_id": null, "helper_id": 2, "question": "Il fix di Conferma serve per il test completo di lunedì, o si può intanto testare il percorso fino a quel passaggio?", "certainty": "possible", "ways_forward": []}
+  evidence: ['Lea', 'Omar']
+
+=== summary (runs) ===
+dev: positives detected 11/11, fully right 11/11; false cards 2/13
+dev: + 1 false card(s) drafted by the writer and dropped by the server's R7
+
+latency per draft: median 9.9 s, max 17.9 s; 35 model calls, 45086 prompt + 8872 completion tokens (gpt-6.1-sol)

@@ -259,3 +259,87 @@ chat ("annulla la proposta"), reverting the last confirmed change ("annulla
 l'ultima modifica"). Need a data decision: soft delete / restore of tasks. Pre-existing flaky test:
 `test_a_blocker_replaces_an_owner_card_still_being_drafted` (sleep 0.05 s)
 fails only under load; 12/12 sequential on HEAD and on this branch.
+
+## CS7 implicit dependencies (27 Nov 2026, story CS7-W1, approved by Matteo)
+
+Goal: Cadence notices that one piece of work needs another's result even
+when nobody says so, cites the messages that suggest it, leaves the
+confirmation to the group, and stays silent when the link is not there.
+
+### Path and where an error can come from
+
+message → `Conversation._take_text_turn` → judge (Realtime,
+`gpt-realtime-2.1-mini`) with the turn update and the Project memory (open
+tasks only, `project_memory.py`) → one strategy per turn among CS7, CS5, CS3,
+CS2, K3 and the solicited ones → `policy.on_intervention_signal` (cooldown,
+modality) → `ProactiveBridge.offer` (R1–R5, R8, R10; TAKEN starts CS7's
+10-message cooldown, `policy.py` `record_action`) → `ProactiveWriter.draft`
+(`gpt-6.1-sol`: last 20 lines of this channel, the whole plan, the judge's
+reason) → `_validate` → R6/R7/R9 → pending card → a member's click.
+
+Found by reading `7dc7548`: the writer had no "no card" for a blocker
+(`COMMON_RULES` excluded blockers from the `title ""` exit), so the judge was
+the only filter. Offline probes with a fake model: on the counterexample a
+valid card was accepted; declining took two invalid answers; a "possible"
+card citing one side only, and a reversed direction, pass validation (both
+still open, model-only).
+
+### Corpus
+
+`scripts/live_cs7_corpus.py`, 26 cases written and labelled before any run
+and approved by Matteo: dev 16 (booking product: minimal pairs IT/EN,
+"quella versione", chat × plan, reschedule, order without need, independent,
+already recorded, stated, solved, CS5-like wording, duplicate) and holdout 10
+(other domains: demo video, poster ← charts ← sensor data, consent form,
+report; never used to write the prompt). Critical pairs (D1±, D10±, H1±, H7±)
+×3 per run. Dates relative to the day of the run.
+
+### Results, writer level (real model `gpt-6.1-sol-2026-09-29`, Azure)
+
+Every case is run as if the judge had fired; the server's R7 is applied
+after the draft (run 1 of the baseline printed before that line existed: its
+D7 card links two tasks the plan already links, so R7 drops it; counted that way).
+
+| Set | Version | Positives detected | Fully right | False cards on negatives | Invalid answers / calls | Median latency |
+|---|---|---|---|---|---|---|
+| dev ×2 runs | baseline `7dc7548` | 22/22 | 22/22 | **4/26** (D4− ×2, D5− ×2) + 2 dropped only by R7 (D7−) | 42/70 | 9.8–9.9 s |
+| dev ×2 runs | CS7-W1 | 22/22 | 22/22 | **1/26** (D4− run 1) | 0/48 | 3.7–4.0 s |
+| holdout ×1 run | baseline | 8/8 | 8/8 * | 0/7 | 14/24 | 9.5 s |
+| holdout ×1 run | CS7-W1 | 8/8 | 8/8 * | 0/7 | 0/17 | 4.2 s |
+
+\* 5/8 with the label as first written: H7+ expected Sara as owner of the new
+"cleaned survey results" task; she says "won't be cleaned" without saying
+who cleans them, and the writer's rule (F2) is "null if nobody is named".
+Label fixed after the run, never to fit an answer, to confirm with the team.
+Not scored: H5 (illness: no card, no health mention, both versions), H6
+(vague dates: no card, both versions). Critical pairs: all 6/6 (dev) and 3/3
+(holdout) correct on both versions; no direction, entity or evidence error
+on any card.
+
+Reading: the gain is on false cards (4/26 → 1/26) with no loss of
+detections, plus half the calls and latency. The holdout did not separate
+the versions (both 0/7): the generalization of the gain is NOT shown by this
+holdout, only that the change did not hurt it. Samples are small.
+Remaining dev error: D4− (the chat moves the test after the fix, the plan
+still has the old date) 1/2 with CS7-W1, 2/2 with the baseline.
+
+Cost (repo price table, `main_agent.py`: $2 / $10 per M tokens): about
+223k input + 36k output tokens for all runs of 27/11 ≈ $0.8. Billing: NOT VERIFIED.
+
+### Not verified
+
+- **Judge level and end to end** (does CS7 fire on the right turn; CS5/CS3
+  competition; duplicate D12): NOT RUN. The cloud session's proxy does not
+  carry WebSocket upgrades, which the Realtime judge needs. Run on a PC:
+  `python -m muca_server.run_server` with `MUCA_COORDINATOR_ENABLED=on`, a
+  throw-away `MUCA_DB_DIR`, the log to a file, then
+  `python scripts/live_cs7_corpus.py judge ws://localhost:8765/ all "" 3 --log <file>`.
+- Deployed app: Render runs Project `81e8f87` (= Server `7dc7548`, checked on
+  Render 27/11); CS7-W1 reaches it only after merge + vendor refresh.
+- Multichannel: the writer sees one channel only (by design, TRACEABILITY).
+
+### Next candidates (one per iteration, not done)
+
+1. Done tasks in the Project memory, so the judge can tell "ready" from "absent".
+2. No cooldown when a fired CS7 ends with no card (a false fire now mutes CS7 for 10 messages).
+3. A "possible" card must cite both sides (server check on evidence speakers).
