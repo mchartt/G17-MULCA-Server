@@ -54,7 +54,7 @@ def utter(speaker_id, text, name="Ada", ts=0):
 HISTORY = [utter(1, "fonts?", "Ada"), utter(2, "Arial!", "Bruno"), utter(3, "no, Helvetica", "Chiara")]
 
 
-def make_bridge(store, writer, conversation=None, clock=None, members=None):
+def make_bridge(store, writer, conversation=None, clock=None, members=None, name_of=None):
     clock = clock or Clock()
     sent = []
 
@@ -68,6 +68,7 @@ def make_bridge(store, writer, conversation=None, clock=None, members=None):
         service=lambda: ProposalService(store, clock=clock),
         send_proposal=send,
         members=members,
+        name_of=name_of,
         today=lambda: date(2026, 11, 20),
         clock=clock,
     )
@@ -170,6 +171,16 @@ async def test_linked_channels_share_the_five_minutes_but_not_the_message_count(
     # R3 is per channel: the web's count of 200 says nothing about Discord's 3.
     clock.now += MIN_SECONDS_BETWEEN + 1
     assert await offer(discord, count=3) is Verdict.TAKEN and len(sent_discord) == 1
+
+
+async def test_the_chat_a_writer_reads_names_people_as_the_group_does(store):
+    # 27/11: "Ada" in the chat and "Ada (Slack)" in the members are the same person;
+    # the writer gets one name for her, so who-talked checks (CS3 ripeness) match.
+    writer = FakeWriter(deleg_draft())
+    group = {1: "Ada (Slack)", 2: "Bruno", 3: "Chiara"}
+    bridge, _, _ = make_bridge(store, writer, members=lambda: group, name_of=group.get)
+    assert await offer(bridge) is Verdict.TAKEN
+    assert [line.speaker for line in writer.calls[0]["chat"]] == ["Ada (Slack)", "Bruno", "Chiara"]
 
 
 async def test_a_card_may_name_a_member_of_another_channel(store):

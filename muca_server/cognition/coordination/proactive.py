@@ -145,6 +145,7 @@ class ProactiveBridge:
         clock: Callable[[], float] = time.time,
         listening: Callable[[], bool] | None = None,
         answer: Callable[[int, str], bool] | None = None,
+        name_of: Callable[[int], str | None] | None = None,
     ) -> None:
         self._conversation = conversation
         # R11: hands a message to Cadence's ask (router); False = it could not take it.
@@ -157,6 +158,9 @@ class ProactiveBridge:
         self._send_proposal = send_proposal
         # Who a card may name: the whole group when linked, else this channel.
         self._members = members or (lambda: dict(conversation.participants()))
+        # The group's name for a speaker ("Ada (Slack)", names.py): the chat lines a card
+        # writer reads use the same names as the members it may name.
+        self._name_of = name_of or (lambda speaker: None)
         # R3 counts this channel's own messages; R4's time is the group's.
         self._count_mark = f"proactive:{getattr(conversation, 'conversation_id', '')}"
         self._today = today
@@ -236,7 +240,7 @@ class ProactiveBridge:
             logger.info("%s coordinator vetoed %s: %s", self._conversation.conversation_id, strategy_id, vetoed)
             return Verdict.VETOED
         chat = [
-            ChatLine(speaker=u.speaker_name or str(u.speaker_id), text=u.content, at_ms=u.timestamp_ms)
+            ChatLine(speaker=self._name_of(u.speaker_id) or u.speaker_name or str(u.speaker_id), text=u.content, at_ms=u.timestamp_ms)
             for u in history[-CHAT_WINDOW:]
             if u.speaker_id != assistant_id and u.content.strip()
         ]

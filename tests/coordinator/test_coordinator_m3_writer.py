@@ -172,6 +172,16 @@ async def test_cs3_waits_until_two_options_have_a_reason_someone_gave():
     assert await draft(w, "cs3_close_decision", chat=FIGMA_CHAT[:2]) is None
 
 
+async def test_cs3_counts_members_by_the_names_the_group_uses(store=None):
+    # The chat lines carry the group's names (ProactiveBridge name_of): "Ada (Slack)" and
+    # "Ada (Web)" are two people, and both count as members who argued.
+    chat = [ChatLine("Ada (Slack)", FIGMA_CHAT[0].text, 1000), ChatLine("Ada (Web)", FIGMA_CHAT[1].text, 2000),
+            ChatLine("Ada (Slack)", FIGMA_CHAT[2].text, 3000)]
+    w, _ = writer(figma_card([1, 2, 3], "Animazioni più realistiche per il video."))
+    card = await draft(w, "cs3_close_decision", chat=chat, members={1: "Ada (Slack)", 2: "Ada (Web)"})
+    assert card is not None and card.kind is ProposalKind.DECISION
+
+
 async def test_cs3_comes_once_two_members_argued_two_options():
     w, _ = writer(figma_card([1, 2, 3], "Animazioni più realistiche per il video."))
     card = await draft(w, "cs3_close_decision", chat=FIGMA_CHAT)
