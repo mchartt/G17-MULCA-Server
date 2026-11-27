@@ -2,6 +2,44 @@
 
 Newest first. Each entry: date, decision, alternatives, reason, status.
 
+## 2026-11-27 · Adding Cadence to Discord, Slack and voice with buttons (taken by Claude at the person's request)
+
+- **Problem:** a group could not add Cadence on its own. The web app's
+  Connect dialog said "Ask your team who has the invite link of the bot"
+  (no link existed); Slack needed each group to create an app, copy two
+  tokens and restart the server (one workspace per server); voice needed
+  `/coordinator voice` typed while sitting in the call.
+- **Decision:** one Cadence app per platform, run by the team; groups add
+  it with a button. (1) Web: `GET /api/connect` and the dialog show
+  **Add Cadence to Discord** (bot invite address from `DISCORD_CLIENT_ID`,
+  with the permissions the coordinator and voice need) and **Add Cadence to
+  Slack** (OAuth v2, signed 10-minute state, token per workspace saved
+  server side, deleted on `app_uninstalled`). Then one step everywhere:
+  paste the space's link in the channel (unchanged). (2) Slack serves many
+  workspaces from one Socket Mode process (`slack/workspaces.py`); the old
+  `SLACK_BOT_TOKEN` setup still works. (3) Discord: Cadence greets a new
+  server with the two steps; after a pasted link it offers voice with one
+  click (button, or a menu of voice channels), same effect as
+  `/coordinator voice`, and tells the channel who turned it on. (4) The
+  personal code is optional, folded away. (5) Slack voice: said plainly
+  that bots cannot join huddles; voice is Discord only.
+- **Alternatives:** (a) better written guides only (rejected: non-experts
+  still create bots and copy tokens); (b) each group hosts its own bot
+  (rejected: same); (c) a web voice room in the app (rejected for now: new
+  Realtime/audio path, which the project rules keep untouched without a
+  specific decision); (d) auto-joining any voice channel without asking
+  (rejected: consent; the group chooses with a click that everyone sees).
+- **Not changed:** the audio/Realtime path (`voice/`), MUCA-Server, the
+  protocol, the lab's commands; with `MULCA_COORDINATOR_ENABLED` off nothing
+  new runs on Discord (greeting and voice offer live in the coordinator
+  bridge). Secrets only in env (`SLACK_CLIENT_SECRET`) and in the server's
+  SQLite (`slack_installs.sqlite3`), never sent to the browser.
+- **Status:** IMPLEMENTED/TESTED OFFLINE (G17-MULCA-Project branch
+  `claude/project-thread-x2m2ql`: 12 pytest in `tests/test_easy_connect.py`,
+  2 Vitest; full suites green). NOT VERIFIED LIVE: the real Discord and
+  Slack install round trips, a second Slack workspace, uninstall. Voice on
+  the Render server is still NOT VERIFIED (Azure, `AZURE_SETUP.md`).
+
 ## 2026-11-27 · CS7-W1 the blocker writer may say "no dependency" (approved by Matteo)
 
 - **Problem:** a CS7 card had one filter only, the Realtime judge that fires
