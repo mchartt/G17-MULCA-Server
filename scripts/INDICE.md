@@ -32,4 +32,5 @@ not hide the results of the others. The key is never printed.
 |---|---|
 | `live_ask_corpus.py` | 12 cases of Cadence's answers (ask path). |
 | `live_conversation_corpus.py` | LIVE (real model, Azure credit): 52 conversational cases (regression / dev / holdout) on the ask path and the CS7/CS5 card writer; deterministic checks on actions (ids, direction, owner). See `docs/coordinator/CONVERSATION_EVAL.md`. |
+| `live_cs7_corpus.py` | LIVE (real model, Azure credit): CS7 implicit dependencies, 26 cases (dev / holdout of other domains, minimal pairs IT/EN). `writer` level: `ProactiveWriter.draft` + the server's R7 on every case, as if the judge had fired. `judge` level: end to end against a running server, judge picks per turn read from the server log (`--log`). See `docs/coordinator/CONVERSATION_EVAL.md`, "CS7 implicit dependencies". |
 | `live_rasd_e2e.py` | LIVE end-to-end against a running server: the RASD / Matías scenario (card, confirm, state = what the Dependencies board draws, follow-ups, prerequisite done). `--ask` for the direct-request path. |

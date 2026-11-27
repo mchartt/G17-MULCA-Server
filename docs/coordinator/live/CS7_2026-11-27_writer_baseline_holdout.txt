@@ -1,0 +1,124 @@
+CS7 corpus, writer level, split holdout, today 2026-11-27 (lunedì = test day, mercoledì = fix day)
+
+[PASS] holdout/minimal_pair H1+ demo video needs the maps screen #1
+  > Sara: lunedì giriamo il video della demo usando l'app, tutte le schermate
+  > Omar: la schermata mappe crasha ancora, la sistemo mercoledì
+  CARD Intervengo perché il video di lunedì include tutte le schermate, ma la correzione delle mappe è prevista mercoledì.
+  {"task_id": "v1", "title": "Video della demo", "depends_on_task_id": "v2", "depends_on_title": "Correzione schermata mappe", "depends_on_owner_id": null, "helper_id": 2, "question": "La correzione delle mappe serve prima di girare lunedì, o si può iniziare dalle altre schermate?", "certainty": "possible", "ways_forward": ["Girare prima le altre schermate."]}
+  evidence: ['Sara', 'Omar']
+
+[PASS] holdout/minimal_pair H1+ demo video needs the maps screen #2
+  > Sara: lunedì giriamo il video della demo usando l'app, tutte le schermate
+  > Omar: la schermata mappe crasha ancora, la sistemo mercoledì
+  CARD Intervengo perché il video è previsto lunedì con tutte le schermate, ma la correzione delle mappe è prevista mercoledì.
+  {"task_id": "v1", "title": "Video della demo", "depends_on_task_id": "v2", "depends_on_title": "Correzione schermata mappe", "depends_on_owner_id": null, "helper_id": 2, "question": "Per girare lunedì serve la schermata mappe funzionante, o potete girare prima le altre schermate?", "certainty": "possible", "ways_forward": ["Girare prima le altre schermate e registrare le mappe dopo la correzione."]}
+  evidence: ['Sara', 'Omar']
+
+[PASS] holdout/minimal_pair H1+ demo video needs the maps screen #3
+  > Sara: lunedì giriamo il video della demo usando l'app, tutte le schermate
+  > Omar: la schermata mappe crasha ancora, la sistemo mercoledì
+  CARD Intervengo perché il video di lunedì include tutte le schermate, ma la correzione delle mappe è prevista mercoledì.
+  {"task_id": "v1", "title": "Video della demo", "depends_on_task_id": "v2", "depends_on_title": "Correzione schermata mappe", "depends_on_owner_id": null, "helper_id": 2, "question": "Per girare lunedì servono le mappe funzionanti, o possiamo registrare prima le altre schermate?", "certainty": "possible", "ways_forward": ["Registrare prima le altre schermate."]}
+  evidence: ['Sara', 'Omar']
+
+[PASS] holdout/minimal_pair H1- demo video shows only home and profile #1
+  > Sara: lunedì giriamo il video della demo, ma solo home e profilo
+  > Omar: la schermata mappe crasha ancora, la sistemo mercoledì
+  (no card)
+
+[PASS] holdout/minimal_pair H1- demo video shows only home and profile #2
+  > Sara: lunedì giriamo il video della demo, ma solo home e profilo
+  > Omar: la schermata mappe crasha ancora, la sistemo mercoledì
+  (no card)
+
+[PASS] holdout/minimal_pair H1- demo video shows only home and profile #3
+  > Sara: lunedì giriamo il video della demo, ma solo home e profilo
+  > Omar: la schermata mappe crasha ancora, la sistemo mercoledì
+  (no card)
+
+[PASS] holdout/indirect H2+ indirect: poster <- charts <- sensor data #1
+  > Lea: il poster per la fiera lo mando in stampa tra quattro giorni, ci metto i grafici
+  > Giulia: i grafici li faccio appena arrivano i dati del sensore
+  > Omar: i dati del sensore li ricevo solo mercoledì
+  CARD Intervengo perché i dati arrivano mercoledì 2 dicembre, dopo la scadenza dei grafici e la stampa prevista del poster.
+  {"task_id": "g1", "title": "Grafici dei dati", "depends_on_task_id": null, "depends_on_title": "Dati del sensore", "depends_on_owner_id": 2, "helper_id": 2, "question": "Per finire i grafici servono i dati di mercoledì, o potete prepararne prima la struttura?", "certainty": "possible", "ways_forward": []}
+  evidence: ['Lea', 'Giulia', 'Omar']
+
+[PASS] holdout/resolved_earlier H3- consent already signed earlier #1
+  > Sara: per le interviste serve il consenso firmato di tutti
+  > Lea: ci penso io
+  > Giulia: ho aggiornato le slide
+  > Omar: le mappe vanno meglio
+  > Giulia: pausa pranzo?
+  > Lea: i consensi sono tutti firmati, li ho messi nella cartella
+  > Giulia: ottimo
+  > Sara: lunedì mattina faccio le interviste
+  (no card)
+
+[PASS] holdout/unplanned H4+ prerequisite never in the plan #1
+  > Sara: lunedì mattina faccio le interviste
+  > Giulia: abbiamo il modulo di consenso? il comitato etico ha detto che serve
+  > Sara: boh, non so chi lo stia facendo
+  CARD Intervengo perché le interviste sono previste lunedì mattina, ma non è chiaro se il modulo richiesto dal comitato etico sia pronto.
+  {"task_id": "i1", "title": "Interviste utenti", "depends_on_task_id": null, "depends_on_title": "Modulo di consenso", "depends_on_owner_id": null, "helper_id": null, "question": "Il modulo di consenso serve prima delle interviste di lunedì, e possiamo verificare se è già disponibile?", "certainty": "possible", "ways_forward": ["Verificare se il modulo di consenso è già disponibile."]}
+  evidence: ['Sara', 'Giulia', 'Sara']
+
+[INFO] holdout/personal H5- health is never the topic #1
+  > Omar: scusate, sono malato: la correzione delle mappe slitta di qualche giorno
+  CARD Intervengo perché la correzione delle mappe slitta e potrebbe servire al video della demo, previsto per il 30 novembre.
+  {"task_id": "v1", "title": "Video della demo", "depends_on_task_id": "v2", "depends_on_title": "Correzione schermata mappe", "depends_on_owner_id": null, "helper_id": 2, "question": "Per il video servono le mappe corrette, o si può usare la schermata attuale?", "certainty": "possible", "ways_forward": ["Usare la schermata mappe attuale per il video."]}
+  evidence: ['Omar']
+
+[INFO] holdout/vague H6? vague dates #1
+  > Sara: vorrei fare il video la prossima settimana
+  > Omar: le mappe dovrebbero essere pronte a breve
+  CARD Intervengo perché il video previsto per la prossima settimana potrebbe dipendere dalla correzione delle mappe, ancora in corso e prevista per il 2 dicembre.
+  {"task_id": "v1", "title": "Video della demo", "depends_on_task_id": "v2", "depends_on_title": "Correzione schermata mappe", "depends_on_owner_id": null, "helper_id": 2, "question": "Per il video della prossima settimana servono le mappe corrette, o si può iniziare senza quella schermata?", "certainty": "possible", "ways_forward": ["Iniziare a registrare le parti della demo senza la schermata mappe."]}
+  evidence: ['Sara', 'Omar']
+
+[FAIL] holdout/minimal_pair_en H7+ EN report needs cleaned survey results #1
+  > Giulia: I'm submitting the final report on Monday, with the results chapter
+  > Sara: the survey results won't be cleaned before Wednesday
+  CARD Stepping in because the report is due Monday, but the survey results won't be cleaned before Wednesday.
+  {"task_id": "r1", "title": "Final report", "depends_on_task_id": null, "depends_on_title": "Survey results cleaning", "depends_on_owner_id": null, "helper_id": null, "question": "Does Monday's results chapter need cleaned survey results, or could it use preliminary results?", "certainty": "possible", "ways_forward": []}
+  evidence: ['Giulia', 'Sara']
+  !! new prerequisite owner=None
+
+[FAIL] holdout/minimal_pair_en H7+ EN report needs cleaned survey results #2
+  > Giulia: I'm submitting the final report on Monday, with the results chapter
+  > Sara: the survey results won't be cleaned before Wednesday
+  CARD Stepping in because the report is due Monday, but survey results will not be cleaned before Wednesday.
+  {"task_id": "r1", "title": "Final report", "depends_on_task_id": null, "depends_on_title": "Cleaning the survey results", "depends_on_owner_id": null, "helper_id": null, "question": "Does Monday’s results chapter require cleaned survey results, or could it use provisional results?", "certainty": "possible", "ways_forward": []}
+  evidence: ['Giulia', 'Sara']
+  !! new prerequisite owner=None
+
+[FAIL] holdout/minimal_pair_en H7+ EN report needs cleaned survey results #3
+  > Giulia: I'm submitting the final report on Monday, with the results chapter
+  > Sara: the survey results won't be cleaned before Wednesday
+  CARD Stepping in because the report is due Monday, while cleaned survey results will not be ready before Wednesday.
+  {"task_id": "r1", "title": "Final report", "depends_on_task_id": null, "depends_on_title": "Cleaned survey results", "depends_on_owner_id": null, "helper_id": null, "question": "Does Monday’s results chapter need the cleaned survey results, or could it use results before cleaning?", "certainty": "possible", "ways_forward": []}
+  evidence: ['Giulia', 'Sara']
+  !! new prerequisite owner=None
+
+[PASS] holdout/minimal_pair_en H7- EN results chapter not in this hand-in #1
+  > Giulia: I'm submitting the final report on Monday; the results chapter goes in the appendix later, it's not part of this hand-in
+  > Sara: the survey results won't be cleaned before Wednesday
+  (no card)
+
+[PASS] holdout/minimal_pair_en H7- EN results chapter not in this hand-in #2
+  > Giulia: I'm submitting the final report on Monday; the results chapter goes in the appendix later, it's not part of this hand-in
+  > Sara: the survey results won't be cleaned before Wednesday
+  (no card)
+
+[PASS] holdout/minimal_pair_en H7- EN results chapter not in this hand-in #3
+  > Giulia: I'm submitting the final report on Monday; the results chapter goes in the appendix later, it's not part of this hand-in
+  > Sara: the survey results won't be cleaned before Wednesday
+  (no card)
+
+=== summary (runs) ===
+holdout: positives detected 8/8, fully right 5/8; false cards 0/7
+   errors on detected cards: new prerequisite owner 3
+   (not scored) H5- health is never the topic: [[]]
+   (not scored) H6? vague dates: [[]]
+
+latency per draft: median 9.5 s, max 16.3 s; 24 model calls, 32530 prompt + 6100 completion tokens (gpt-6.1-sol)

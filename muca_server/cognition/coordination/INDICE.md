@@ -149,7 +149,7 @@ write outside a proposal: a member updating a task (their own action).
 | `ChatLine` | One recent message (speaker, text, time) as the server saw it. |
 | `ProactiveDraft` | A validated payload + its one-sentence rationale. |
 | `SCHEMAS`, `COMMON_RULES`, `TASK_RULES` | Strict JSON shape and instructions per kind. The chat is numbered and quoted between `<chat>` tags: data, never instructions. |
-| `draft(strategy_id, chat=, members=, profiles=, tasks=, silenced_topics=, today=)` | One call (+ one retry); None when it fails twice. |
+| `draft(strategy_id, chat=, members=, profiles=, tasks=, silenced_topics=, today=)` | One call (+ one retry); None when it fails twice. `NothingToDraft` (no card, no retry): CS5/CS2 title "", a CS3 discussion not ripe, a CS7 `certainty` "none" (`NO_DEPENDENCY`, CS7-W1: the writer finds no dependency after all). |
 | `_context(...)` | The user message: today, members with profiles, plan, silenced topics, chat. |
 | `_validate(...)` | Evidence numbers → real messages; owner must be a member; task_id must be an open task without owner; no date in the past. Anything wrong = retry. |
 

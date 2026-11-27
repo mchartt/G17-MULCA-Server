@@ -242,6 +242,51 @@ async def test_an_ungrounded_cs7_draft_is_refused(bad):
     assert await draft_cs7(answer, answer) is None
 
 
+# CS7-W1 (27/11): the writer can find no dependency after all.
+NO_DEPENDENCY_ANSWER = {
+    "certainty": "none", "task_id": None, "title": "", "depends_on_task_id": None, "depends_on_title": "",
+    "depends_on_owner_id": None, "helper_id": None, "question": "", "ways_forward": [],
+    "topic": "", "evidence": [], "rationale": "",
+}
+
+
+async def test_the_writer_may_find_no_dependency_and_then_drafts_nothing_in_one_call():
+    client = FakeChatClient(NO_DEPENDENCY_ANSWER, POSSIBLE)  # the second answer must never be asked for
+    writer = ProactiveWriter(ProposalWriter(client))
+    draft = await writer.draft(CS7, chat=CHAT_B, members=ROSTER, profiles=[], tasks=TASKS_B,
+                               silenced_topics=[], today=TODAY)
+    assert draft is None
+    assert len(client.calls) == 1  # a clean "no card", not a retry
+    call = client.calls[0]
+    assert call["response_format"]["json_schema"]["schema"]["properties"]["certainty"]["enum"] == ["blocked", "possible", "none"]
+    assert 'certainty is "none"' in call["messages"][0]["content"]
+
+
+async def test_none_is_only_an_exit_for_blocker_cards():
+    # Another strategy's schema never offers it, and a card never carries it.
+    from muca_server.cognition.coordination.proactive_writer import SCHEMAS
+
+    for kind, schema in SCHEMAS.items():
+        if kind is not ProposalKind.BLOCKER:
+            assert "certainty" not in schema["schema"]["properties"]
+    with pytest.raises(ValueError):
+        possible_payload(certainty="none")
+
+
+async def test_a_fired_cs7_with_no_dependency_posts_nothing_saves_nothing_and_keeps_the_budget(store):
+    await save_scenario(store)
+    before = await store.load_state()
+    writer = ProactiveWriter(ProposalWriter(FakeChatClient(NO_DEPENDENCY_ANSWER)))
+    bridge, sent, _ = make_bridge(store, writer)
+    history = [Utterance(speaker_id=1, speaker_name="Ada", content="x", timestamp_ms=0)] * 3
+    verdict = await bridge.offer(CS7, history=history, message_count=20, assistant_id=0)
+    await bridge.wait()
+    assert verdict == "taken" and sent == []
+    assert await store.open_proposals(0) == []
+    assert (await store.load_state()).tasks == before.tasks
+    assert await store.mark("proactive") is None  # R3/R4 count only cards posted
+
+
 async def test_an_old_style_answer_is_a_stated_blocker():
     old = {k: v for k, v in POSSIBLE.items() if k not in ("certainty", "ways_forward", "depends_on_title")}
     assert (await draft_cs7(old)).payload.certainty is BlockerCertainty.BLOCKED

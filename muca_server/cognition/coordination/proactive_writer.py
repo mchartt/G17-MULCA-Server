@@ -50,6 +50,11 @@ STRATEGY_KINDS: dict[str, ProposalKind] = {
     "cs3_reopened_decision": ProposalKind.REVISIT,  # K3
 }
 MAX_EVIDENCE = 5
+# CS7-W1 (27/11): the blocker writer's way to say "no card". Before it, the
+# only filter on a CS7 card was the judge that fired the strategy; the writer,
+# which sees the whole plan, could only decline by giving an invalid answer
+# twice (two calls, ~2x latency).
+NO_DEPENDENCY = "none"
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,7 +137,8 @@ SCHEMAS: dict[ProposalKind, dict[str, Any]] = {
             "depends_on_owner_id": {"type": ["integer", "null"]},
             "helper_id": {"type": ["integer", "null"]},
             "question": {"type": "string"},
-            "certainty": {"type": "string", "enum": ["blocked", "possible"]},
+            # "none": the writer finds no dependency after all (CS7-W1): no card.
+            "certainty": {"type": "string", "enum": ["blocked", "possible", NO_DEPENDENCY]},
             "ways_forward": {"type": "array", "items": {"type": "string"}},
         },
     ),
@@ -203,6 +209,16 @@ because it needs other work that is not ready, and a date is at risk. Either a
 member said so ("I can't start the UI until the API is ready"), or the chat and
 the plan together show it (Sara says she tests on Friday; the plan or the chat
 shows the API she needs is not done, or is due after Friday).
+First decide whether there is a dependency at all. certainty is "none" (no
+card; the other fields may be empty) when the chat and the plan do not show
+that the work needs the result of the other work for what the group plans
+to do, for example: the planned work leaves out, or stops before, the part
+that would need it; the other work is done, or will be ready before the day
+it is needed; one thing only comes after another in someone's own order of
+work, without needing its result; the plan already records the link and
+both dates still fit; the problem was solved later in the chat. Two pieces
+of work that touch the same thing are not enough: say "none" unless you can
+tell what result is needed and why it may not be there in time.
 - certainty: "blocked" only if a member said the work has stopped now and
   cannot go on ("I'm stuck", "still waiting, I can't continue"). "possible" in
   every other case: you infer the dependency, OR a member states a
@@ -291,7 +307,7 @@ class ProactiveWriter:
                 data = await self._writer.call_json(system, user, SCHEMAS[kind])
                 return _validate(kind, strategy_id, data, chat, members, tasks, today, open_decisions)
             except NothingToDraft:
-                logger.info("%s: nothing to hand out (a member already took it)", strategy_id)
+                logger.info("%s: nothing to draft (taken already, not ripe, or no dependency)", strategy_id)
                 return None
             except (ValidationError, ValueError, KeyError, TypeError, IndexError) as exc:
                 logger.warning("%s draft invalid (attempt %d): %s", strategy_id, attempt, exc)
@@ -372,6 +388,8 @@ def _ripe_decision(strategy_id: str, payload: DecisionPayload, chat: list[ChatLi
 
 def _validate(kind, strategy_id, data, chat, members, tasks, today, decisions=()) -> ProactiveDraft:
     """Turn the model's JSON into a payload, or raise (= one retry)."""
+    if kind is ProposalKind.BLOCKER and data.get("certainty") == NO_DEPENDENCY:
+        raise NothingToDraft(strategy_id)  # CS7-W1: no dependency after all, no card, no retry
     if kind in (ProposalKind.TASK_OWNER, ProposalKind.DELEGATION) and not str(data.get("title", "")).strip():
         raise NothingToDraft(strategy_id)
     numbers = data.pop("evidence")
