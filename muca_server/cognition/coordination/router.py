@@ -197,6 +197,7 @@ class CoordinatorRouter:
                 service=self._service,
                 send_proposal=self._send_proposal,
                 members=self._roster,
+                name_of=lambda speaker: self._roster().get(self._as_web(speaker)),
                 today=today,
                 # R8: no proactive card while the opener collects the group's answers.
                 listening=lambda: self.opener.listening,
