@@ -63,6 +63,7 @@ from ...protocol.outgoing import AssistantTextMessage
 from .card_requests import CardRequests
 from .catchup import CatchUp, channel_of, summary_line
 from .checkin_timer import CheckinTimer
+from .names import distinct_names
 from .links import LINKABLE, WEB_PREFIX, GroupLinks, LinkError, LiveGroups
 from .models import (
     MAX_DOCUMENT_CHARS,
@@ -327,7 +328,10 @@ class CoordinatorRouter:
         copy = CoordinatorMirrorMessage(
             channel=channel_of(self._conversation.conversation_id),
             speaker=message.speaker,
-            speaker_name=message.speaker_name or self._conversation.participants().get(message.speaker, "member"),
+            # The group's name for this member: "Ada (Discord)" when a web "Ada" is someone else (names.py).
+            speaker_name=self._roster().get(self._as_web(message.speaker))
+            or message.speaker_name
+            or self._conversation.participants().get(message.speaker, "member"),
             text=text,
             at=time.time(),
         )
@@ -789,12 +793,26 @@ class CoordinatorRouter:
         return [r for r in self._live.of(self._home()) if r is not self]
 
     def _roster(self) -> dict[int, str]:
-        """Everyone in the group's open sessions: this channel's members first."""
-        roster: dict[int, str] = {}
+        """
+        Everyone in the group's open sessions, this channel's members first,
+        each under a name no other member has (names.py: "Ada (Discord)" and
+        "Ada (Web)" are two people; the same person is one id after
+        /coordinator me). Cards, the plan, ask and the model all read it.
+        """
+        entries = [(m, n, c) for m, (n, c) in self._own_members_with_channel().items()]
         for peer in self._peers():
-            roster.update(peer._own_members())
-        roster.update(self._own_members())
-        return roster
+            entries += [(m, n, c) for m, (n, c) in peer._own_members_with_channel().items()]
+        return distinct_names(entries)
+
+    def _own_members_with_channel(self) -> dict[int, tuple[str, str]]:
+        """This channel's members as (name, channel); one who claimed a web identity is a web member."""
+        here = channel_of(self._conversation.conversation_id)
+        known = self._identities or {}
+        members: dict[int, tuple[str, str]] = {}
+        for member_id, name in self._conversation.participants().items():
+            web = known.get(member_id)
+            members[web[0] if web else member_id] = (web[1], "web") if web else (name, here)
+        return members
 
     def _own_members(self) -> dict[int, str]:
         """This channel's members, each under their web identity when they claimed one (_on_me)."""

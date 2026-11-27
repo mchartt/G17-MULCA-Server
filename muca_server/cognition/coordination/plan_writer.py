@@ -25,6 +25,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from .names import base_name
 from .checkin import Finding
 from .models import (
     CheckinPayload,
@@ -838,7 +839,8 @@ def _asker(asker: int | None, focus: str | None, members: dict[int, str], state:
         f"Tasks whose owner is id {asker}:",
         *(mine or ["- (none)"]),
     ]
-    twins = [i for i, n in members.items() if i != asker and n.strip().casefold() == name.strip().casefold()]
+    # The same display name: names.py told them apart ("Ada", "Ada 2"), the model is told why.
+    twins = [i for i, n in members.items() if i != asker and base_name(n).casefold() == base_name(name).casefold()]
     if twins:
         lines.append(
             f"Member id {', '.join(map(str, twins))} has the same name but is another member record: its tasks are "
