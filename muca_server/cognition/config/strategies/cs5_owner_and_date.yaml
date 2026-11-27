@@ -1,4 +1,7 @@
 id: cs5_owner_and_date
+# Typed and spoken (a Discord voice call, transcribed): a decision or a task
+# said aloud becomes a card to confirm in the text channel (router._on_voice).
+modalities: [text, audio]
 # Group Coordinator (spec S5 "Owner and date"). Answered with a card, not a
 # reply: cognition/coordination/proactive.py drafts it, a member confirms it.
 trigger_description: >

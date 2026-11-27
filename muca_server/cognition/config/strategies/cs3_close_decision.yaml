@@ -1,4 +1,7 @@
 id: cs3_close_decision
+# Typed and spoken (a Discord voice call, transcribed): a decision or a task
+# said aloud becomes a card to confirm in the text channel (router._on_voice).
+modalities: [text, audio]
 # Group Coordinator (spec S3 "Close the decision"). Answered with a card: one
 # button per option; the choice and its reason go to the decision log.
 trigger_description: >

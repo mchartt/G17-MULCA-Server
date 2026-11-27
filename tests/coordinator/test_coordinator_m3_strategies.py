@@ -13,7 +13,9 @@ def test_the_three_yaml_files_load_in_the_lab_format():
     store = load_strategy_store(run_server.COORDINATOR_STRATEGY_IDS)
     for strategy_id in run_server.COORDINATOR_STRATEGY_IDS:
         strategy = store.get(strategy_id)
-        assert strategy is not None and strategy.modalities == frozenset({"text"})
+        # Typed and spoken (27/11): a task or a decision said in the Discord
+        # voice call becomes a card too (router._on_voice).
+        assert strategy is not None and strategy.modalities == frozenset({"text", "audio"})
         # Project rule 11: every trigger also says when NOT to fire.
         assert "Do NOT fire" in strategy.trigger_description
         assert strategy.cooldown_messages == 10

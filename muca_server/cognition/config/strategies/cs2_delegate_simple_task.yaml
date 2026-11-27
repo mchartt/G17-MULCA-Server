@@ -1,4 +1,7 @@
 id: cs2_delegate_simple_task
+# Typed and spoken (a Discord voice call, transcribed): a decision or a task
+# said aloud becomes a card to confirm in the text channel (router._on_voice).
+modalities: [text, audio]
 # Group Coordinator (spec S2 "Delegate simple tasks", Collaborative Cognitive
 # Load Theory). Answered with a card: one member takes the task with a click.
 trigger_description: >

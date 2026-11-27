@@ -530,19 +530,24 @@ async def test_r11_not_in_a_direct_message_not_for_a_spoken_turn_not_for_the_age
     assert asked_dm == asked_spoken == asked_own == []
 
 
-async def test_r12_the_labs_unsolicited_strategies_stay_silent_in_a_group_text_chat():
+async def test_r12_the_labs_unsolicited_strategies_stay_silent_in_a_group_chat_and_call():
     # 21/11: in "wake" mode pleasant_conversation answered "blu o verde?" in English.
     history = [SimpleNamespace(content="ok! e per le slide usiamo blu o verde?", speaker_id=7)]
     for strategy in ("pleasant_conversation", "maintain_focus", "resolve_conflict", "participation_equality_text"):
         bridge, asked = _bridge_with_ask()
         assert await bridge.offer(strategy, history=history, message_count=3, assistant_id=0) is Verdict.VETOED
         assert asked == []
-    # A private chat and a spoken turn keep the lab's behaviour.
+    # A private chat keeps the lab's behaviour.
     dm, _ = _bridge_with_ask(is_private=True)
     assert await dm.offer("pleasant_conversation", history=history, message_count=3, assistant_id=0) is Verdict.NOT_MINE
+    # A group voice call too stays silent (27/11): Cadence listens there to make cards.
     spoken, _ = _bridge_with_ask()
     voice = [SimpleNamespace(content="blu o verde?", speaker_id=7, modality="audio")]
-    assert await spoken.offer("pleasant_conversation", history=voice, message_count=3, assistant_id=0) is Verdict.NOT_MINE
+    assert await spoken.offer("participation_equality_voice", history=voice, message_count=3, assistant_id=0) is Verdict.VETOED
+    # Addressed aloud, the lab still answers aloud (R11 hands only typed turns to Cadence's ask).
+    asked_aloud, asked = _bridge_with_ask()
+    assert await asked_aloud.offer("respond_when_addressed", history=voice, message_count=3, assistant_id=0) is Verdict.NOT_MINE
+    assert asked == []
 
 
 async def test_r11_the_router_answers_in_the_chat_with_cadences_ask(tmp_path):

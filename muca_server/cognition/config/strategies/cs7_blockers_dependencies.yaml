@@ -1,4 +1,7 @@
 id: cs7_blockers_dependencies
+# Typed and spoken (a Discord voice call, transcribed): a decision or a task
+# said aloud becomes a card to confirm in the text channel (router._on_voice).
+modalities: [text, audio]
 # Group Coordinator (spec S7 "Blockers", M4; v2 K2). Answered with a card: a
 # member confirms that the task is blocked, or that it really depends on the
 # other work. The "Project memory" in the turn update is the saved plan and
